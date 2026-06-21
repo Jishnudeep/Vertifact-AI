@@ -12,19 +12,23 @@ MAPPING_PATH = BASE_DIR / "data" / "AllSides" / "domain_mapping.json"
 
 # In-memory dictionary: domain -> bias_label
 BIAS_RATINGS: dict[str, str] = {}
+# In-memory dictionary: domain -> outlet_name
+OUTLET_NAMES: dict[str, str] = {}
 
 def load_bias_ratings():
     """Load AllSides ratings from Supabase database, falling back to local files if unavailable."""
-    global BIAS_RATINGS
+    global BIAS_RATINGS, OUTLET_NAMES
     BIAS_RATINGS.clear()
+    OUTLET_NAMES.clear()
     
     # 1. Try loading from Supabase database first
     try:
         supabase = get_supabase()
-        response = supabase.table("bias_ratings").select("domain, allsides_rating").execute()
+        response = supabase.table("bias_ratings").select("domain, outlet_name, allsides_rating").execute()
         if response.data:
             for row in response.data:
                 BIAS_RATINGS[row["domain"]] = row["allsides_rating"]
+                OUTLET_NAMES[row["domain"]] = row["outlet_name"]
             
             # Re-apply aliases for domain robustness even when loading from DB
             aliases = {
@@ -36,6 +40,7 @@ def load_bias_ratings():
             for alias, target in aliases.items():
                 if target in BIAS_RATINGS:
                     BIAS_RATINGS[alias] = BIAS_RATINGS[target]
+                    OUTLET_NAMES[alias] = OUTLET_NAMES[target]
             
             print(f"Successfully loaded {len(BIAS_RATINGS)} bias ratings from Supabase database.")
             return
@@ -111,6 +116,10 @@ def load_bias_ratings():
                 BIAS_RATINGS[alias] = BIAS_RATINGS[target]
                 bias_outlet_names[alias] = bias_outlet_names[target]
                 
+        # Populate global OUTLET_NAMES
+        for domain, name in bias_outlet_names.items():
+            OUTLET_NAMES[domain] = name
+                
         print(f"Successfully loaded {len(BIAS_RATINGS)} bias ratings from local CSV fallback.")
     except Exception as local_err:
         print(f"Error loading bias ratings from local files: {local_err}")
@@ -129,6 +138,21 @@ def get_bias_label(url_or_domain: str) -> str:
         
     domain = extract_domain(url_or_domain)
     return BIAS_RATINGS.get(domain, "Unrated")
+
+def get_outlet_name(url_or_domain: str) -> Optional[str]:
+    """
+    Get the outlet name for a URL or domain.
+    Returns None if the domain is not in the AllSides database.
+    """
+    if not url_or_domain:
+        return None
+        
+    # Lazy load if OUTLET_NAMES has not been populated
+    if not OUTLET_NAMES:
+        load_bias_ratings()
+        
+    domain = extract_domain(url_or_domain)
+    return OUTLET_NAMES.get(domain)
 
 # Auto-load on import
 load_bias_ratings()

@@ -108,7 +108,7 @@ async def test_live_factchecks():
         flat_earth_res = await run("The Earth is flat")
         if flat_earth_res.matches_found > 0 and flat_earth_res.s_fact_score <= 0.25:
             break
-        await asyncio.sleep(2.0)
+        await asyncio.sleep(6.0)
     else:
         flat_earth_res = await run("The Earth is flat")
         assert flat_earth_res.matches_found > 0
@@ -119,7 +119,7 @@ async def test_live_factchecks():
         bleach_res = await run("Drinking bleach cures COVID-19")
         if bleach_res.matches_found > 0 and bleach_res.s_fact_score <= 0.25:
             break
-        await asyncio.sleep(2.0)
+        await asyncio.sleep(6.0)
     else:
         bleach_res = await run("Drinking bleach cures COVID-19")
         assert bleach_res.matches_found > 0
@@ -130,7 +130,7 @@ async def test_live_factchecks():
         sun_res = await run("The Earth orbits the Sun")
         if sun_res.s_fact_score in [1.0, 0.5]:
             break
-        await asyncio.sleep(2.0)
+        await asyncio.sleep(6.0)
     else:
         sun_res = await run("The Earth orbits the Sun")
         assert sun_res.s_fact_score in [1.0, 0.5]

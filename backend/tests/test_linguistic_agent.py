@@ -64,7 +64,7 @@ async def test_live_linguistic_analysis():
         factual_res = await run("The unemployment rate fell to 3.5% in March, the Labor Department reported Friday.")
         if factual_res.b_ling_score < 0.4:
             break
-        await asyncio.sleep(2.0)
+        await asyncio.sleep(6.0)
     else:
         factual_res = await run("The unemployment rate fell to 3.5% in March, the Labor Department reported Friday.")
         assert factual_res.b_ling_score < 0.4
@@ -74,7 +74,7 @@ async def test_live_linguistic_analysis():
         sensational_res = await run("SHOCKING SECRET EXPOSED: This One Trick Will BLOW YOUR MIND!!! Must Watch Now!")
         if sensational_res.b_ling_score > 0.6 and len(sensational_res.flagged_phrases) > 0:
             break
-        await asyncio.sleep(2.0)
+        await asyncio.sleep(6.0)
     else:
         sensational_res = await run("SHOCKING SECRET EXPOSED: This One Trick Will BLOW YOUR MIND!!! Must Watch Now!")
         assert sensational_res.b_ling_score > 0.6
