@@ -1,0 +1,101 @@
+# ─────────────────────────────────────────────────────────────
+# VeriFact AI — root .gitignore
+# ─────────────────────────────────────────────────────────────
+
+# Secrets & environment — NEVER commit. Commit .env.example instead.
+.env
+.env.*
+!.env.example
+*.env
+secrets.*
+*.pem
+*.key
+
+# ── Python / backend (uv) ──────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.eggs/
+develop-eggs/
+wheels/
+.installed.cfg
+
+# Virtual environments (uv manages .venv; uv.lock IS committed)
+.venv/
+venv/
+env/
+ENV/
+
+# Test / coverage / type-check / lint caches
+.pytest_cache/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+.tox/
+.nox/
+.cache/
+.mypy_cache/
+.dmypy.json
+.ruff_cache/
+.hypothesis/
+
+# ── Node / frontend (Vite + React) ─────────────────────────────
+node_modules/
+frontend/dist/
+frontend/build/
+.vite/
+*.local
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.eslintcache
+
+# ── ML / data artifacts ────────────────────────────────────────
+# Model weights & embedding/HF caches (download, don't commit)
+*.pt
+*.pth
+*.onnx
+*.safetensors
+*.gguf
+.cache/huggingface/
+models/
+
+# Eval run outputs & generated reports (keep curated datasets in git)
+eval/reports/
+eval/**/*.out.json
+eval/metrics/*.png
+calibration_*.png
+
+# Large/generated data (commit small curated CSV/JSON deliberately via -f)
+data/*.csv
+data/*.parquet
+!data/allsides_bias_ratings.csv
+!data/seed_claims.json
+
+# ── Logs & runtime ─────────────────────────────────────────────
+*.log
+logs/
+*.pid
+tmp/
+.tmp/
+
+# ── IDE / editor / OS ──────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ── Agent tooling (local-only, not published) ──────────────────
+.claude/
+.agents/
