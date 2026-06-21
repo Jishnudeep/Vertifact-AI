@@ -7,13 +7,13 @@ from app.agents.linguistic_agent import run, LinguisticResult, NEUTRAL
 async def test_agent_degrades_on_timeout():
     """Verify that the agent returns NEUTRAL when it times out."""
     async def slow_analyze(claim):
-        await asyncio.sleep(10.0)
+        await asyncio.sleep(1.0)
         return LinguisticResult(0.0, 0.0, 0.0, 1.0, 0.0)
         
-    with patch("app.agents.linguistic_agent._analyze", side_effect=slow_analyze):
-        with patch("asyncio.wait_for", side_effect=asyncio.TimeoutError):
-            result = await run("Test claim")
-            assert result == NEUTRAL
+    with patch("app.agents.linguistic_agent._analyze", side_effect=slow_analyze), \
+         patch("app.agents.linguistic_agent.TIMEOUT", 0.01):
+        result = await run("Test claim")
+        assert result == NEUTRAL
 
 @pytest.mark.anyio
 async def test_agent_degrades_on_exception():
@@ -54,6 +54,7 @@ async def test_sensational_text_analysis():
         assert any("Clickbait" in phrase or "CAPS" in phrase for phrase in result.flagged_phrases)
 
 @pytest.mark.anyio
+@pytest.mark.live
 async def test_live_linguistic_analysis():
     """
     Live Integration Test.

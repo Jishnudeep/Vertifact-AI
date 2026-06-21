@@ -24,18 +24,15 @@ async def test_map_rating_to_score():
 
 @pytest.mark.anyio
 async def test_agent_degrades_on_timeout():
-    """Verify that the agent returns NEUTRAL when the inner logic times out (takes > 8s)."""
+    """Verify that the agent returns NEUTRAL when the inner logic times out (takes > TIMEOUT)."""
     async def slow_analyze(claim):
-        await asyncio.sleep(10.0)
+        await asyncio.sleep(1.0)
         return FactCheckResult(matches_found=1, s_fact_score=1.0)
         
-    with patch("app.agents.factcheck_agent._analyze", side_effect=slow_analyze):
-        # We patch the timeout down to a very short time or rely on run()'s wait_for
-        # Since run() has timeout=8.0, we mock the sleep to be 10.0s. 
-        # To make the test run quickly, we patch wait_for timeout to 0.1s.
-        with patch("asyncio.wait_for", side_effect=asyncio.TimeoutError):
-            result = await run("Test claim")
-            assert result == NEUTRAL
+    with patch("app.agents.factcheck_agent._analyze", side_effect=slow_analyze), \
+         patch("app.agents.factcheck_agent.TIMEOUT", 0.01):
+        result = await run("Test claim")
+        assert result == NEUTRAL
 
 @pytest.mark.anyio
 async def test_agent_degrades_on_exception():
@@ -94,6 +91,7 @@ async def test_tavily_fallback_with_llm():
         assert result.best_match["rating"] == "true"
 
 @pytest.mark.anyio
+@pytest.mark.live
 async def test_live_factchecks():
     """
     Live Integration Test.

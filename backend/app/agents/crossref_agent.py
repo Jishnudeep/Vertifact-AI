@@ -10,6 +10,7 @@ from app.services.bias_lookup import get_bias_label, get_outlet_name
 from app.utils.text_processing import extract_domain
 
 logger = logging.getLogger(__name__)
+TIMEOUT = 8.0
 
 @dataclass
 class CrossRefResult:
@@ -168,7 +169,7 @@ async def run(claim: str) -> CrossRefResult:
     Enforces a strict 8-second timeout, falling back to NEUTRAL.
     """
     try:
-        return await asyncio.wait_for(_analyze(claim), timeout=8.0)
+        return await asyncio.wait_for(_analyze(claim), timeout=TIMEOUT)
     except asyncio.TimeoutError:
         logger.warning(f"Cross-Reference Agent timed out on claim: {claim}")
         return NEUTRAL

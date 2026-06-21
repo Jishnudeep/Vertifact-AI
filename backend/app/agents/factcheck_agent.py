@@ -6,17 +6,13 @@ import re
 from dataclasses import dataclass, field
 from typing import Optional, List, Dict, Any
 
-from google.adk.agents import LlmAgent
-from google.adk.models.lite_llm import LiteLlm
-from google.adk.runners import Runner
-from google.adk.sessions import InMemorySessionService
-from google.genai import types
-
 from app.config import settings
 from app.services.factcheck_api import search_factchecks
 from app.services.search_api import search_web, FACTCHECK_DOMAINS
+from app.utils.adk_helpers import run_adk_agent, parse_adk_response
 
 logger = logging.getLogger(__name__)
+TIMEOUT = 8.0
 
 # Ensure GROQ_API_KEY is set in environment for LiteLLM
 if settings.groq_api_key:
@@ -103,105 +99,7 @@ def map_rating_to_score(rating: str) -> float:
         
     return 0.5
 
-def extract_key_via_regex(text: str, key: str, is_bool: bool = False) -> Optional[Any]:
-    """
-    Extract a JSON property value using regex as a resilient fallback.
-    """
-    if is_bool:
-        pattern = rf'["\']{key}["\']\s*:\s*(true|false)'
-        match = re.search(pattern, text, re.IGNORECASE)
-        if match:
-            return match.group(1).lower() == "true"
-    else:
-        # Match either double or single quoted values
-        pattern = rf'["\']{key}["\']\s*:\s*["\']([^"\']*)["\']'
-        match = re.search(pattern, text)
-        if match:
-            return match.group(1)
-            
-        # Fallback to match even if the value has internal double quotes (loose match)
-        pattern = rf'["\']{key}["\']\s*:\s*["\'](.*?)["\']\s*(?:,|\}})'
-        match = re.search(pattern, text)
-        if match:
-            return match.group(1)
-    return None
-
-def parse_json_safely(text: str) -> Dict[str, Any]:
-    """
-    Safely extract and parse JSON from LLM output, handling single quotes and surrounding markdown.
-    """
-    text = text.strip()
-    # Find first '{' and last '}'
-    start = text.find('{')
-    end = text.rfind('}')
-    if start != -1 and end != -1:
-        text = text[start:end+1]
-        
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        # Fix keys with single quotes: 'key': -> "key":
-        fixed = re.sub(r"'(\w+)'\s*:", r'"\1":', text)
-        # Fix string values with single quotes: : 'value' -> : "value"
-        fixed = re.sub(r":\s*'([^']*)'", r': "\1"', fixed)
-        try:
-            return json.loads(fixed)
-        except Exception as exc:
-            logger.error(f"parse_json_safely failed on text: {text}. Error: {exc}")
-            raise
-
-def parse_adk_response(content: str, expected_keys: List[str], bool_keys: List[str] = []) -> Dict[str, Any]:
-    """
-    Parse the ADK response content. Tries json.loads first, then falls back to regex extraction
-    to ensure maximum resilience against LLM formatting errors.
-    """
-    try:
-        return parse_json_safely(content)
-    except Exception as exc:
-        logger.warning(f"Standard JSON parsing failed (Error: {exc}). Attempting regex fallback parsing...")
-        result = {}
-        for key in expected_keys:
-            is_bool = key in bool_keys
-            val = extract_key_via_regex(content, key, is_bool)
-            if val is not None:
-                result[key] = val
-        return result
-
-async def run_adk_agent(name: str, instruction: str, prompt: str) -> str:
-    """
-    Helper to run a Google ADK LlmAgent and retrieve the final text response.
-    """
-    model = LiteLlm(model=settings.model_id, api_key=settings.groq_api_key)
-    agent = LlmAgent(
-        name=name,
-        model=model,
-        description=f"ADK Agent for {name}",
-        instruction=instruction,
-    )
-    
-    session_service = InMemorySessionService()
-    runner = Runner(
-        agent=agent,
-        app_name="verifact-factcheck",
-        session_service=session_service,
-    )
-    
-    user_id = f"fc-user-{name}"
-    session_id = f"fc-session-{name}"
-    await session_service.create_session(
-        app_name="verifact-factcheck", user_id=user_id, session_id=session_id
-    )
-    
-    message = types.Content(role="user", parts=[types.Part(text=prompt)])
-    
-    final_text = ""
-    async for event in runner.run_async(
-        user_id=user_id, session_id=session_id, new_message=message
-    ):
-        if event.is_final_response() and event.content and event.content.parts:
-            final_text = event.content.parts[0].text or ""
-            
-    return final_text
+# Duplicated JSON parsing and ADK runner functions removed. Imported from app.utils.adk_helpers.
 
 async def _classify_rating_with_llm(claim: str, rating_text: str) -> str:
     """
@@ -217,7 +115,7 @@ async def _classify_rating_with_llm(claim: str, rating_text: str) -> str:
     )
     prompt = f"Claim: {claim}\nFact-checker rating text: {rating_text}"
     try:
-        content = await run_adk_agent("rating_classifier", instruction, prompt)
+        content = await run_adk_agent("rating_classifier", instruction, prompt, "verifact-factcheck")
         data = parse_adk_response(content, expected_keys=["rating", "explanation"])
         return data.get("rating", "unproven")
     except Exception as exc:
@@ -237,6 +135,9 @@ async def _align_claim_match(query: str, claim_reviewed: str, rating_str: str) -
         "mostly true, half true, mostly false, false, unproven), and 'explanation' (string). Use double quotes. "
         "Do not use unescaped double quotes inside the explanation text."
     )
+    # SECURITY: Prompt injection risk via untrusted query/claim_reviewed.
+    # Mitigation: Handled at eval/guardrail phase (faithfulness test + scoring confidence-cap).
+    # TODO: Verify safety in eval/guardrail calibration.
     prompt = f"""User's Query: "{query}"
 Fact-Checked Claim: "{claim_reviewed}"
 Original Rating: "{rating_str}"
@@ -252,7 +153,7 @@ If the claim is relevant, determine the implied rating for the user's query:
 - Otherwise, map the original rating directly."""
 
     try:
-        content = await run_adk_agent("claim_aligner", instruction, prompt)
+        content = await run_adk_agent("claim_aligner", instruction, prompt, "verifact-factcheck")
         data = parse_adk_response(
             content, 
             expected_keys=["relevant", "opposite", "implied_rating", "explanation"], 
@@ -334,16 +235,39 @@ async def _analyze(claim: str) -> FactCheckResult:
             )
             
     # Layer 2: Tavily search scoped to fact-checking
-    logger.info(f"Google Fact Check API missed or yielded no relevant matches. Querying Tavily fallback for: {claim}")
-    tavily_query = f"{claim} fact check"
-    search_queries_used.append(tavily_query)
+    logger.info(f"Google Fact Check API missed or yielded no relevant matches. Querying Tavily fallback with parallel queries for: {claim}")
+    queries = [
+        f"{claim} fact check",
+        f"{claim} debunked",
+        f"is {claim} true"
+    ]
+    for q in queries:
+        search_queries_used.append(q)
+        
+    tasks = [
+        search_web(
+            query=q,
+            api_key=settings.tavily_api_key,
+            max_results=5,
+            include_domains=FACTCHECK_DOMAINS
+        )
+        for q in queries
+    ]
+    results_list = await asyncio.gather(*tasks)
     
-    tavily_results = await search_web(
-        query=tavily_query,
-        api_key=settings.tavily_api_key,
-        max_results=5,
-        include_domains=FACTCHECK_DOMAINS
-    )
+    # Deduplicate results by URL and limit to top 5 unique results
+    seen_urls = set()
+    tavily_results = []
+    for results in results_list:
+        for r in results:
+            url = r.get("url")
+            if url and url not in seen_urls:
+                seen_urls.add(url)
+                tavily_results.append(r)
+                if len(tavily_results) >= 5:
+                    break
+        if len(tavily_results) >= 5:
+            break
     
     if not tavily_results:
         logger.info("Tavily fallback returned no results.")
@@ -369,10 +293,13 @@ async def _analyze(claim: str) -> FactCheckResult:
         "with keys: 'rating' (one of: true, mostly true, half true, mostly false, false, unproven), "
         "'explanation' (string), and 'publisher' (string). Use double quotes. Do not use unescaped double quotes inside JSON string values."
     )
+    # SECURITY: Prompt injection risk via untrusted claim/snippets_text.
+    # Mitigation: Handled at eval/guardrail phase (faithfulness test + scoring confidence-cap).
+    # TODO: Verify safety in eval/guardrail calibration.
     prompt = f"Claim: {claim}\n\nSearch Snippets:\n{snippets_text}"
 
     try:
-        content = await run_adk_agent("verdict_extractor", instruction, prompt)
+        content = await run_adk_agent("verdict_extractor", instruction, prompt, "verifact-factcheck")
         data = parse_adk_response(content, expected_keys=["rating", "explanation", "publisher"])
         extracted_rating = data.get("rating", "unproven")
         explanation = data.get("explanation", "")
@@ -428,7 +355,7 @@ async def run(claim: str) -> FactCheckResult:
     Enforces a strict 8-second timeout, falling back to NEUTRAL.
     """
     try:
-        return await asyncio.wait_for(_analyze(claim), timeout=8.0)
+        return await asyncio.wait_for(_analyze(claim), timeout=TIMEOUT)
     except asyncio.TimeoutError:
         logger.warning(f"Fact-Check Agent timed out on claim: {claim}")
         return NEUTRAL

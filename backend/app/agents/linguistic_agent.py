@@ -9,15 +9,11 @@ from typing import Optional, List, Dict, Any
 import spacy
 from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 
-from google.adk.agents import LlmAgent
-from google.adk.models.lite_llm import LiteLlm
-from google.adk.runners import Runner
-from google.adk.sessions import InMemorySessionService
-from google.genai import types
-
 from app.config import settings
+from app.utils.adk_helpers import run_adk_agent, parse_adk_response
 
 logger = logging.getLogger(__name__)
+TIMEOUT = 8.0
 
 # Ensure GROQ_API_KEY is set in environment for LiteLLM
 if settings.groq_api_key:
@@ -68,95 +64,7 @@ NEUTRAL = LinguisticResult(
     flagged_phrases=[]
 )
 
-def parse_json_safely(text: str) -> Dict[str, Any]:
-    """
-    Safely extract and parse JSON from LLM output, handling single quotes and surrounding markdown.
-    """
-    text = text.strip()
-    # Find first '{' and last '}'
-    start = text.find('{')
-    end = text.rfind('}')
-    if start != -1 and end != -1:
-        text = text[start:end+1]
-        
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        # Fix keys with single quotes: 'key': -> "key":
-        fixed = re.sub(r"'(\w+)'\s*:", r'"\1":', text)
-        # Fix string values with single quotes: : 'value' -> : "value"
-        fixed = re.sub(r":\s*'([^']*)'", r': "\1"', fixed)
-        try:
-            return json.loads(fixed)
-        except Exception as exc:
-            logger.error(f"parse_json_safely failed on text: {text}. Error: {exc}")
-            raise
-
-def extract_key_via_regex(text: str, key: str) -> Optional[Any]:
-    """
-    Extract a JSON property value using regex as a resilient fallback.
-    """
-    pattern = rf'["\']{key}["\']\s*:\s*["\']([^"\']*)["\']'
-    match = re.search(pattern, text)
-    if match:
-        return match.group(1)
-        
-    pattern = rf'["\']{key}["\']\s*:\s*([0-9.]+)'
-    match = re.search(pattern, text)
-    if match:
-        return match.group(1)
-    return None
-
-def parse_adk_response(content: str, expected_keys: List[str]) -> Dict[str, Any]:
-    """
-    Parse the ADK response content. Tries json.loads first, then falls back to regex extraction.
-    """
-    try:
-        return parse_json_safely(content)
-    except Exception as exc:
-        logger.warning(f"Standard JSON parsing failed (Error: {exc}). Attempting regex fallback parsing...")
-        result = {}
-        for key in expected_keys:
-            val = extract_key_via_regex(content, key)
-            if val is not None:
-                result[key] = val
-        return result
-
-async def run_adk_agent(name: str, instruction: str, prompt: str) -> str:
-    """
-    Helper to run a Google ADK LlmAgent and retrieve the final text response.
-    """
-    model = LiteLlm(model=settings.model_id, api_key=settings.groq_api_key)
-    agent = LlmAgent(
-        name=name,
-        model=model,
-        description=f"ADK Agent for {name}",
-        instruction=instruction,
-    )
-    
-    session_service = InMemorySessionService()
-    runner = Runner(
-        agent=agent,
-        app_name="verifact-linguistic",
-        session_service=session_service,
-    )
-    
-    user_id = f"ling-user-{name}"
-    session_id = f"ling-session-{name}"
-    await session_service.create_session(
-        app_name="verifact-linguistic", user_id=user_id, session_id=session_id
-    )
-    
-    message = types.Content(role="user", parts=[types.Part(text=prompt)])
-    
-    final_text = ""
-    async for event in runner.run_async(
-        user_id=user_id, session_id=session_id, new_message=message
-    ):
-        if event.is_final_response() and event.content and event.content.parts:
-            final_text = event.content.parts[0].text or ""
-            
-    return final_text
+# Duplicated JSON parsing and ADK runner functions removed. Imported from app.utils.adk_helpers.
 
 async def _rate_sensationalism_adk(claim: str) -> float:
     """
@@ -168,10 +76,13 @@ async def _rate_sensationalism_adk(claim: str) -> float:
         "Consider word choice, tone, and whether claims are presented with appropriate nuance. Return your output "
         "in raw JSON format with a single key: 'sensationalism' (a float between 0.0 and 1.0). Use double quotes."
     )
+    # SECURITY: Prompt injection risk via untrusted claim text.
+    # Mitigation: Handled at eval/guardrail phase (faithfulness test + scoring confidence-cap).
+    # TODO: Verify safety in eval/guardrail calibration.
     prompt = f"Analyze this text: \"{claim}\""
     
     try:
-        content = await run_adk_agent("sensationalism_analyzer", instruction, prompt)
+        content = await run_adk_agent("sensationalism_analyzer", instruction, prompt, "verifact-linguistic")
         data = parse_adk_response(content, expected_keys=["sensationalism"])
         score_val = data.get("sensationalism")
         if score_val is not None:
@@ -311,7 +222,7 @@ async def run(claim: str) -> LinguisticResult:
     Enforces a strict 8-second timeout, falling back to NEUTRAL.
     """
     try:
-        return await asyncio.wait_for(_analyze(claim), timeout=8.0)
+        return await asyncio.wait_for(_analyze(claim), timeout=TIMEOUT)
     except asyncio.TimeoutError:
         logger.warning(f"Linguistic Agent timed out on claim: {claim}")
         return NEUTRAL

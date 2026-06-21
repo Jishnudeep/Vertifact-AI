@@ -18,3 +18,11 @@ dependencies = [
     "uvicorn>=0.48.0",
     "vadersentiment>=3.3.2",
 ]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+markers = [
+    "live: integration tests that hit live external APIs (deselected by default)",
+]
+addopts = "-m 'not live'"
+

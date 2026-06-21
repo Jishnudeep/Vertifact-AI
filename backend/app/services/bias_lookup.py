@@ -1,9 +1,12 @@
 import csv
 import json
+import logging
 from pathlib import Path
 from typing import Optional
 from app.utils.text_processing import extract_domain
 from app.db.connection import get_supabase
+
+logger = logging.getLogger(__name__)
 
 # Paths
 BASE_DIR = Path(__file__).resolve().parent.parent.parent.parent
@@ -42,16 +45,16 @@ def load_bias_ratings():
                     BIAS_RATINGS[alias] = BIAS_RATINGS[target]
                     OUTLET_NAMES[alias] = OUTLET_NAMES[target]
             
-            print(f"Successfully loaded {len(BIAS_RATINGS)} bias ratings from Supabase database.")
+            logger.info(f"Successfully loaded {len(BIAS_RATINGS)} bias ratings from Supabase database.")
             return
     except Exception as e:
-        print(f"Warning: Failed to load from Supabase database: {e}")
-        print("Falling back to local CSV and JSON mapping...")
+        logger.warning(f"Failed to load from Supabase database: {e}")
+        logger.info("Falling back to local CSV and JSON mapping...")
         
     # 2. Local fallback if database query failed
     if not CSV_PATH.exists() or not MAPPING_PATH.exists():
         # Do not crash if files are missing, log a warning
-        print(f"Warning: Bias rating files missing.\nCSV: {CSV_PATH}\nMapping: {MAPPING_PATH}")
+        logger.warning(f"Bias rating files missing. CSV: {CSV_PATH}, Mapping: {MAPPING_PATH}")
         return
         
     try:
@@ -120,9 +123,9 @@ def load_bias_ratings():
         for domain, name in bias_outlet_names.items():
             OUTLET_NAMES[domain] = name
                 
-        print(f"Successfully loaded {len(BIAS_RATINGS)} bias ratings from local CSV fallback.")
+        logger.info(f"Successfully loaded {len(BIAS_RATINGS)} bias ratings from local CSV fallback.")
     except Exception as local_err:
-        print(f"Error loading bias ratings from local files: {local_err}")
+        logger.error(f"Error loading bias ratings from local files: {local_err}")
 
 def get_bias_label(url_or_domain: str) -> str:
     """
@@ -154,5 +157,4 @@ def get_outlet_name(url_or_domain: str) -> Optional[str]:
     domain = extract_domain(url_or_domain)
     return OUTLET_NAMES.get(domain)
 
-# Auto-load on import
-load_bias_ratings()
+# Auto-load on import removed. Ratings are loaded at app startup or lazy-loaded on demand.

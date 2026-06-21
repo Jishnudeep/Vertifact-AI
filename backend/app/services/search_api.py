@@ -57,15 +57,16 @@ async def search_web(
             )
             if resp.status_code != 200:
                 logger.error(
-                    f"Tavily Search API returned error status {resp.status_code}: {resp.text}"
+                    f"Tavily Search API returned error status {resp.status_code}"
                 )
                 return []
                 
             data = resp.json()
             return data.get("results", [])
     except httpx.HTTPError as http_err:
-        logger.error(f"HTTP error occurred during Tavily search: {http_err}")
+        logger.error(f"Tavily Search request failed: {type(http_err).__name__}")
     except Exception as exc:
-        logger.error(f"Unexpected error occurred during Tavily search: {exc}")
+        logger.error(f"Unexpected error occurred during Tavily search: {type(exc).__name__}")
         
     return []
+
