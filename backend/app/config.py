@@ -14,6 +14,9 @@ class Settings(BaseSettings):
     # Model ID comes from config as per AGENTS.md Section 3
     model_id: str = "groq/llama-3.1-8b-instant"
     
+    # Model name for generating embeddings
+    embedding_model_name: str = "all-MiniLM-L6-v2"
+    
     # Dimension of the embeddings used (384 for MiniLM in dev, 1024 for BGE-M3 in prod)
     embedding_dimension: int = 384
     
