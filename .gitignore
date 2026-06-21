@@ -99,3 +99,5 @@ desktop.ini
 # ── Agent tooling (local-only, not published) ──────────────────
 .claude/
 .agents/
+CLAUDE.md
+AGENTS.md
