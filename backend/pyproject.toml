@@ -13,6 +13,8 @@ dependencies = [
     "pydantic-settings>=2.14.1",
     "pytest>=9.1.1",
     "python-dotenv>=1.2.2",
+    "spacy>=3.8.14",
     "supabase>=2.30.1",
     "uvicorn>=0.48.0",
+    "vadersentiment>=3.3.2",
 ]

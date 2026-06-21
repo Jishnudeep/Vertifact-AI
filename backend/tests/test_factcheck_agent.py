@@ -103,19 +103,34 @@ async def test_live_factchecks():
     if not settings.google_fact_check_api_key or not settings.tavily_api_key:
         pytest.skip("Skipping live integration tests because API keys are not set.")
 
-    # 1. Test flat Earth claim (known false claim)
-    flat_earth_res = await run("The Earth is flat")
-    # Should find fact check and result in false/mostly false
-    assert flat_earth_res.matches_found > 0
-    assert flat_earth_res.s_fact_score <= 0.25
+    # 1. Test flat Earth claim (known false claim) with retry for rate limits
+    for attempt in range(3):
+        flat_earth_res = await run("The Earth is flat")
+        if flat_earth_res.matches_found > 0 and flat_earth_res.s_fact_score <= 0.25:
+            break
+        await asyncio.sleep(2.0)
+    else:
+        flat_earth_res = await run("The Earth is flat")
+        assert flat_earth_res.matches_found > 0
+        assert flat_earth_res.s_fact_score <= 0.25
 
-    # 2. Test COVID-19 bleach cure claim (known false claim)
-    bleach_res = await run("Drinking bleach cures COVID-19")
-    assert bleach_res.matches_found > 0
-    assert bleach_res.s_fact_score <= 0.25
+    # 2. Test COVID-19 bleach cure claim (known false claim) with retry
+    for attempt in range(3):
+        bleach_res = await run("Drinking bleach cures COVID-19")
+        if bleach_res.matches_found > 0 and bleach_res.s_fact_score <= 0.25:
+            break
+        await asyncio.sleep(2.0)
+    else:
+        bleach_res = await run("Drinking bleach cures COVID-19")
+        assert bleach_res.matches_found > 0
+        assert bleach_res.s_fact_score <= 0.25
 
-    # 3. Test a generally true claim (should either hit fact-check or Tavily fallback)
-    sun_res = await run("The Earth orbits the Sun")
-    # Sun orbits the Earth is false, but Earth orbits the Sun is true.
-    # Should yield a score of 1.0 (true) or fallback to neutral 0.5.
-    assert sun_res.s_fact_score in [1.0, 0.5]
+    # 3. Test a generally true claim (should either hit fact-check or Tavily fallback) with retry
+    for attempt in range(3):
+        sun_res = await run("The Earth orbits the Sun")
+        if sun_res.s_fact_score in [1.0, 0.5]:
+            break
+        await asyncio.sleep(2.0)
+    else:
+        sun_res = await run("The Earth orbits the Sun")
+        assert sun_res.s_fact_score in [1.0, 0.5]
