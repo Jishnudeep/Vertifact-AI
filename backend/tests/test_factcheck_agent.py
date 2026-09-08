@@ -1,7 +1,7 @@
 import pytest
 import asyncio
 from unittest.mock import patch, AsyncMock
-from app.agents.factcheck_agent import run, map_rating_to_score, FactCheckResult, NEUTRAL
+from app.agents.factcheck_agent import run, map_rating_to_score, FactCheckResult, make_neutral_factcheck
 from app.config import settings
 
 @pytest.mark.anyio
@@ -24,7 +24,7 @@ async def test_map_rating_to_score():
 
 @pytest.mark.anyio
 async def test_agent_degrades_on_timeout():
-    """Verify that the agent returns NEUTRAL when the inner logic times out (takes > TIMEOUT)."""
+    """Verify that the agent returns degraded neutral when the inner logic times out."""
     async def slow_analyze(claim):
         await asyncio.sleep(1.0)
         return FactCheckResult(matches_found=1, s_fact_score=1.0)
@@ -32,14 +32,18 @@ async def test_agent_degrades_on_timeout():
     with patch("app.agents.factcheck_agent._analyze", side_effect=slow_analyze), \
          patch("app.agents.factcheck_agent.TIMEOUT", 0.01):
         result = await run("Test claim")
-        assert result == NEUTRAL
+        assert result.degraded is True
+        assert result.s_fact_score == 0.5
+        assert result.error is not None and "Timeout" in result.error
 
 @pytest.mark.anyio
 async def test_agent_degrades_on_exception():
-    """Verify that the agent returns NEUTRAL when an unexpected exception is raised."""
+    """Verify that the agent returns degraded neutral when an unexpected exception is raised."""
     with patch("app.agents.factcheck_agent._analyze", side_effect=Exception("Database crash")):
         result = await run("Test claim")
-        assert result == NEUTRAL
+        assert result.degraded is True
+        assert result.s_fact_score == 0.5
+        assert result.error is not None and "Database crash" in result.error
 
 @pytest.mark.anyio
 async def test_google_factcheck_api_hit():
@@ -61,6 +65,7 @@ async def test_google_factcheck_api_hit():
     with patch("app.agents.factcheck_agent.search_factchecks", return_value=mock_google_response) as mock_search:
         result = await run("The Earth is flat")
         assert mock_search.called
+        assert result.degraded is False
         assert result.matches_found == 1
         assert result.s_fact_score == 0.0
         assert result.best_match["publisher"] == "Snopes"
@@ -85,10 +90,31 @@ async def test_tavily_fallback_with_llm():
          patch("app.agents.factcheck_agent.run_adk_agent", return_value=mock_adk_response):
          
         result = await run("The Earth orbits the Sun")
+        assert result.degraded is False
         assert result.matches_found == 1
         assert result.s_fact_score == 1.0
-        assert result.best_match["publisher"] == "PolitiFact"
+        assert result.best_match["publisher"] == "Politifact"
         assert result.best_match["rating"] == "true"
+
+@pytest.mark.anyio
+async def test_tavily_fallback_invalid_enum_falls_back_to_unproven():
+    """Verify that unrecognized LLM ratings fall back to unproven (0.5)."""
+    mock_tavily_response = [
+        {
+            "url": "https://www.snopes.com/factcheck/test/",
+            "title": "Snopes Check",
+            "content": "Content",
+            "score": 0.9
+        }
+    ]
+    mock_adk_response = '{"rating": "inconclusive opinion", "explanation": "Not sure"}'
+    
+    with patch("app.agents.factcheck_agent.search_factchecks", return_value=[]), \
+         patch("app.agents.factcheck_agent.search_web", return_value=mock_tavily_response), \
+         patch("app.agents.factcheck_agent.run_adk_agent", return_value=mock_adk_response):
+        result = await run("Some novel claim")
+        assert result.s_fact_score == 0.5
+        assert result.best_match["rating"] == "unproven"
 
 @pytest.mark.anyio
 @pytest.mark.live

@@ -79,8 +79,11 @@ def load_bias_ratings():
             reader = csv.DictReader(f)
             for row in reader:
                 name = row["name"]
-                raw_bias = row["bias"]
-                bias_label = bias_value_map.get(raw_bias.lower().strip(), "Center")
+                raw_bias = row.get("bias", "")
+                clean_raw_bias = raw_bias.lower().strip() if raw_bias else ""
+                if clean_raw_bias not in bias_value_map:
+                    continue
+                bias_label = bias_value_map[clean_raw_bias]
                 
                 # Get the domain for this outlet name from mapping
                 domain = domain_mapping.get(name)

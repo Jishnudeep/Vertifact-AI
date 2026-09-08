@@ -195,3 +195,64 @@ async def test_lookup_cache_offline_hit_missing_similarity():
         assert result["claim_id"] == "test-uuid"
         assert result["similarity"] is None
 
+@pytest.mark.anyio
+async def test_insert_cache_rejects_zero_vector():
+    """Verify that attempting to cache a zero-vector is rejected."""
+    result = await insert_cache(
+        input_type="text",
+        raw_input="Empty text",
+        extracted_claim="Empty",
+        embedding=[0.0] * 384,
+        c_total=0.5,
+        s_fact=0.5,
+        b_ling=0.5,
+        v_consensus=0.0,
+        weights={"w1": 0.5, "w2": 0.2, "w3": 0.3},
+        confidence_level="insufficient",
+        agent_outputs={},
+        source_citations=[],
+        linguistic_profile={},
+        processing_time_ms=10,
+        warnings=["Test warning"]
+    )
+    assert result is None
+
+@pytest.mark.anyio
+async def test_insert_cache_persists_warnings():
+    """Verify that warnings are forwarded to results table during insert."""
+    mock_claim_resp = MagicMock()
+    mock_claim_resp.data = [{"id": "claim-with-warnings"}]
+    
+    mock_result_resp = MagicMock()
+    mock_result_resp.data = [{"id": "result-with-warnings"}]
+    
+    mock_supabase = MagicMock()
+    mock_supabase.table.return_value.insert.return_value.execute.side_effect = [
+        mock_claim_resp,
+        mock_result_resp
+    ]
+    
+    with patch("app.services.cache.get_supabase", return_value=mock_supabase):
+        claim_id = await insert_cache(
+            input_type="text",
+            raw_input="Claim text",
+            extracted_claim="Extracted",
+            embedding=[0.1] * 384,
+            c_total=0.55,
+            s_fact=0.5,
+            b_ling=0.1,
+            v_consensus=0.2,
+            weights={"w1": 0.5, "w2": 0.2, "w3": 0.3},
+            confidence_level="low",
+            agent_outputs={},
+            source_citations=[],
+            linguistic_profile={},
+            processing_time_ms=100,
+            warnings=["Low confidence: no fact-checks found"]
+        )
+        assert claim_id == "claim-with-warnings"
+        # Check that result table insert received warnings
+        results_insert_call = mock_supabase.table.return_value.insert.call_args_list[1]
+        inserted_result_dict = results_insert_call[0][0]
+        assert inserted_result_dict["warnings"] == ["Low confidence: no fact-checks found"]
+

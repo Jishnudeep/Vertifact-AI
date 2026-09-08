@@ -1,0 +1,45 @@
+from typing import List, Dict, Optional, Literal
+from pydantic import BaseModel, Field
+
+class VerifyRequest(BaseModel):
+    text: str = Field(..., min_length=1, max_length=2000, description="The claim text to verify")
+    input_type: Literal["text", "url", "image"] = Field(default="text", description="Type of input provided")
+
+class TrustScoreModel(BaseModel):
+    c_total: float = Field(..., ge=0.0, le=1.0)
+    s_fact: float = Field(..., ge=0.0, le=1.0)
+    b_ling: float = Field(..., ge=0.0, le=1.0)
+    v_consensus: float = Field(..., ge=0.0, le=1.0)
+    weights: Dict[str, float]
+
+class ConfidenceModel(BaseModel):
+    level: Literal["high", "medium", "low", "insufficient"]
+    warnings: List[str] = Field(default_factory=list)
+
+class LinguisticProfileModel(BaseModel):
+    clickbait_syntax: float
+    emotional_framing: float
+    sensationalism: float
+    informational_density: float
+
+class SourceCitationModel(BaseModel):
+    url: Optional[str] = None
+    title: Optional[str] = None
+    publisher: str
+    rating: Optional[str] = None
+    bias_label: str
+    type: Literal["fact_check", "corroborating"]
+
+class VerifyResponse(BaseModel):
+    id: Optional[str] = None
+    claim: str
+    trust_score: TrustScoreModel
+    confidence: ConfidenceModel
+    linguistic_profile: LinguisticProfileModel
+    sources: List[SourceCitationModel]
+    processing_time_ms: int
+    cached: bool = False
+
+class ErrorResponse(BaseModel):
+    error: str
+    detail: Optional[str] = None

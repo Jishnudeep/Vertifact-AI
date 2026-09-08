@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import List, Dict
+from typing import List, Dict, Optional
 
 from app.scoring.weights import DEFAULT_W1, DEFAULT_W2, DEFAULT_W3, validate_weights
 from app.scoring.confidence import determine_confidence_level, apply_confidence_capping
@@ -39,14 +39,20 @@ class ScoringEngine:
         v_consensus: float,
         agents_succeeded: int,
         total_agents: int = 3,
+        fact_check_found: Optional[bool] = None,
     ) -> ScoringResult:
         """
         Compute trust score, apply capping rules, and classify confidence level.
+        If fact_check_found is omitted, defaults to True if s_fact != 0.5.
         """
         # Clamp inputs to [0.0, 1.0] to safeguard against anomalous agent values
         s_fact_clamped = max(0.0, min(1.0, s_fact))
         b_ling_clamped = max(0.0, min(1.0, b_ling))
         v_consensus_clamped = max(0.0, min(1.0, v_consensus))
+        
+        # If fact_check_found flag not explicitly passed, infer from s_fact
+        if fact_check_found is None:
+            fact_check_found = (s_fact_clamped != 0.5)
         
         # Raw composite: w1*s_fact + w2*(1 - b_ling) + w3*v_consensus
         c_total_raw = (
@@ -57,12 +63,21 @@ class ScoringEngine:
         
         # Apply confidence capping rules
         c_total_capped, warnings = apply_confidence_capping(
-            c_total_raw, s_fact_clamped, v_consensus_clamped, agents_succeeded, total_agents
+            c_total=c_total_raw,
+            s_fact=s_fact_clamped,
+            v_consensus=v_consensus_clamped,
+            agents_succeeded=agents_succeeded,
+            total_agents=total_agents,
+            fact_check_found=fact_check_found,
         )
         
         # Determine confidence level
         confidence = determine_confidence_level(
-            agents_succeeded, s_fact_clamped, v_consensus_clamped, total_agents
+            agents_succeeded=agents_succeeded,
+            s_fact=s_fact_clamped,
+            v_consensus=v_consensus_clamped,
+            total_agents=total_agents,
+            fact_check_found=fact_check_found,
         )
         
         # Final round and clamp to [0.0, 1.0]

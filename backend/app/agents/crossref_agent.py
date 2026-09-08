@@ -14,17 +14,29 @@ TIMEOUT = 8.0
 
 @dataclass
 class CrossRefResult:
-    entities_extracted: List[str]   # People, organizations, locations
+    entities_extracted: List[str]             # People, organizations, locations
     sources_found: List[Dict[str, Any]]       # {url, title, publisher, bias_label, relevance_score}
     coverage_distribution: Dict[str, int]     # {"Left": 0, "Lean Left": 0, "Center": 0, "Lean Right": 0, "Right": 0}
-    v_consensus_score: float        # 0.0 to 1.0
+    v_consensus_score: float                  # 0.0 to 1.0 (0.0 when no sources or degraded)
+    degraded: bool = False                    # True if agent timed out or failed
+    error: Optional[str] = None               # Failure message if degraded
 
-NEUTRAL = CrossRefResult(
-    entities_extracted=[],
-    sources_found=[],
-    coverage_distribution={"Left": 0, "Lean Left": 0, "Center": 0, "Lean Right": 0, "Right": 0},
-    v_consensus_score=0.5
-)
+def make_neutral_crossref(degraded: bool = False, error: Optional[str] = None) -> CrossRefResult:
+    """
+    Factory creating a fresh neutral CrossRefResult.
+    v_consensus_score is strictly 0.0 on degradation or empty search.
+    """
+    return CrossRefResult(
+        entities_extracted=[],
+        sources_found=[],
+        coverage_distribution={"Left": 0, "Lean Left": 0, "Center": 0, "Lean Right": 0, "Right": 0},
+        v_consensus_score=0.0,
+        degraded=degraded,
+        error=error
+    )
+
+# Backward compatibility reference (fresh instance)
+NEUTRAL = make_neutral_crossref()
 
 def _clean_publisher_name(domain: str) -> str:
     """
@@ -48,7 +60,7 @@ async def _analyze(claim: str) -> CrossRefResult:
     Internal implementation of cross-reference analysis.
     """
     if not claim or not claim.strip():
-        return NEUTRAL
+        return make_neutral_crossref(degraded=False)
 
     # 1. spaCy NER extraction
     nlp = get_spacy_nlp()
@@ -68,74 +80,72 @@ async def _analyze(claim: str) -> CrossRefResult:
 
     # 2. Construct search queries
     # Query 1: The original claim text (truncated to avoid excessively long search queries)
-    queries = [claim[:200]]
-    if entities:
-        # Query 2: Combination of all extracted unique entities
-        entity_query = " ".join(entities)
-        if entity_query.lower() != claim.lower().strip() and len(entity_query.strip()) > 0:
-            queries.append(entity_query)
+    queries = [claim[:150]]
 
-    # 3. Call Tavily in parallel async
-    tasks = [
-        search_web(q, settings.tavily_api_key, max_results=5)
+    # Query 2 & 3: Combine top entities if available
+    if len(entities) >= 2:
+        queries.append(f"{entities[0]} {entities[1]}")
+    elif len(entities) == 1:
+        queries.append(f"{entities[0]} news")
+        
+    # Limit queries to at most 3
+    queries = queries[:3]
+
+    # 3. Parallel search execution via Tavily
+    api_key = settings.tavily_api_key
+    search_tasks = [
+        search_web(query=q, api_key=api_key, max_results=5)
         for q in queries
     ]
-    search_results_list = await asyncio.gather(*tasks)
+    
+    results_nested = await asyncio.gather(*search_tasks, return_exceptions=True)
 
-    # Combine results
+    # 4. Flatten and deduplicate results by domain
     all_results = []
-    for results in search_results_list:
-        all_results.extend(results)
+    for res in results_nested:
+        if isinstance(res, list):
+            all_results.extend(res)
+        elif isinstance(res, Exception):
+            logger.warning(f"A search query failed during cross-reference: {res}")
 
-    # 4. Deduplicate results by domain, keeping the highest score (relevance)
-    deduped_sources = {}
+    domain_to_best_article: Dict[str, Dict[str, Any]] = {}
     for item in all_results:
-        url = item.get("url")
-        if not url:
-            continue
+        url = item.get("url", "")
         domain = extract_domain(url)
-        # Handle case where score isn't a float or missing
-        try:
-            score = float(item.get("score", 0.0))
-        except (ValueError, TypeError):
-            score = 0.5
+        if not domain:
+            continue
             
-        title = item.get("title", "")
+        score = item.get("score", 0.0)
+        # Keep the highest scoring article for each unique domain
+        if domain not in domain_to_best_article or score > domain_to_best_article[domain].get("score", 0.0):
+            domain_to_best_article[domain] = item
 
-        if domain in deduped_sources:
-            if score > deduped_sources[domain]["relevance_score"]:
-                deduped_sources[domain] = {
-                    "url": url,
-                    "title": title,
-                    "relevance_score": score,
-                }
-        else:
-            deduped_sources[domain] = {
-                "url": url,
-                "title": title,
-                "relevance_score": score,
-            }
-
-    # 5. For each unique source, resolve bias rating and publisher name
+    # 5. Bias lookup and coverage distribution calculation
+    coverage_distribution = {
+        "Left": 0,
+        "Lean Left": 0,
+        "Center": 0,
+        "Lean Right": 0,
+        "Right": 0
+    }
+    
     sources_found = []
-    coverage_distribution = {"Left": 0, "Lean Left": 0, "Center": 0, "Lean Right": 0, "Right": 0}
     reputable_sources = []
 
-    for domain, source in deduped_sources.items():
-        url = source["url"]
-        bias_label = get_bias_label(url) # Returns "Left", "Lean Left", "Center", "Lean Right", "Right", or "Unrated"
-        
-        # Get publisher name from database or fall back to domain heuristic
-        publisher = get_outlet_name(url)
-        if not publisher:
-            publisher = _clean_publisher_name(domain)
+    for domain, article in domain_to_best_article.items():
+        bias_label = get_bias_label(domain)
+        known_outlet = get_outlet_name(domain)
+        publisher = known_outlet if known_outlet else _clean_publisher_name(domain)
+
+        # Map search relevance score to 0.0 - 1.0 (Tavily score is typically 0.0 - 1.0)
+        relevance_score = float(article.get("score", 0.5))
 
         source_dict = {
-            "url": url,
-            "title": source["title"],
+            "url": article.get("url"),
+            "title": article.get("title", ""),
             "publisher": publisher,
             "bias_label": bias_label,
-            "relevance_score": round(source["relevance_score"], 3)
+            "relevance_score": round(relevance_score, 2)
         }
         sources_found.append(source_dict)
 
@@ -160,19 +170,21 @@ async def _analyze(claim: str) -> CrossRefResult:
         entities_extracted=entities,
         sources_found=sources_found,
         coverage_distribution=coverage_distribution,
-        v_consensus_score=v_consensus_score
+        v_consensus_score=v_consensus_score,
+        degraded=False,
+        error=None
     )
 
 async def run(claim: str) -> CrossRefResult:
     """
     Exposes the CrossReferenceAgent interface.
-    Enforces a strict 8-second timeout, falling back to NEUTRAL.
+    Enforces a strict 8-second timeout, falling back to degraded neutral (v_consensus=0.0).
     """
     try:
         return await asyncio.wait_for(_analyze(claim), timeout=TIMEOUT)
     except asyncio.TimeoutError:
         logger.warning(f"Cross-Reference Agent timed out on claim: {claim}")
-        return NEUTRAL
+        return make_neutral_crossref(degraded=True, error="Timeout: Cross-Reference Agent exceeded 8.0s")
     except Exception as exc:
         logger.error(f"Cross-Reference Agent failed on claim: {claim}. Error: {exc}")
-        return NEUTRAL
+        return make_neutral_crossref(degraded=True, error=str(exc))

@@ -544,6 +544,10 @@ class ScoringEngine:
         v_consensus: float,
         agents_succeeded: int,
         total_agents: int = 3,
+        # True when the fact-check agent actually matched a review. Passed explicitly
+        # rather than inferred from `s_fact == 0.5`, because "Half True" / "Unproven"
+        # verdicts also map to exactly 0.5 and must NOT trigger the no-fact-check cap.
+        fact_check_found: bool = False,
     ) -> ScoringResult:
         warnings = []
 
@@ -559,12 +563,12 @@ class ScoringEngine:
             c_total = min(c_total, 0.50)
             warnings.append(f"Partial analysis: {agents_succeeded}/{total_agents} agents succeeded")
 
-        if s_fact == 0.5 and v_consensus < 0.3:
+        if not fact_check_found and v_consensus < 0.3:
             c_total = min(c_total, 0.55)
             warnings.append("Low confidence: no fact-checks found and insufficient corroborating sources")
 
         # Determine confidence level
-        if agents_succeeded == total_agents and (s_fact != 0.5 or v_consensus >= 0.5):
+        if agents_succeeded == total_agents and (fact_check_found or s_fact != 0.5 or v_consensus >= 0.5):
             confidence = "high"
         elif agents_succeeded >= 2 and v_consensus >= 0.3:
             confidence = "medium"

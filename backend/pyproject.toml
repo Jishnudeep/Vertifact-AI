@@ -1,10 +1,11 @@
 [project]
 name = "backend"
 version = "0.1.0"
-description = "Add your description here"
+description = "VeriFact AI Backend Pipeline"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "en-core-web-sm",
     "fastapi>=0.136.3",
     "google-adk>=2.1.0",
     "httpx>=0.28.1",
@@ -14,6 +15,7 @@ dependencies = [
     "pytest>=9.1.1",
     "python-dotenv>=1.2.2",
     "sentence-transformers>=5.6.0",
+    "slowapi>=0.1.9",
     "spacy>=3.8.14",
     "supabase>=2.30.1",
     "uvicorn>=0.48.0",
@@ -22,8 +24,11 @@ dependencies = [
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
+cache_dir = ".venv/.pytest_cache"
 markers = [
     "live: integration tests that hit live external APIs (deselected by default)",
 ]
 addopts = "-m 'not live'"
 
+[tool.uv.sources]
+en-core-web-sm = { url = "https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl" }

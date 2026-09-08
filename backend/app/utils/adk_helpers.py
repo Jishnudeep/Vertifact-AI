@@ -53,19 +53,16 @@ def extract_key_via_regex(text: str, key: str, is_bool: bool = False) -> Optiona
         if match:
             return match.group(1).lower() == "true"
     else:
-        # Match either double or single quoted values
         pattern = rf'["\']{key}["\']\s*:\s*["\']([^"\']*)["\']'
         match = re.search(pattern, text)
         if match:
             return match.group(1)
             
-        # Fallback to match even if the value has internal double quotes (loose match)
         pattern = rf'["\']{key}["\']\s*:\s*["\'](.*?)["\']\s*(?:,|\}})'
         match = re.search(pattern, text)
         if match:
             return match.group(1)
 
-        # Match numeric values (from linguistic agent)
         pattern = rf'["\']{key}["\']\s*:\s*([0-9.]+)'
         match = re.search(pattern, text)
         if match:
@@ -75,8 +72,7 @@ def extract_key_via_regex(text: str, key: str, is_bool: bool = False) -> Optiona
 
 def parse_adk_response(content: str, expected_keys: List[str], bool_keys: List[str] = []) -> Dict[str, Any]:
     """
-    Parse the ADK response content. Tries json.loads first, then falls back to regex extraction
-    to ensure maximum resilience against LLM formatting errors.
+    Parse the ADK response content. Tries json.loads first, then falls back to regex extraction.
     """
     try:
         return parse_json_safely(content)
@@ -92,12 +88,12 @@ def parse_adk_response(content: str, expected_keys: List[str], bool_keys: List[s
 
 def get_adk_runner(name: str, instruction: str, app_name: str) -> Runner:
     """
-    Retrieve a cached ADK Runner, or construct and cache a new one if not present.
+    Retrieve a cached ADK Runner with temperature=0.0 for deterministic evaluation.
     """
     cache_key = f"{app_name}:{name}:{instruction}"
     if cache_key not in _runner_cache:
-        logger.info(f"Creating new ADK Runner for agent: {name} (app: {app_name})")
-        model = LiteLlm(model=settings.model_id, api_key=settings.groq_api_key)
+        logger.info(f"Creating new ADK Runner for agent: {name} (app: {app_name}) with temperature=0.0")
+        model = LiteLlm(model=settings.model_id, api_key=settings.groq_api_key, temperature=0.0)
         agent = LlmAgent(
             name=name,
             model=model,
@@ -117,11 +113,10 @@ def get_adk_runner(name: str, instruction: str, app_name: str) -> Runner:
 async def run_adk_agent(name: str, instruction: str, prompt: str, app_name: str) -> str:
     """
     Helper to run a Google ADK LlmAgent and retrieve the final text response.
-    Uses cached runners and independent sessions per request.
+    Cleans up session upon completion to avoid memory leaks.
     """
     runner = get_adk_runner(name, instruction, app_name)
     
-    # Generate unique user_id and session_id per call to prevent conversation history cross-talk
     run_id = str(uuid.uuid4())[:8]
     user_id = f"{app_name}-user-{name}-{run_id}"
     session_id = f"{app_name}-session-{name}-{run_id}"
@@ -132,11 +127,18 @@ async def run_adk_agent(name: str, instruction: str, prompt: str, app_name: str)
     
     message = types.Content(role="user", parts=[types.Part(text=prompt)])
     
-    final_text = ""
-    async for event in runner.run_async(
-        user_id=user_id, session_id=session_id, new_message=message
-    ):
-        if event.is_final_response() and event.content and event.content.parts:
-            final_text = event.content.parts[0].text or ""
-            
-    return final_text
+    try:
+        final_text = ""
+        async for event in runner.run_async(
+            user_id=user_id, session_id=session_id, new_message=message
+        ):
+            if event.is_final_response() and event.content and event.content.parts:
+                final_text = event.content.parts[0].text or ""
+        return final_text
+    finally:
+        try:
+            await _session_service.delete_session(
+                app_name=app_name, user_id=user_id, session_id=session_id
+            )
+        except Exception as cleanup_err:
+            logger.debug(f"Failed to delete ADK session {session_id}: {cleanup_err}")

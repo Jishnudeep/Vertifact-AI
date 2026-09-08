@@ -1,0 +1,118 @@
+import pytest
+from unittest.mock import patch, MagicMock
+from fastapi.testclient import TestClient
+
+from app.main import app
+
+client = TestClient(app)
+
+def test_health_endpoint():
+    response = client.get("/health")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "ok"
+    assert data["service"] == "verifact-ai"
+
+def test_verify_endpoint_success():
+    mock_orchestrator_result = {
+        "id": "result-12345",
+        "claim": "The Earth orbits the Sun",
+        "trust_score": {
+            "c_total": 0.95,
+            "s_fact": 1.0,
+            "b_ling": 0.1,
+            "v_consensus": 0.8,
+            "weights": {"w1": 0.5, "w2": 0.2, "w3": 0.3}
+        },
+        "confidence": {
+            "level": "high",
+            "warnings": []
+        },
+        "linguistic_profile": {
+            "clickbait_syntax": 0.0,
+            "emotional_framing": 0.0,
+            "sensationalism": 0.0,
+            "informational_density": 0.9
+        },
+        "sources": [
+            {
+                "url": "https://snopes.com/earth-sun",
+                "title": "Earth orbit claim",
+                "publisher": "Snopes",
+                "rating": "True",
+                "bias_label": "Center",
+                "type": "fact_check"
+            }
+        ],
+        "processing_time_ms": 1500,
+        "cached": False
+    }
+
+    with patch("app.api.routes.verify_claim", return_value=mock_orchestrator_result):
+        response = client.post("/api/verify", json={"text": "The Earth orbits the Sun"})
+        assert response.status_code == 200
+        data = response.json()
+        assert data["id"] == "result-12345"
+        assert data["trust_score"]["c_total"] == 0.95
+        assert data["confidence"]["level"] == "high"
+        assert len(data["sources"]) == 1
+
+def test_verify_endpoint_rejects_empty_input():
+    response = client.post("/api/verify", json={"text": ""})
+    # Pydantic schema validation rejects min_length < 1 with 422
+    assert response.status_code == 422
+
+def test_verify_endpoint_rejects_whitespace_input():
+    response = client.post("/api/verify", json={"text": "    "})
+    assert response.status_code == 400
+    data = response.json()
+    assert data["error"] == "Invalid Input"
+
+def test_verify_endpoint_rejects_opinion():
+    response = client.post("/api/verify", json={"text": "I think summer is the greatest season in history."})
+    assert response.status_code == 422
+    data = response.json()
+    assert data["error"] == "Non-Verifiable Claim"
+    assert "opinion" in data["detail"].lower()
+
+def test_verify_endpoint_rejects_question():
+    response = client.post("/api/verify", json={"text": "Why do stars shine at night?"})
+    assert response.status_code == 422
+    data = response.json()
+    assert data["error"] == "Non-Verifiable Claim"
+    assert "question" in data["detail"].lower()
+
+def test_get_result_found():
+    mock_row = {
+        "id": "result-abc",
+        "claim_id": "claim-xyz",
+        "c_total": 0.88,
+        "s_fact": 0.9,
+        "b_ling": 0.1,
+        "v_consensus": 0.8,
+        "weights": {"w1": 0.5, "w2": 0.2, "w3": 0.3},
+        "confidence_level": "high",
+        "warnings": [],
+        "source_citations": [],
+        "linguistic_profile": None,
+        "processing_time_ms": 1200,
+        "claims": {"extracted_claim": "Historical verified claim"}
+    }
+    mock_supabase = MagicMock()
+    mock_supabase.table.return_value.select.return_value.eq.return_value.execute.return_value = MagicMock(data=[mock_row])
+
+    with patch("app.api.routes.get_supabase", return_value=mock_supabase):
+        response = client.get("/api/results/result-abc")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["id"] == "result-abc"
+        assert data["claim"] == "Historical verified claim"
+        assert data["trust_score"]["c_total"] == 0.88
+
+def test_get_result_not_found():
+    mock_supabase = MagicMock()
+    mock_supabase.table.return_value.select.return_value.eq.return_value.execute.return_value = MagicMock(data=[])
+
+    with patch("app.api.routes.get_supabase", return_value=mock_supabase):
+        response = client.get("/api/results/non-existent-id")
+        assert response.status_code == 404

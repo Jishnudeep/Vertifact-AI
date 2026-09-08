@@ -35,7 +35,8 @@ def test_scoring_success_no_capping():
         s_fact=0.8,
         b_ling=0.1,
         v_consensus=0.7,
-        agents_succeeded=3
+        agents_succeeded=3,
+        fact_check_found=True
     )
     
     assert result.c_total == 0.790
@@ -55,12 +56,28 @@ def test_scoring_no_fact_check_low_consensus_capping():
         s_fact=0.5,
         b_ling=0.0,
         v_consensus=0.2,
-        agents_succeeded=3
+        agents_succeeded=3,
+        fact_check_found=False
     )
     
     assert result.c_total == 0.550
     assert result.confidence_level == "low"
-    assert any("Low confidence" in w for w in result.warnings)
+    assert any("Low confidence: no fact-checks found" in w for w in result.warnings)
+
+def test_scoring_half_true_preserves_fact_check_without_false_warning():
+    """Verify that a legitimate 0.5 (e.g. Half True) does NOT trigger 'no fact-checks found' warning."""
+    engine = ScoringEngine(0.40, 0.30, 0.30)
+    result = engine.compute(
+        s_fact=0.5,
+        b_ling=0.0,
+        v_consensus=0.2,
+        agents_succeeded=3,
+        fact_check_found=True  # Fact-checker explicitly rated it Half True / Mixed
+    )
+    
+    # Not capped by Rule 2
+    assert result.c_total == 0.560
+    assert not any("no fact-checks found" in w for w in result.warnings)
 
 def test_scoring_partial_analysis_capping():
     """Verify capping at 0.50 when some agents fail (partial analysis)."""
@@ -72,7 +89,8 @@ def test_scoring_partial_analysis_capping():
         s_fact=1.0,
         b_ling=0.0,
         v_consensus=1.0,
-        agents_succeeded=2
+        agents_succeeded=2,
+        fact_check_found=True
     )
     
     assert result.c_total == 0.500
@@ -80,17 +98,18 @@ def test_scoring_partial_analysis_capping():
     assert any("Partial analysis" in w for w in result.warnings)
 
 def test_scoring_all_agents_fail():
-    """Verify scoring when all agents fail."""
+    """Verify scoring when all agents fail (scoring engine computation level)."""
     engine = ScoringEngine()
-    # s_fact=0.5, b_ling=0.5, v_consensus=0.5, agents_succeeded=0
+    # s_fact=0.5, b_ling=0.5, v_consensus=0.0, agents_succeeded=0
     result = engine.compute(
         s_fact=0.5,
         b_ling=0.5,
-        v_consensus=0.5,
-        agents_succeeded=0
+        v_consensus=0.0,
+        agents_succeeded=0,
+        fact_check_found=False
     )
     
-    assert result.c_total == 0.500  # Capped at 0.50 due to partial analysis
+    assert result.c_total == 0.350  # 0.5*0.5 + 0.2*0.5 + 0.3*0.0 = 0.35, capped at 0.50 -> 0.35
     assert result.confidence_level == "insufficient"
     assert any("Partial analysis" in w for w in result.warnings)
 
@@ -101,11 +120,12 @@ def test_scoring_boundary_zeros():
         s_fact=0.0,
         b_ling=1.0,
         v_consensus=0.0,
-        agents_succeeded=3
+        agents_succeeded=3,
+        fact_check_found=True
     )
     
     assert result.c_total == 0.0
-    assert result.confidence_level == "high"  # All succeeded, s_fact=0.0 != 0.5
+    assert result.confidence_level == "high"  # All succeeded, fact check found
     assert len(result.warnings) == 0
 
 def test_scoring_boundary_ones():
@@ -115,7 +135,8 @@ def test_scoring_boundary_ones():
         s_fact=1.0,
         b_ling=0.0,
         v_consensus=1.0,
-        agents_succeeded=3
+        agents_succeeded=3,
+        fact_check_found=True
     )
     
     assert result.c_total == 1.0

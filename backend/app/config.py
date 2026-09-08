@@ -1,15 +1,16 @@
 import os
+from functools import lru_cache
 from pathlib import Path
 from pydantic import Field, AliasChoices
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
-    supabase_url: str = Field(validation_alias=AliasChoices("SUPABASE_URL"))
-    supabase_publish_key: str = Field(validation_alias=AliasChoices("SUPABASE_PUBLISH_KEY"))
-    supabase_secret_key: str = Field(validation_alias=AliasChoices("SUPABASE_SECRET_KEY"))
-    groq_api_key: str = Field(validation_alias=AliasChoices("GROQ_API_KEY"))
-    tavily_api_key: str = Field(validation_alias=AliasChoices("TAVILY_API_KEY", "TAVILY_KEY"))
-    google_fact_check_api_key: str = Field(validation_alias=AliasChoices("GOOGLE_FACTCHECK_API_KEY", "GOOGLE_FACT_CHECK_API_KEY"))
+    supabase_url: str = Field(default="", validation_alias=AliasChoices("SUPABASE_URL"))
+    supabase_publish_key: str = Field(default="", validation_alias=AliasChoices("SUPABASE_PUBLISH_KEY"))
+    supabase_secret_key: str = Field(default="", validation_alias=AliasChoices("SUPABASE_SECRET_KEY"))
+    groq_api_key: str = Field(default="", validation_alias=AliasChoices("GROQ_API_KEY"))
+    tavily_api_key: str = Field(default="", validation_alias=AliasChoices("TAVILY_API_KEY", "TAVILY_KEY"))
+    google_fact_check_api_key: str = Field(default="", validation_alias=AliasChoices("GOOGLE_FACTCHECK_API_KEY", "GOOGLE_FACT_CHECK_API_KEY"))
     
     # Model ID comes from config as per AGENTS.md Section 3
     model_id: str = "groq/llama-3.1-8b-instant"
@@ -19,6 +20,9 @@ class Settings(BaseSettings):
     
     # Dimension of the embeddings used (384 for MiniLM in dev, 1024 for BGE-M3 in prod)
     embedding_dimension: int = 384
+    
+    # Linguistic agent LLM sensationalism flag (Build Order 1.2 default is False: heuristics only)
+    enable_llm_sensationalism: bool = False
     
     model_config = SettingsConfigDict(
         env_file=(
@@ -30,7 +34,11 @@ class Settings(BaseSettings):
         extra="ignore"
     )
 
-settings = Settings()
+@lru_cache()
+def get_settings() -> Settings:
+    return Settings()
+
+settings = get_settings()
 
 # Module-level variables for clean backward compatibility
 SUPABASE_URL = settings.supabase_url

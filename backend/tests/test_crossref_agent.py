@@ -1,12 +1,17 @@
 import pytest
 import asyncio
 from unittest.mock import patch, AsyncMock
-from app.agents.crossref_agent import run, CrossRefResult, NEUTRAL
+from app.agents.crossref_agent import run, CrossRefResult, make_neutral_crossref
+from app.services.bias_lookup import load_bias_ratings
 from app.config import settings
+
+@pytest.fixture(autouse=True)
+def setup_bias():
+    load_bias_ratings()
 
 @pytest.mark.anyio
 async def test_agent_degrades_on_timeout():
-    """Verify that the agent returns NEUTRAL when it times out."""
+    """Verify that the agent returns degraded result with v_consensus=0.0 when it times out."""
     async def slow_search(*args, **kwargs):
         await asyncio.sleep(1.0)
         return []
@@ -14,14 +19,18 @@ async def test_agent_degrades_on_timeout():
     with patch("app.agents.crossref_agent.search_web", side_effect=slow_search), \
          patch("app.agents.crossref_agent.TIMEOUT", 0.01):
         result = await run("NASA announces Mars landing")
-        assert result == NEUTRAL
+        assert result.degraded is True
+        assert result.v_consensus_score == 0.0
+        assert result.error is not None and "Timeout" in result.error
 
 @pytest.mark.anyio
 async def test_agent_degrades_on_exception():
-    """Verify that the agent returns NEUTRAL when search_web raises an exception."""
-    with patch("app.agents.crossref_agent.search_web", side_effect=Exception("API key revoked")):
+    """Verify that the agent returns degraded result with v_consensus=0.0 on exception."""
+    with patch("app.agents.crossref_agent._analyze", side_effect=Exception("API key revoked")):
         result = await run("NASA announces Mars landing")
-        assert result == NEUTRAL
+        assert result.degraded is True
+        assert result.v_consensus_score == 0.0
+        assert result.error is not None and "API key revoked" in result.error
 
 @pytest.mark.anyio
 async def test_factual_claim_cross_reference():
@@ -50,6 +59,7 @@ async def test_factual_claim_cross_reference():
         result = await run(claim)
         
         assert mock_search.called
+        assert result.degraded is False
         # Check entities
         assert any("Biden" in ent for ent in result.entities_extracted)
         

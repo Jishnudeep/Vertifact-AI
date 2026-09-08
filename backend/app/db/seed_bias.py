@@ -45,8 +45,14 @@ def seed_database():
             reader = csv.DictReader(f)
             for row in reader:
                 name = row["name"]
-                raw_bias = row["bias"]
-                
+                raw_bias = row.get("bias", "")
+
+                # AllSides is the only source of truth: skip rows whose bias value
+                # is blank or outside the known set rather than defaulting to "Center".
+                clean_raw_bias = raw_bias.lower().strip() if raw_bias else ""
+                if clean_raw_bias not in bias_value_map:
+                    continue
+
                 domain = domain_mapping.get(name)
                 if not domain:
                     continue
@@ -60,7 +66,7 @@ def seed_database():
                     continue
                 seen_domains.add(clean_domain)
                 
-                bias_label = bias_value_map.get(raw_bias.lower().strip(), "Center")
+                bias_label = bias_value_map[clean_raw_bias]
                 
                 records.append({
                     "domain": clean_domain,
