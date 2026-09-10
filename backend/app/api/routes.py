@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from fastapi import APIRouter, Request, HTTPException, status
 from slowapi import Limiter
@@ -29,7 +30,7 @@ async def verify_endpoint(request: Request, body: VerifyRequest):
     Accepts text claim and returns composite trust score, confidence level,
     linguistic profile, and citations.
     """
-    result = await verify_claim(body.text, body.input_type)
+    result = await verify_claim(body.input, body.input_type, body.bypass_cache)
     return result
 
 @router.get(
@@ -47,20 +48,22 @@ async def get_result_endpoint(request: Request, result_id: str):
     try:
         supabase = get_supabase()
         
-        # Try lookup by result id first
-        query = supabase.table("results").select("*, claims(extracted_claim)").eq("id", result_id).execute()
+        # Try lookup by result id first (run blocking query off event loop)
+        def _fetch_by_id(r_id: str):
+            res = supabase.table("results").select("*, claims(extracted_claim)").eq("id", r_id).execute()
+            if not res.data:
+                res = supabase.table("results").select("*, claims(extracted_claim)").eq("claim_id", r_id).execute()
+            return res.data
+
+        data = await asyncio.to_thread(_fetch_by_id, result_id)
         
-        if not query.data:
-            # Fallback lookup by claim_id
-            query = supabase.table("results").select("*, claims(extracted_claim)").eq("claim_id", result_id).execute()
-            
-        if not query.data:
+        if not data:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Verification result for ID '{result_id}' not found."
             )
             
-        row = query.data[0]
+        row = data[0]
         claims_data = row.get("claims") or {}
         claim_text = claims_data.get("extracted_claim") or "Historical Claim"
         
@@ -94,5 +97,5 @@ async def get_result_endpoint(request: Request, result_id: str):
         logger.error(f"Error retrieving result {result_id}: {exc}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to query database: {exc}"
+            detail="Failed to retrieve result."
         )

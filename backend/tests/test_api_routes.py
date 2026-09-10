@@ -49,7 +49,8 @@ def test_verify_endpoint_success():
     }
 
     with patch("app.api.routes.verify_claim", return_value=mock_orchestrator_result):
-        response = client.post("/api/verify", json={"text": "The Earth orbits the Sun"})
+        # Test input field (primary)
+        response = client.post("/api/verify", json={"input": "The Earth orbits the Sun"})
         assert response.status_code == 200
         data = response.json()
         assert data["id"] == "result-12345"
@@ -57,26 +58,32 @@ def test_verify_endpoint_success():
         assert data["confidence"]["level"] == "high"
         assert len(data["sources"]) == 1
 
+        # Test text field (alias for backward compatibility)
+        response_text_alias = client.post("/api/verify", json={"text": "The Earth orbits the Sun"})
+        assert response_text_alias.status_code == 200
+
 def test_verify_endpoint_rejects_empty_input():
-    response = client.post("/api/verify", json={"text": ""})
-    # Pydantic schema validation rejects min_length < 1 with 422
-    assert response.status_code == 422
+    response = client.post("/api/verify", json={"input": ""})
+    # TDD §3.1 & B7: empty input is handled by validate_input_length and returns 400 Invalid Input
+    assert response.status_code == 400
+    data = response.json()
+    assert data["error"] == "Invalid Input"
 
 def test_verify_endpoint_rejects_whitespace_input():
-    response = client.post("/api/verify", json={"text": "    "})
+    response = client.post("/api/verify", json={"input": "    "})
     assert response.status_code == 400
     data = response.json()
     assert data["error"] == "Invalid Input"
 
 def test_verify_endpoint_rejects_opinion():
-    response = client.post("/api/verify", json={"text": "I think summer is the greatest season in history."})
+    response = client.post("/api/verify", json={"input": "I think summer is the greatest season in history."})
     assert response.status_code == 422
     data = response.json()
     assert data["error"] == "Non-Verifiable Claim"
     assert "opinion" in data["detail"].lower()
 
 def test_verify_endpoint_rejects_question():
-    response = client.post("/api/verify", json={"text": "Why do stars shine at night?"})
+    response = client.post("/api/verify", json={"input": "Why do stars shine at night?"})
     assert response.status_code == 422
     data = response.json()
     assert data["error"] == "Non-Verifiable Claim"

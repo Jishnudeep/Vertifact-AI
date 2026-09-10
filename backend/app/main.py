@@ -6,6 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 
+from app.config import settings
 from app.services.bias_lookup import load_bias_ratings
 from app.agents.linguistic_agent import get_spacy_nlp
 from app.services.embedding import generate_embedding
@@ -55,7 +56,7 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 # CORS middleware for frontend integration (Vite + React dev server)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=settings.cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

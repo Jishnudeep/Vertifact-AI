@@ -1,9 +1,10 @@
 from typing import List, Dict, Optional, Literal
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, AliasChoices
 
 class VerifyRequest(BaseModel):
-    text: str = Field(..., min_length=1, max_length=2000, description="The claim text to verify")
+    input: str = Field(..., description="The claim text to verify", validation_alias=AliasChoices("input", "text"))
     input_type: Literal["text", "url", "image"] = Field(default="text", description="Type of input provided")
+    bypass_cache: bool = Field(default=False, description="Skip semantic cache lookup and force fresh pipeline run")
 
 class TrustScoreModel(BaseModel):
     c_total: float = Field(..., ge=0.0, le=1.0)
@@ -15,6 +16,7 @@ class TrustScoreModel(BaseModel):
 class ConfidenceModel(BaseModel):
     level: Literal["high", "medium", "low", "insufficient"]
     warnings: List[str] = Field(default_factory=list)
+    verdict_found: bool = Field(default=False)
 
 class LinguisticProfileModel(BaseModel):
     clickbait_syntax: float
