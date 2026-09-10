@@ -142,3 +142,36 @@ def test_scoring_boundary_ones():
     assert result.c_total == 1.0
     assert result.confidence_level == "high"
     assert len(result.warnings) == 0
+
+def test_false_verdict_dominance_capping():
+    """
+    Verify R2.B1 guardrail: When fact_check_found=True and s_fact <= 0.25 (confirmed false claim),
+    c_total MUST NOT be inflated by high news consensus (v_consensus=0.6).
+    """
+    engine = ScoringEngine()
+    result = engine.compute(
+        s_fact=0.0,
+        b_ling=0.1,
+        v_consensus=0.6,
+        agents_succeeded=3,
+        fact_check_found=True
+    )
+    # raw composite = 0.5*0.0 + 0.2*0.9 + 0.3*0.6 = 0.36
+    # Capped by Rule 3 to min(0.36, 0.0 + 0.15) = 0.150
+    assert result.c_total <= 0.150
+    assert result.confidence_level == "high"
+
+def test_high_v_consensus_without_fact_check_is_medium_confidence():
+    """
+    Verify R2.B1 guardrail: High news consensus (v_consensus >= 0.5) without an explicit fact check match
+    (fact_check_found=False) MUST cap confidence level at 'medium', NEVER 'high'.
+    """
+    engine = ScoringEngine()
+    result = engine.compute(
+        s_fact=0.5,
+        b_ling=0.1,
+        v_consensus=0.8,
+        agents_succeeded=3,
+        fact_check_found=False
+    )
+    assert result.confidence_level == "medium"

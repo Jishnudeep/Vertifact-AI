@@ -49,6 +49,7 @@ async def test_verify_claim_cache_miss_pipeline_success():
         best_match={"publisher": "PolitiFact", "rating": "True", "url": "https://politifact.com/1"},
         all_matches=[{"publisher": "PolitiFact", "rating": "True", "url": "https://politifact.com/1"}],
         s_fact_score=1.0,
+        verdict_found=True,
         degraded=False
     )
     mock_cr = CrossRefResult(
@@ -131,3 +132,74 @@ async def test_verify_claim_rejects_empty_input():
 async def test_verify_claim_rejects_opinion():
     with pytest.raises(NonVerifiableClaimError):
         await verify_claim("I think coffee is the greatest drink in human history.")
+
+@pytest.mark.anyio
+async def test_no_verdict_never_yields_high_confidence():
+    """
+    Verify F & D5 guardrail: When factcheck returns web search matches but NO verdict (verdict_found=False)
+    and crossref v_consensus is < 0.3, confidence level MUST NOT be 'high',
+    a 'Low confidence' warning MUST be present, and c_total MUST be <= 0.55.
+    """
+    mock_fc = FactCheckResult(
+        matches_found=5,
+        verdict_found=False,
+        best_match=None,
+        all_matches=[{"publisher": "Random Blog", "claim_reviewed": "Article", "rating": "Web Search Result", "url": "https://example.com/1"}],
+        s_fact_score=0.5,
+        degraded=False
+    )
+    mock_cr = CrossRefResult(
+        entities_extracted=["secret"],
+        sources_found=[{"url": "https://example.com/1", "publisher": "News", "bias_label": "Unrated", "relevance_score": 0.8}],
+        coverage_distribution={"Left": 0, "Lean Left": 0, "Center": 0, "Lean Right": 0, "Right": 0},
+        v_consensus_score=0.25,
+        degraded=False
+    )
+    mock_ling = LinguisticResult(
+        clickbait_syntax=0.8,
+        emotional_framing=0.7,
+        sensationalism=0.9,
+        informational_density=0.2,
+        b_ling_score=0.7,
+        degraded=False
+    )
+
+    with patch("app.agents.orchestrator.generate_embedding", return_value=[0.1] * 384), \
+         patch("app.agents.orchestrator.lookup_cache", return_value=None), \
+         patch("app.agents.factcheck_agent.run", return_value=mock_fc), \
+         patch("app.agents.crossref_agent.run", return_value=mock_cr), \
+         patch("app.agents.linguistic_agent.run", return_value=mock_ling), \
+         patch("app.agents.orchestrator.insert_cache", return_value=None):
+
+        result = await verify_claim("SHOCKING SECRET revealed! You won't believe...", bypass_cache=True)
+
+        assert result["confidence"]["level"] != "high"
+        assert result["trust_score"]["c_total"] <= 0.55
+        assert any("no fact-check" in w.lower() for w in result["confidence"]["warnings"])
+
+@pytest.mark.anyio
+async def test_verify_claim_bypass_cache():
+    """Verify that bypass_cache=True bypasses semantic lookup and skips cache insertion on low confidence."""
+    mock_cached = {"c_total": 0.99, "confidence_level": "high"}
+    mock_fc = FactCheckResult(matches_found=0, verdict_found=False, s_fact_score=0.5, degraded=False)
+    mock_cr = CrossRefResult(
+        entities_extracted=[],
+        sources_found=[],
+        coverage_distribution={"Left": 0, "Lean Left": 0, "Center": 0, "Lean Right": 0, "Right": 0},
+        v_consensus_score=0.0,
+        degraded=False
+    )
+    mock_ling = LinguisticResult(0.0, 0.0, 0.0, 0.5, 0.1, degraded=False)
+
+    with patch("app.agents.orchestrator.generate_embedding", return_value=[0.1] * 384), \
+         patch("app.agents.orchestrator.lookup_cache", return_value=mock_cached) as mock_lookup, \
+         patch("app.agents.factcheck_agent.run", return_value=mock_fc), \
+         patch("app.agents.crossref_agent.run", return_value=mock_cr), \
+         patch("app.agents.linguistic_agent.run", return_value=mock_ling), \
+         patch("app.agents.orchestrator.insert_cache") as mock_insert:
+
+        result = await verify_claim("NASA detected ice on Mars", bypass_cache=True)
+
+        assert not mock_lookup.called
+        assert result["cached"] is False
+        assert not mock_insert.called

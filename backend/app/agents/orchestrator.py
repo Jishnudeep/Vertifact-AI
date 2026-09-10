@@ -25,18 +25,20 @@ class AllAgentsFailedError(RuntimeError):
     """Raised when all verification agents fail or time out (HTTP 500)."""
     pass
 
-async def verify_claim(raw_input: str, input_type: str = "text") -> Dict[str, Any]:
+import uuid
+
+async def verify_claim(raw_input: str, input_type: str = "text", bypass_cache: bool = False) -> Dict[str, Any]:
     """
     Main orchestration pipeline for claim verification:
     1. Sanitize input (strip HTML/scripts, URL tracking parameters, whitespace).
     2. Validate input constraints (length <= 2000 chars).
     3. Validate claim verifiability (reject subjective opinions & questions -> 422).
-    4. Generate embedding and query semantic cache (short-circuit on cosine similarity >= 0.95).
+    4. Generate embedding and query semantic cache (short-circuit on cosine similarity >= 0.95, unless bypass_cache=True).
     5. On cache miss, dispatch factcheck, crossref, and linguistic agents in parallel (8s timeouts).
     6. Guardrail: If all agents fail, raise AllAgentsFailedError (never fabricate a score).
     7. Compute deterministic composite trust score and apply confidence capping.
     8. Consolidate sources (fact_check and corroborating).
-    9. Persist result and claim to Supabase cache (with confidence warnings).
+    9. Persist result and claim to Supabase cache (with confidence warnings; skip on low/insufficient confidence or degraded workers).
     10. Return full structured verification response.
     """
     start_time = time.time()
@@ -57,45 +59,49 @@ async def verify_claim(raw_input: str, input_type: str = "text") -> Dict[str, An
     # 4. Generate embedding
     embedding = generate_embedding(cleaned_text)
 
-    # 5. Semantic cache lookup
-    cached = await lookup_cache(embedding, similarity_threshold=0.95)
-    if cached:
-        logger.info(f"Returning cached verification result for: {cleaned_text}")
-        elapsed_ms = int((time.time() - start_time) * 1000)
-        return {
-            "id": str(cached.get("claim_id") or cached.get("id")),
-            "claim": cached.get("extracted_claim") or cleaned_text,
-            "trust_score": {
-                "c_total": cached.get("c_total"),
-                "s_fact": cached.get("s_fact"),
-                "b_ling": cached.get("b_ling"),
-                "v_consensus": cached.get("v_consensus"),
-                "weights": cached.get("weights") or {"w1": 0.50, "w2": 0.20, "w3": 0.30}
-            },
-            "confidence": {
-                "level": cached.get("confidence_level"),
-                "warnings": cached.get("warnings") or []
-            },
-            "linguistic_profile": cached.get("linguistic_profile") or {
-                "clickbait_syntax": 0.0,
-                "emotional_framing": 0.0,
-                "sensationalism": 0.0,
-                "informational_density": 0.5
-            },
-            "sources": cached.get("source_citations") or [],
-            "processing_time_ms": elapsed_ms,
-            "cached": True
-        }
+    # 5. Semantic cache lookup (skip if bypass_cache=True)
+    if not bypass_cache:
+        cached = await lookup_cache(embedding, similarity_threshold=0.95)
+        if cached:
+            logger.info(f"Returning cached verification result for: {cleaned_text}")
+            elapsed_ms = int((time.time() - start_time) * 1000)
+            return {
+                "id": str(cached.get("claim_id") or cached.get("id")),
+                "claim": cached.get("extracted_claim") or cleaned_text,
+                "trust_score": {
+                    "c_total": cached.get("c_total"),
+                    "s_fact": cached.get("s_fact"),
+                    "b_ling": cached.get("b_ling"),
+                    "v_consensus": cached.get("v_consensus"),
+                    "weights": cached.get("weights") or {"w1": 0.50, "w2": 0.20, "w3": 0.30}
+                },
+                "confidence": {
+                    "level": cached.get("confidence_level"),
+                    "warnings": cached.get("warnings") or []
+                },
+                "linguistic_profile": cached.get("linguistic_profile") or {
+                    "clickbait_syntax": 0.0,
+                    "emotional_framing": 0.0,
+                    "sensationalism": 0.0,
+                    "informational_density": 0.5
+                },
+                "sources": cached.get("source_citations") or [],
+                "processing_time_ms": elapsed_ms,
+                "cached": True
+            }
 
     # 6. Parallel agent dispatch
-    logger.info(f"Cache miss. Dispatching verification workers in parallel for: {cleaned_text}")
+    logger.info(f"Cache miss/bypass. Dispatching verification workers in parallel for: {cleaned_text}")
     fc_task = factcheck_agent.run(cleaned_text)
     cr_task = crossref_agent.run(cleaned_text)
     ling_task = linguistic_agent.run(cleaned_text)
     
-    fc_res, cr_res, ling_res = await asyncio.gather(
-        fc_task, cr_task, ling_task, return_exceptions=False
+    results = await asyncio.gather(
+        fc_task, cr_task, ling_task, return_exceptions=True
     )
+    fc_res = results[0] if isinstance(results[0], factcheck_agent.FactCheckResult) else factcheck_agent.make_neutral_factcheck(degraded=True, error=str(results[0]))
+    cr_res = results[1] if isinstance(results[1], crossref_agent.CrossRefResult) else crossref_agent.make_neutral_crossref(degraded=True, error=str(results[1]))
+    ling_res = results[2] if isinstance(results[2], linguistic_agent.LinguisticResult) else linguistic_agent.make_neutral_linguistic(degraded=True, error=str(results[2]))
 
     # Compute success signal from typed dataclasses
     agents_succeeded = sum([
@@ -110,7 +116,7 @@ async def verify_claim(raw_input: str, input_type: str = "text") -> Dict[str, An
         raise AllAgentsFailedError("All verification agents failed to complete analysis. Unable to verify claim.")
 
     # 8. Compute scoring
-    fact_check_found = (fc_res.matches_found > 0)
+    fact_check_found = fc_res.verdict_found
     engine = ScoringEngine()
     scoring_res = engine.compute(
         s_fact=fc_res.s_fact_score,
@@ -159,43 +165,50 @@ async def verify_claim(raw_input: str, input_type: str = "text") -> Dict[str, An
 
     elapsed_ms = int((time.time() - start_time) * 1000)
 
-    # 10. Persist result and claim to Supabase cache
-    claim_id = await insert_cache(
-        input_type=input_type,
-        raw_input=raw_input,
-        extracted_claim=cleaned_text,
-        embedding=embedding,
-        c_total=scoring_res.c_total,
-        s_fact=scoring_res.components.s_fact,
-        b_ling=scoring_res.components.b_ling,
-        v_consensus=scoring_res.components.v_consensus,
-        weights=scoring_res.weights,
-        confidence_level=scoring_res.confidence_level,
-        agent_outputs={
-            "factcheck": {
-                "matches_found": fc_res.matches_found,
-                "s_fact_score": fc_res.s_fact_score,
-                "degraded": fc_res.degraded,
-                "error": fc_res.error
-            },
-            "crossref": {
-                "entities_extracted": cr_res.entities_extracted,
-                "v_consensus_score": cr_res.v_consensus_score,
-                "degraded": cr_res.degraded,
-                "error": cr_res.error
-            },
-            "linguistic": {
-                "b_ling_score": ling_res.b_ling_score,
-                "flagged_phrases": ling_res.flagged_phrases,
-                "degraded": ling_res.degraded,
-                "error": ling_res.error
-            }
-        },
-        source_citations=sources,
-        linguistic_profile=linguistic_profile,
-        processing_time_ms=elapsed_ms,
-        warnings=scoring_res.warnings
+    # 10. Persist result and claim to Supabase cache (skip on bypass, low/insufficient confidence, or degraded worker)
+    claim_id: Optional[str] = None
+    should_cache = (
+        not bypass_cache
+        and scoring_res.confidence_level not in {"low", "insufficient"}
+        and not (fc_res.degraded or cr_res.degraded or ling_res.degraded)
     )
+    if should_cache:
+        claim_id = await insert_cache(
+            input_type=input_type,
+            raw_input=raw_input,
+            extracted_claim=cleaned_text,
+            embedding=embedding,
+            c_total=scoring_res.c_total,
+            s_fact=scoring_res.components.s_fact,
+            b_ling=scoring_res.components.b_ling,
+            v_consensus=scoring_res.components.v_consensus,
+            weights=scoring_res.weights,
+            confidence_level=scoring_res.confidence_level,
+            agent_outputs={
+                "factcheck": {
+                    "matches_found": fc_res.matches_found,
+                    "s_fact_score": fc_res.s_fact_score,
+                    "degraded": fc_res.degraded,
+                    "error": fc_res.error
+                },
+                "crossref": {
+                    "entities_extracted": cr_res.entities_extracted,
+                    "v_consensus_score": cr_res.v_consensus_score,
+                    "degraded": cr_res.degraded,
+                    "error": cr_res.error
+                },
+                "linguistic": {
+                    "b_ling_score": ling_res.b_ling_score,
+                    "flagged_phrases": ling_res.flagged_phrases,
+                    "degraded": ling_res.degraded,
+                    "error": ling_res.error
+                }
+            },
+            source_citations=sources,
+            linguistic_profile=linguistic_profile,
+            processing_time_ms=elapsed_ms,
+            warnings=scoring_res.warnings
+        )
 
     return {
         "id": claim_id,
@@ -209,7 +222,8 @@ async def verify_claim(raw_input: str, input_type: str = "text") -> Dict[str, An
         },
         "confidence": {
             "level": scoring_res.confidence_level,
-            "warnings": scoring_res.warnings
+            "warnings": scoring_res.warnings,
+            "verdict_found": fact_check_found
         },
         "linguistic_profile": linguistic_profile,
         "sources": sources,
