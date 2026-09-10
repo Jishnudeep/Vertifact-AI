@@ -11,6 +11,14 @@ FACTCHECK_DOMAINS = [
     "politifact.com",
     "factcheck.org",
     "fullfact.org",
+    "healthfeedback.org",
+    "apnews.com",
+    "reuters.com",
+    "usatoday.com",
+    "factcheck.afp.com",
+    "leadstories.com",
+    "checkyourfact.com",
+    "climatefeedback.org",
 ]
 
 async def search_web(

@@ -115,6 +115,47 @@ async def test_tavily_fallback_invalid_enum_falls_back_to_unproven():
         result = await run("Some novel claim")
         assert result.s_fact_score == 0.5
         assert result.best_match["rating"] == "unproven"
+        assert result.verdict_found is False
+
+@pytest.mark.anyio
+async def test_tavily_fallback_half_true_does_not_set_verdict_found():
+    """Verify R2.B2 guardrail: Layer-2 'half true' rating does NOT set verdict_found to True."""
+    mock_tavily_response = [
+        {
+            "url": "https://www.snopes.com/factcheck/test/",
+            "title": "Snopes Check",
+            "content": "Content",
+            "score": 0.9
+        }
+    ]
+    mock_adk_response = '{"rating": "half true", "explanation": "Mixed evidence"}'
+    
+    with patch("app.agents.factcheck_agent.search_factchecks", return_value=[]), \
+         patch("app.agents.factcheck_agent.search_web", return_value=mock_tavily_response), \
+         patch("app.agents.factcheck_agent.run_adk_agent", return_value=mock_adk_response):
+        result = await run("Claim with mixed evidence")
+        assert result.s_fact_score == 0.5
+        assert result.verdict_found is False
+
+@pytest.mark.anyio
+async def test_tavily_fallback_non_factcheck_domain_does_not_set_verdict_found():
+    """Verify R2.B2 guardrail: Definitive rating from non-factcheck domain does NOT set verdict_found to True."""
+    mock_tavily_response = [
+        {
+            "url": "https://www.randomnewsblog.com/article/1",
+            "title": "Blog Post",
+            "content": "Content",
+            "score": 0.9
+        }
+    ]
+    mock_adk_response = '{"rating": "false", "explanation": "Blog says false"}'
+    
+    with patch("app.agents.factcheck_agent.search_factchecks", return_value=[]), \
+         patch("app.agents.factcheck_agent.search_web", return_value=mock_tavily_response), \
+         patch("app.agents.factcheck_agent.run_adk_agent", return_value=mock_adk_response):
+        result = await run("Random claim")
+        assert result.s_fact_score == 0.0
+        assert result.verdict_found is False
 
 @pytest.mark.anyio
 @pytest.mark.live

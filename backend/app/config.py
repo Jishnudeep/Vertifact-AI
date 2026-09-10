@@ -1,6 +1,7 @@
 import os
 from functools import lru_cache
 from pathlib import Path
+from typing import List
 from pydantic import Field, AliasChoices
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -12,8 +13,11 @@ class Settings(BaseSettings):
     tavily_api_key: str = Field(default="", validation_alias=AliasChoices("TAVILY_API_KEY", "TAVILY_KEY"))
     google_fact_check_api_key: str = Field(default="", validation_alias=AliasChoices("GOOGLE_FACTCHECK_API_KEY", "GOOGLE_FACT_CHECK_API_KEY"))
     
+    # Allowed CORS origins for frontend integration (Vite dev server default 5173)
+    cors_origins: List[str] = ["http://localhost:5173", "http://localhost:3000"]
+    
     # Model ID comes from config as per AGENTS.md Section 3
-    model_id: str = "groq/llama-3.1-8b-instant"
+    model_id: str = "groq/openai/gpt-oss-20b"
     
     # Model name for generating embeddings
     embedding_model_name: str = "all-MiniLM-L6-v2"

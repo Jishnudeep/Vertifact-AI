@@ -149,9 +149,18 @@ async def _analyze(claim: str) -> CrossRefResult:
         }
         sources_found.append(source_dict)
 
-        # Reputable check: if the domain is present in AllSides (i.e., not Unrated)
+        # Reputable check: AllSides rated outlets or institutional/primary domains (.gov, .edu, who.int, nasa.gov) per B4/D3
+        is_reputable = (
+            bias_label in coverage_distribution
+            or domain.endswith(".gov")
+            or domain.endswith(".edu")
+            or domain in {"who.int", "nasa.gov", "reuters.com", "apnews.com", "bbc.com"}
+        )
+        
         if bias_label in coverage_distribution:
             coverage_distribution[bias_label] += 1
+            
+        if is_reputable:
             reputable_sources.append(source_dict)
 
     # Sort sources by relevance score descending

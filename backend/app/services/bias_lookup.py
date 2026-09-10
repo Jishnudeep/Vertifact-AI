@@ -67,7 +67,6 @@ def load_bias_ratings():
             "left": "Left",
             "left-center": "Lean Left",
             "center": "Center",
-            "allsides": "Center",
             "right-center": "Lean Right",
             "right": "Right"
         }

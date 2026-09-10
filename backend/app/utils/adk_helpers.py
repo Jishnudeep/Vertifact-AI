@@ -21,52 +21,67 @@ _session_service = InMemorySessionService()
 
 def parse_json_safely(text: str) -> Dict[str, Any]:
     """
-    Safely extract and parse JSON from LLM output, handling single quotes and surrounding markdown.
+    Safely extract and parse JSON from LLM output, handling markdown blocks, single quotes, and preamble.
     """
     text = text.strip()
-    # Find first '{' and last '}'
+    
+    # Strip markdown codeblocks if present
+    if "```" in text:
+        match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
+        if match:
+            text = match.group(1).strip()
+            
+    # Try parsing from first '{' to last '}'
     start = text.find('{')
     end = text.rfind('}')
     if start != -1 and end != -1:
-        text = text[start:end+1]
-        
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        # Fix keys with single quotes: 'key': -> "key":
-        fixed = re.sub(r"'(\w+)'\s*:", r'"\1":', text)
-        # Fix string values with single quotes: : 'value' -> : "value"
+        json_candidate = text[start:end+1]
+        try:
+            return json.loads(json_candidate)
+        except json.JSONDecodeError:
+            pass
+            
+    # Sometime preamble text has a '{', try parsing from the LAST '{' to last '}'
+    last_start = text.rfind('{')
+    if last_start != -1 and end != -1 and last_start < end:
+        try:
+            return json.loads(text[last_start:end+1])
+        except json.JSONDecodeError:
+            pass
+            
+    # Fix single quotes: 'key': -> "key": and : 'value' -> : "value"
+    if start != -1 and end != -1:
+        fixed = text[start:end+1]
+        fixed = re.sub(r"'(\w+)'\s*:", r'"\1":', fixed)
         fixed = re.sub(r":\s*'([^']*)'", r': "\1"', fixed)
         try:
             return json.loads(fixed)
         except Exception as exc:
-            logger.error(f"parse_json_safely failed on text: {text}. Error: {exc}")
+            logger.error(f"parse_json_safely failed on text: {text[:200]}... Error: {exc}")
             raise
+            
+    raise ValueError("No JSON object found in LLM response")
 
 def extract_key_via_regex(text: str, key: str, is_bool: bool = False) -> Optional[Any]:
     """
-    Extract a JSON property value using regex as a resilient fallback.
+    Extract a JSON property value using regex as a resilient fallback, preferring the last match.
     """
     if is_bool:
-        pattern = rf'["\']{key}["\']\s*:\s*(true|false)'
-        match = re.search(pattern, text, re.IGNORECASE)
-        if match:
-            return match.group(1).lower() == "true"
+        pattern = rf'["\']?{key}["\']?\s*:\s*(true|false)'
+        matches = list(re.finditer(pattern, text, re.IGNORECASE))
+        if matches:
+            return matches[-1].group(1).lower() == "true"
     else:
-        pattern = rf'["\']{key}["\']\s*:\s*["\']([^"\']*)["\']'
-        match = re.search(pattern, text)
-        if match:
-            return match.group(1)
+        # Match "key": "value" or key: "value" or key: value
+        pattern = rf'["\']?{key}["\']?\s*:\s*["\']([^"\']+)["\']'
+        matches = list(re.finditer(pattern, text, re.IGNORECASE))
+        if matches:
+            return matches[-1].group(1)
             
-        pattern = rf'["\']{key}["\']\s*:\s*["\'](.*?)["\']\s*(?:,|\}})'
-        match = re.search(pattern, text)
-        if match:
-            return match.group(1)
-
-        pattern = rf'["\']{key}["\']\s*:\s*([0-9.]+)'
-        match = re.search(pattern, text)
-        if match:
-            return match.group(1)
+        pattern = rf'["\']?{key}["\']?\s*:\s*([a-zA-Z0-9._]+)'
+        matches = list(re.finditer(pattern, text, re.IGNORECASE))
+        if matches:
+            return matches[-1].group(1)
             
     return None
 
@@ -93,7 +108,7 @@ def get_adk_runner(name: str, instruction: str, app_name: str) -> Runner:
     cache_key = f"{app_name}:{name}:{instruction}"
     if cache_key not in _runner_cache:
         logger.info(f"Creating new ADK Runner for agent: {name} (app: {app_name}) with temperature=0.0")
-        model = LiteLlm(model=settings.model_id, api_key=settings.groq_api_key, temperature=0.0)
+        model = LiteLlm(model=settings.model_id, api_key=settings.groq_api_key, temperature=0.0, max_tokens=256)
         agent = LlmAgent(
             name=name,
             model=model,
