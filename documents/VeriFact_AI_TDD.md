@@ -359,7 +359,7 @@ class CrossRefResult:
 4. Deduplicate results by domain
 5. For each source URL, look up domain in `bias_ratings` table
 6. Compute V_consensus:
-   - Count unique reputable domains (domains present in AllSides DB)
+   - Count unique reputable domains (domains in AllSides DB or institutional/primary allowlist: `.gov`, `.edu`, `who.int`, `nasa.gov`, `reuters.com`, `apnews.com`)
    - Weight by relevance score (how closely the article matches the claim)
    - Normalize to 0-1 range: `min(reputable_source_count / 5, 1.0)` adjusted by avg relevance
 
@@ -567,10 +567,14 @@ class ScoringEngine:
             c_total = min(c_total, 0.55)
             warnings.append("Low confidence: no fact-checks found and insufficient corroborating sources")
 
+        if fact_check_found and s_fact <= 0.25:
+            c_total = min(c_total, s_fact + 0.15)
+            c_total = min(c_total, 0.25)
+
         # Determine confidence level
-        if agents_succeeded == total_agents and (fact_check_found or s_fact != 0.5 or v_consensus >= 0.5):
+        if agents_succeeded == total_agents and fact_check_found:
             confidence = "high"
-        elif agents_succeeded >= 2 and v_consensus >= 0.3:
+        elif agents_succeeded >= 2 and (v_consensus >= 0.3 or fact_check_found):
             confidence = "medium"
         elif agents_succeeded >= 1:
             confidence = "low"

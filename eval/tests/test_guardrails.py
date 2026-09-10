@@ -26,6 +26,24 @@ class TestBiasLeakageGuardrail:
         for domain, rating in BIAS_RATINGS.items():
             assert rating in valid_ratings, f"Domain '{domain}' has invalid bias rating: '{rating}'"
 
+    def test_unrated_bridging_orgs_resolve_to_unrated(self):
+        """
+        Verify B8 zero-tolerance guardrail: Organizations with AllSides 'allsides' non-rating
+        (bridging/depolarization orgs like The Lincoln Project, StoryCorps, etc.)
+        must NEVER default or be fabricated as 'Center'. They must resolve strictly to 'Unrated'.
+        """
+        bridging_domains = [
+            "allsides.com",
+            "thelincolnproject.com",
+            "storycorps.org",
+            "dividedwefall.us",
+            "abridgenews.com",
+            "braverangels.org",
+            "theflipside.io"
+        ]
+        for domain in bridging_domains:
+            assert get_bias_label(domain) == "Unrated", f"Domain '{domain}' should be 'Unrated' but got '{get_bias_label(domain)}'"
+
 class TestConfidenceCappingGuardrails:
     """Guardrails ensuring uncertainty and partial results are capped and warned."""
 
@@ -71,6 +89,45 @@ class TestConfidenceCappingGuardrails:
         )
         # Should not be capped by Rule 2 nor have false warning
         assert not any("no fact-checks found" in w for w in res.warnings)
+
+    @pytest.mark.anyio
+    async def test_orchestrator_no_verdict_never_yields_high_confidence(self):
+        """
+        Verify D5 guardrail through the full orchestrator verify_claim pipeline:
+        When a claim has web search matches but NO verified verdict (verdict_found=False),
+        confidence level MUST NOT be high, and c_total MUST be capped <= 0.55.
+        """
+        from app.agents.orchestrator import verify_claim
+        from app.agents.factcheck_agent import FactCheckResult
+        from app.agents.crossref_agent import CrossRefResult
+        from app.agents.linguistic_agent import LinguisticResult
+
+        mock_fc = FactCheckResult(
+            matches_found=5,
+            verdict_found=False,
+            s_fact_score=0.5,
+            degraded=False
+        )
+        mock_cr = CrossRefResult(
+            entities_extracted=["secret"],
+            sources_found=[],
+            coverage_distribution={"Left": 0, "Lean Left": 0, "Center": 0, "Lean Right": 0, "Right": 0},
+            v_consensus_score=0.25,
+            degraded=False
+        )
+        mock_ling = LinguisticResult(0.8, 0.7, 0.9, 0.2, 0.7, degraded=False)
+
+        with patch("app.agents.orchestrator.generate_embedding", return_value=[0.1] * 384), \
+             patch("app.agents.orchestrator.lookup_cache", return_value=None), \
+             patch("app.agents.factcheck_agent.run", return_value=mock_fc), \
+             patch("app.agents.crossref_agent.run", return_value=mock_cr), \
+             patch("app.agents.linguistic_agent.run", return_value=mock_ling), \
+             patch("app.agents.orchestrator.insert_cache", return_value=None):
+
+            res = await verify_claim("SHOCKING SECRET revealed! You won't believe...", bypass_cache=True)
+            assert res["confidence"]["level"] != "high"
+            assert any("no fact-check" in w.lower() for w in res["confidence"]["warnings"])
+            assert res["trust_score"]["c_total"] <= 0.55
 
 class TestDegradationContracts:
     """Ensure degraded states carry explicit status and truthful neutral values."""
