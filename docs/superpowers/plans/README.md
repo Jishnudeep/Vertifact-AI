@@ -12,7 +12,7 @@ column (1 → 2 → 4 → 3 → 5). Each plan's Task 0 checks its prerequisites.
 
 | Run order | Plan | File | Covers | Needs merged first | Status |
 |-----------|------|------|--------|--------------------|--------|
-| 1st | Plan 1 | [stance-aware-consensus](2026-09-23-stance-aware-consensus.md) | C1, D1, D2: NLI stance, `v_refute`, Rule 4, `evidence_status` | — | not started |
+| 1st | Plan 1 | [stance-aware-consensus](2026-09-23-stance-aware-consensus.md) | C1, D1, D2: NLI stance, `v_refute`, Rule 4, `evidence_status` | — | completed |
 | 2nd | Plan 2 | [cache-safety](2026-09-23-cache-safety.md) | C2: top-k, row policy, NLI equivalence, TTL | Plan 1 | not started |
 | 3rd | Plan 4 | [hardening](2026-09-23-hardening.md) | H1–H4: deadline, budgets, proxy-aware limits, SSRF guard, retention | Plans 1, 2 | not started |
 | 4th | Plan 3 | [eval-integrity](2026-09-23-eval-integrity.md) | C3, C4: replay, leave-source-out, segments, LIAR/FEVER, NLI calibration | Plans 1, 2, 4 | not started |
