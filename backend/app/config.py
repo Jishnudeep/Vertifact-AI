@@ -64,6 +64,12 @@ class Settings(BaseSettings):
     # H1: total wall-clock budget per /api/verify request (PRD §10: < 10 s end-to-end).
     request_deadline_s: float = 9.5
     
+    # H2/H3: daily spend ceilings (UTC day, per process). 0 disables a guard.
+    # Tavily free tier = 1,000 credits/month (~33/day); advanced search = 2 credits, basic = 1.
+    tavily_daily_credit_budget: int = 30
+    # Groq free tier for gpt-oss-120b = 1,000 requests/day; keep headroom for retries.
+    llm_daily_call_budget: int = 900
+    
     # Linguistic agent LLM sensationalism flag (Build Order 1.2 default is False: heuristics only)
     enable_llm_sensationalism: bool = False
     

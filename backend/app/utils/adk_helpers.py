@@ -20,6 +20,7 @@ from google.adk.sessions import InMemorySessionService
 from google.genai import types
 
 from app.config import settings
+from app.services import budget
 from app.utils.errors import classify_provider_error
 
 logger = logging.getLogger(__name__)
@@ -290,6 +291,9 @@ async def run_adk_agent(name: str, instruction: str, prompt: str, app_name: str)
     max_retries = 2
     
     for attempt in range(max_retries + 1):
+        if not budget.get_llm_budget().try_charge():
+            raise budget.LLMBudgetExceeded("Daily LLM call budget exhausted")
+
         run_id = str(uuid.uuid4())[:8]
         user_id = f"{app_name}-user-{name}-{run_id}"
         session_id = f"{app_name}-session-{name}-{run_id}"

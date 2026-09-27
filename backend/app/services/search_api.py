@@ -1,8 +1,9 @@
 import logging
 import httpx
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Literal
 
 from app.services.errors import EvidenceAPIError
+from app.services import budget
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +44,7 @@ async def search_web(
     api_key: str,
     max_results: int = 5,
     include_domains: List[str] | None = None,
+    search_depth: Literal["basic", "advanced"] = "advanced",
 ) -> List[Dict[str, Any]]:
     """
     Asynchronously query the Tavily Search API.
@@ -52,6 +54,7 @@ async def search_web(
         api_key: The Tavily API key.
         max_results: The maximum number of search results to return.
         include_domains: An optional list of domains to restrict the search to.
+        search_depth: "basic" (1 credit) or "advanced" (2 credits).
         
     Returns:
         A list of search result dicts: [{"title": ..., "url": ..., "content": ..., "score": ...}]
@@ -69,10 +72,16 @@ async def search_web(
         logger.error("Tavily API key is not configured; cannot execute evidence search.")
         raise EvidenceAPIError("Tavily API key not configured", provider="tavily")
 
+    # H2/H3: refuse before spending. Exhaustion is an outage, so the agent reports degraded.
+    credits = 2 if search_depth == "advanced" else 1
+    if not budget.get_tavily_budget().try_charge(credits):
+        logger.error("Daily Tavily credit budget exhausted; refusing search.")
+        raise EvidenceAPIError("Daily evidence-search budget exhausted", provider="budget")
+
     payload = {
         "api_key": api_key,
         "query": query,
-        "search_depth": "advanced",
+        "search_depth": search_depth,
         "max_results": max_results,
     }
     

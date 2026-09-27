@@ -15,3 +15,11 @@ os.environ.setdefault("GOOGLE_FACTCHECK_API_KEY", "dummy_factcheck_key")
 @pytest.fixture
 def anyio_backend():
     return "asyncio"
+
+@pytest.fixture(autouse=True)
+def _fresh_budgets():
+    from app.services import budget
+    budget.get_tavily_budget.cache_clear()
+    budget.get_llm_budget.cache_clear()
+    yield
+

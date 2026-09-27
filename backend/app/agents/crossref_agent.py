@@ -147,8 +147,9 @@ async def _analyze(claim: str) -> CrossRefResult:
 
     # 3. Parallel search execution via Tavily
     api_key = settings.tavily_api_key
+    # H2: basic depth (1 credit) is enough for corroboration discovery; the Fact-Check agent keeps advanced.
     search_tasks = [
-        search_web(query=q, api_key=api_key, max_results=5)
+        search_web(query=q, api_key=api_key, max_results=5, search_depth="basic")
         for q in queries
     ]
     
