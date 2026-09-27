@@ -45,6 +45,7 @@ async def test_verify_claim_cache_hit():
         assert result["confidence"]["level"] == "high"
         assert result["confidence"]["evidence_status"] == "fact_checked"
         assert result["trust_score"]["v_refute"] == 0.0
+        assert mock_lookup.call_args.kwargs["claim_text"] == "The Earth orbits the Sun"
 
 @pytest.mark.anyio
 async def test_verify_claim_cache_miss_pipeline_success():

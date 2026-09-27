@@ -1,17 +1,28 @@
 import asyncio
 import logging
+from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional
+
 from app.db.connection import get_supabase
+from app.services.cache_policy import unservable_reason
+from app.services.claim_equivalence import are_equivalent
 
 logger = logging.getLogger(__name__)
 
 async def lookup_cache(
     embedding: List[float],
-    similarity_threshold: float = 0.95
+    claim_text: str,
+    similarity_threshold: float = 0.95,
+    match_count: int = 3,
 ) -> Optional[Dict[str, Any]]:
     """
-    Search the semantic cache for a claim with a cosine similarity >= similarity_threshold.
-    Returns the joined claim and result data if a match is found, otherwise None.
+    Serve a cached result only when it is safe to (C2):
+    1. pgvector returns up to `match_count` candidates with cosine >= similarity_threshold.
+    2. Each candidate must pass the row policy: confidence, evidence_status, complete run, TTL.
+    3. The first remaining candidate whose claim is equivalent to `claim_text` (same numbers
+       and bidirectional NLI entailment) is served. Embeddings alone cannot tell a claim from
+       its negation.
+    Fails closed: any error is a cache miss.
     """
     if not embedding or all(v == 0.0 for v in embedding):
         logger.debug("Cannot lookup cache with empty or all-zero embedding.")
@@ -25,36 +36,30 @@ async def lookup_cache(
                 "match_claims",
                 {
                     "query_embedding": embedding,
-                    "similarity_threshold": similarity_threshold
+                    "similarity_threshold": similarity_threshold,
+                    "match_count": match_count,
                 }
             ).execute
         )
-        
-        if response.data and len(response.data) > 0:
-            match_data = response.data[0]
-            # Skip low/insufficient confidence entries from being served as cache hits per D4
-            conf = str(match_data.get("confidence_level", "")).lower()
-            if conf in {"low", "insufficient"}:
-                logger.info(f"Semantic match found but confidence is '{conf}'. Treating as cache miss.")
-                return None
 
-            # C1: rows scored before stance-aware consensus have no evidence_status. Their
-            # V_consensus counted refuting coverage as support, so they must never be served.
-            if not match_data.get("evidence_status"):
-                logger.info("Semantic match predates stance-aware scoring (no evidence_status). Treating as cache miss.")
-                return None
+        now = datetime.now(timezone.utc)
+        for match_data in response.data or []:
+            reason = unservable_reason(match_data, now)
+            if reason:
+                logger.info(f"Semantic match skipped: {reason}.")
+                continue
 
-            similarity = match_data.get("similarity")
+            cached_claim = match_data.get("extracted_claim") or ""
+            if not await asyncio.to_thread(are_equivalent, claim_text, cached_claim):
+                logger.info("Semantic match skipped: cached claim is not equivalent (negation, number or scope).")
+                continue
+
             # Ensure warnings is always a list
-            if "warnings" not in match_data or match_data["warnings"] is None:
+            if match_data.get("warnings") is None:
                 match_data["warnings"] = []
-                
-            if isinstance(similarity, (int, float)):
-                logger.info(f"Semantic cache HIT. Match similarity: {similarity:.4f}")
-            else:
-                logger.info(f"Semantic cache HIT. Match similarity: {similarity}")
+            logger.info(f"Semantic cache HIT. Match similarity: {match_data.get('similarity')}")
             return match_data
-            
+
         logger.debug("Semantic cache MISS.")
         return None
     except Exception as exc:

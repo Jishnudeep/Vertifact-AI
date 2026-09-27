@@ -32,7 +32,7 @@ async def verify_claim(raw_input: str, input_type: str = "text", bypass_cache: b
     1. Sanitize input (strip HTML/scripts, URL tracking parameters, whitespace).
     2. Validate input constraints (length <= 2000 chars).
     3. Validate claim verifiability (reject subjective opinions & questions -> 422).
-    4. Generate embedding and query semantic cache (short-circuit on cosine similarity >= 0.95, unless bypass_cache=True).
+    4. Generate embedding and query semantic cache (cosine >= 0.95, then row policy and claim-equivalence checks; skipped when bypass_cache=True).
     5. On cache miss, dispatch factcheck, crossref, and linguistic agents in parallel (8s timeouts).
     6. Guardrail: If all agents fail, raise AllAgentsFailedError (never fabricate a score).
     7. Compute deterministic composite trust score and apply confidence capping.
@@ -60,7 +60,7 @@ async def verify_claim(raw_input: str, input_type: str = "text", bypass_cache: b
 
     # 5. Semantic cache lookup (skip if bypass_cache=True)
     if not bypass_cache:
-        cached = await lookup_cache(embedding, similarity_threshold=0.95)
+        cached = await lookup_cache(embedding, claim_text=cleaned_text, similarity_threshold=0.95)
         if cached:
             logger.info(f"Returning cached verification result for: {cleaned_text}")
             elapsed_ms = int((time.time() - start_time) * 1000)

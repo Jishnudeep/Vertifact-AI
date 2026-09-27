@@ -12,13 +12,47 @@ async def test_near_miss_similarity_misses_cache():
     with patch("app.services.cache.get_supabase", return_value=mock_supabase):
         result = await lookup_cache(
             embedding=[0.2] * 384,
+            claim_text="Sample novel claim",
             similarity_threshold=0.95
         )
         assert result is None
         mock_supabase.rpc.assert_called_once_with(
             "match_claims",
-            {"query_embedding": [0.2] * 384, "similarity_threshold": 0.95}
+            {"query_embedding": [0.2] * 384, "similarity_threshold": 0.95, "match_count": 3}
         )
+
+
+@pytest.mark.anyio
+async def test_numeric_variant_is_never_served():
+    """C2 guardrail: a cached '3%' claim must not answer an '8%' query even at 0.99 cosine."""
+    from datetime import datetime, timezone
+    row = {
+        "claim_id": "c1", "extracted_claim": "Inflation hit 3% in May", "similarity": 0.99,
+        "confidence_level": "high", "evidence_status": "fact_checked",
+        "agent_outputs": {a: {"degraded": False} for a in ("factcheck", "crossref", "linguistic")},
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    mock_supabase = MagicMock()
+    mock_supabase.rpc.return_value.execute.return_value = MagicMock(data=[row])
+    with patch("app.services.cache.get_supabase", return_value=mock_supabase):
+        assert await lookup_cache([0.2] * 384, claim_text="Inflation hit 8% in May") is None
+
+
+@pytest.mark.anyio
+@pytest.mark.live
+async def test_negated_claim_is_never_served():
+    """C2 guardrail with the real NLI model: a negation must miss even at 0.99 cosine."""
+    from datetime import datetime, timezone
+    row = {
+        "claim_id": "c1", "extracted_claim": "Vaccines cause autism", "similarity": 0.99,
+        "confidence_level": "high", "evidence_status": "fact_checked",
+        "agent_outputs": {a: {"degraded": False} for a in ("factcheck", "crossref", "linguistic")},
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    mock_supabase = MagicMock()
+    mock_supabase.rpc.return_value.execute.return_value = MagicMock(data=[row])
+    with patch("app.services.cache.get_supabase", return_value=mock_supabase):
+        assert await lookup_cache([0.2] * 384, claim_text="Vaccines do not cause autism") is None
 
 @pytest.mark.anyio
 async def test_warnings_survive_cache_roundtrip():

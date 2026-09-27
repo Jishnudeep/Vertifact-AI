@@ -1,8 +1,35 @@
 import pytest
+from datetime import datetime, timedelta, timezone
 from unittest.mock import patch, MagicMock
 from app.services.embedding import generate_embedding
 from app.services.cache import lookup_cache, insert_cache
 from app.db.connection import get_supabase
+
+
+def _servable_row(**overrides):
+    row = {
+        "claim_id": "test-uuid",
+        "extracted_claim": "NASA water Mars",
+        "similarity": 0.98,
+        "c_total": 0.85,
+        "confidence_level": "high",
+        "evidence_status": "fact_checked",
+        "agent_outputs": {
+            "factcheck": {"degraded": False},
+            "crossref": {"degraded": False},
+            "linguistic": {"degraded": False},
+        },
+        "created_at": (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat(),
+    }
+    row.update(overrides)
+    return row
+
+
+def _supabase_returning(rows):
+    mock_supabase = MagicMock()
+    mock_supabase.rpc.return_value.execute.return_value = MagicMock(data=rows)
+    return mock_supabase
+
 
 @pytest.mark.anyio
 async def test_generate_embedding_fallback():
@@ -15,44 +42,70 @@ async def test_generate_embedding_fallback():
     assert len(result_none) == 384
     assert all(v == 0.0 for v in result_none)
 
+
 @pytest.mark.anyio
 async def test_lookup_cache_offline_miss():
-    """Verify lookup_cache handles database miss correctly offline."""
-    mock_response = MagicMock()
-    mock_response.data = []
-    
-    mock_supabase = MagicMock()
-    mock_supabase.rpc.return_value.execute.return_value = mock_response
-    
+    mock_supabase = _supabase_returning([])
     with patch("app.services.cache.get_supabase", return_value=mock_supabase):
-        result = await lookup_cache([0.1]*384, similarity_threshold=0.95)
-        assert result is None
-        mock_supabase.rpc.assert_called_once_with(
-            "match_claims",
-            {"query_embedding": [0.1]*384, "similarity_threshold": 0.95}
-        )
+        result = await lookup_cache([0.1] * 384, claim_text="NASA water Mars", similarity_threshold=0.95)
+    assert result is None
+    mock_supabase.rpc.assert_called_once_with(
+        "match_claims",
+        {"query_embedding": [0.1] * 384, "similarity_threshold": 0.95, "match_count": 3},
+    )
+
 
 @pytest.mark.anyio
 async def test_lookup_cache_offline_hit():
-    """Verify lookup_cache handles database hit correctly offline."""
-    mock_data = [{
-        "claim_id": "test-uuid",
-        "extracted_claim": "NASA water Mars",
-        "similarity": 0.98,
-        "c_total": 0.85,
-        "evidence_status": "fact_checked"
-    }]
-    mock_response = MagicMock()
-    mock_response.data = mock_data
-    
-    mock_supabase = MagicMock()
-    mock_supabase.rpc.return_value.execute.return_value = mock_response
-    
-    with patch("app.services.cache.get_supabase", return_value=mock_supabase):
-        result = await lookup_cache([0.1]*384, similarity_threshold=0.95)
-        assert result is not None
-        assert result["claim_id"] == "test-uuid"
-        assert result["similarity"] == 0.98
+    with patch("app.services.cache.get_supabase", return_value=_supabase_returning([_servable_row()])), \
+         patch("app.services.cache.are_equivalent", return_value=True):
+        result = await lookup_cache([0.1] * 384, claim_text="NASA water Mars")
+    assert result is not None
+    assert result["claim_id"] == "test-uuid"
+    assert result["warnings"] == []
+
+
+@pytest.mark.anyio
+async def test_lookup_cache_legacy_row_without_evidence_status_is_miss():
+    """Rows scored before stance-aware consensus must never be served (C1)."""
+    rows = [_servable_row(evidence_status=None)]
+    with patch("app.services.cache.get_supabase", return_value=_supabase_returning(rows)), \
+         patch("app.services.cache.are_equivalent", return_value=True):
+        assert await lookup_cache([0.1] * 384, claim_text="NASA water Mars") is None
+
+
+@pytest.mark.anyio
+async def test_non_equivalent_top_match_is_skipped_for_next_candidate():
+    """C2: the closest embedding may be the negation; a lower-ranked equivalent row is served."""
+    rows = [
+        _servable_row(claim_id="negated", extracted_claim="NASA did not find water on Mars", similarity=0.99),
+        _servable_row(claim_id="same", extracted_claim="NASA found water on Mars", similarity=0.96),
+    ]
+    with patch("app.services.cache.get_supabase", return_value=_supabase_returning(rows)), \
+         patch("app.services.cache.are_equivalent", side_effect=[False, True]) as mock_eq:
+        result = await lookup_cache([0.1] * 384, claim_text="NASA has found water on Mars")
+    assert result["claim_id"] == "same"
+    assert mock_eq.call_args_list[0][0] == ("NASA has found water on Mars", "NASA did not find water on Mars")
+
+
+@pytest.mark.anyio
+async def test_policy_runs_before_equivalence():
+    """Unservable rows (e.g. partial runs) never pay for an NLI call."""
+    partial = _servable_row(agent_outputs={"factcheck": {"degraded": False},
+                                           "crossref": {"degraded": True},
+                                           "linguistic": {"degraded": False}})
+    with patch("app.services.cache.get_supabase", return_value=_supabase_returning([partial])), \
+         patch("app.services.cache.are_equivalent") as mock_eq:
+        assert await lookup_cache([0.1] * 384, claim_text="NASA water Mars") is None
+    mock_eq.assert_not_called()
+
+
+@pytest.mark.anyio
+async def test_equivalence_error_fails_closed():
+    with patch("app.services.cache.get_supabase", return_value=_supabase_returning([_servable_row()])), \
+         patch("app.services.cache.are_equivalent", side_effect=RuntimeError("NLI down")):
+        assert await lookup_cache([0.1] * 384, claim_text="NASA water Mars") is None
+
 
 @pytest.mark.anyio
 async def test_insert_cache_offline_success():
@@ -178,21 +231,16 @@ async def test_embedding_latency():
 @pytest.mark.anyio
 async def test_lookup_cache_offline_hit_missing_similarity():
     """Verify lookup_cache handles database hit correctly when similarity is missing/None."""
-    mock_data = [{
-        "claim_id": "test-uuid",
-        "extracted_claim": "NASA water Mars",
-        "similarity": None,
-        "c_total": 0.85,
-        "evidence_status": "fact_checked"
-    }]
+    mock_data = [_servable_row(similarity=None)]
     mock_response = MagicMock()
     mock_response.data = mock_data
     
     mock_supabase = MagicMock()
     mock_supabase.rpc.return_value.execute.return_value = mock_response
     
-    with patch("app.services.cache.get_supabase", return_value=mock_supabase):
-        result = await lookup_cache([0.1]*384, similarity_threshold=0.95)
+    with patch("app.services.cache.get_supabase", return_value=mock_supabase), \
+         patch("app.services.cache.are_equivalent", return_value=True):
+        result = await lookup_cache([0.1]*384, claim_text="NASA water Mars", similarity_threshold=0.95)
         assert result is not None
         assert result["claim_id"] == "test-uuid"
         assert result["similarity"] is None
@@ -257,23 +305,6 @@ async def test_insert_cache_persists_warnings():
         results_insert_call = mock_supabase.table.return_value.insert.call_args_list[1]
         inserted_result_dict = results_insert_call[0][0]
         assert inserted_result_dict["warnings"] == ["Low confidence: no fact-checks found"]
-
-
-@pytest.mark.anyio
-async def test_lookup_cache_legacy_row_without_evidence_status_is_miss():
-    """Rows scored before stance-aware consensus (evidence_status NULL) must not be served (C1)."""
-    mock_response = MagicMock()
-    mock_response.data = [{
-        "claim_id": "legacy-uuid",
-        "similarity": 0.99,
-        "confidence_level": "high",
-        "evidence_status": None,
-    }]
-    mock_supabase = MagicMock()
-    mock_supabase.rpc.return_value.execute.return_value = mock_response
-
-    with patch("app.services.cache.get_supabase", return_value=mock_supabase):
-        assert await lookup_cache([0.1] * 384, similarity_threshold=0.95) is None
 
 
 @pytest.mark.anyio
