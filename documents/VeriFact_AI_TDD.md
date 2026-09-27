@@ -254,6 +254,8 @@ claim-review domain (see §7). It is the flag that gates `level: "high"`.
 - `500` — All agents failed
 - `503` — LLM provider unavailable
 
+Every response carries `X-Process-Time-Ms`. The pipeline runs under a 9.5 s request deadline (`REQUEST_DEADLINE_S`). Agents get `min(8 s, remaining − 1 s)`. A slow DB write returns the result with `id: null` while the write completes in the background.
+
 ### 3.2 POST /api/verify/image
 
 **Request:** `multipart/form-data` with `image` field (PNG/JPEG, max 5MB)
@@ -939,8 +941,12 @@ Deploy backend on **Railway** or **Render** (free tier). Frontend on **Vercel** 
 
 ## 11. Security Considerations
 
-- **Input sanitization:** Strip `<script>` tags, tracking parameters (utm_*, fbclid, etc.), and limit input to 2000 characters
-- **Rate limiting:** 10 requests/minute per IP (FastAPI middleware with `slowapi`)
-- **API keys:** Never exposed to frontend. All external API calls happen server-side
-- **Image uploads:** Validate MIME type, reject files > 5MB, process in memory (no disk writes)
-- **CORS:** Restrict to frontend domain in production
+- **Input sanitization:** strip `<script>`/HTML, tracking parameters (utm_*, fbclid, …) and JSON-answer syntax; limit input to 2000 characters. Only the sanitized text is persisted.
+- **Rate limiting:** 10 requests/minute per client IP (slowapi). The key is `app/api/client_ip.py`: behind `TRUSTED_PROXY_HOPS` proxies it takes the N-th `X-Forwarded-For` entry from the right; with 0 hops it uses the socket peer. Set `TRUSTED_PROXY_HOPS=1` on Render/Railway/Fly.
+- **Spend budgets:** per-UTC-day ceilings on Tavily credits (`TAVILY_DAILY_CREDIT_BUDGET`, default 30) and LLM calls (`LLM_DAILY_CALL_BUDGET`, default 900). When a budget is exhausted, the call raises an outage error, the agent degrades and the response carries "Partial analysis". It never returns a confident score. The counters are in-process (single instance).
+- **Prompt injection:** every LLM prompt fences untrusted text in XML tags, states an instruction hierarchy, strips JSON-answer syntax (`neutralize_for_prompt`), length-caps inputs, and enum-validates outputs. Adversarial claims in the eval set must never yield `verdict_found=true` or `high` confidence.
+- **SSRF (URL inputs, P2-02):** the scraper must call `validate_public_url` (`app/utils/url_safety.py`) on the initial URL and on every redirect hop (at most 3, `follow_redirects=False`). It must connect to the validated address, cap the response at 2 MB and 5 s, and accept only `text/html`.
+- **API keys:** never exposed to the frontend. All external calls happen server-side.
+- **Image uploads:** validate the MIME type, reject files over 5 MB, process in memory (no disk writes), and never store image bytes.
+- **Retention:** claims and results older than `RETENTION_DAYS` (default 90) are deleted by `purge_old_claims` (migration 05; pg_cron recommended). Shared result links expire with them.
+- **CORS:** restricted to the frontend domain in production.

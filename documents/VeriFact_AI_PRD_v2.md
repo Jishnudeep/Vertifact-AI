@@ -240,11 +240,11 @@ bias_ratings {
 
 | Failure | Behavior |
 |---------|----------|
-| Fact-Check API timeout (>5s) | Skip S_fact, set to 0.5, flag as "Partial Analysis" |
+| Fact-Check API outage or timeout | Layer 2 (Tavily) is tried; if the agent still cannot reach evidence it degrades (S_fact = 0.5, "Partial Analysis") |
 | Tavily search returns 0 results | V_consensus = 0.0, confidence capped |
 | OCR extracts no text from image | Return error: "Could not extract text. Try typing the claim instead." |
 | URL scraping blocked (403/paywall) | Fall back to using the URL's title + meta description as claim text |
-| LLM API rate limited | Queue request, show estimated wait time |
+| LLM rate limited / daily LLM or search budget exhausted | Retry with backoff inside the agent's time budget; if it still fails, degrade that agent and show "Partial Analysis" |
 | All agents fail | Return error: "Verification unavailable. Please try again." — never return a fabricated score |
 
 ---
@@ -253,13 +253,15 @@ bias_ratings {
 
 | Service | Free Tier | Monthly Cost (Dev) |
 |---------|-----------|-------------------|
-| Groq (LLM inference) | 14,400 req/day | $0 |
+| Groq (gpt-oss-120b, free) | 30 req/min · 1,000 req/day · 8K tokens/min | $0 |
 | Google Fact Check API | Unlimited (API key) | $0 |
-| Tavily (web search) | 1,000 req/month | $0 |
+| Tavily (web search) | 1,000 credits/month; advanced = 2 credits, basic = 1 | $0 (≈ 100–150 verifications/month) |
 | Supabase (DB + auth) | 500MB DB, 50K rows | $0 |
 | BGE-M3 embeddings | Local CPU inference | $0 |
 | Surya OCR | Local CPU inference | $0 |
 | **Total** | | **$0/month** |
+
+Daily budgets (TDD §11) keep the service inside these limits. Eval runs use recorded evidence (`--replay`) so they do not consume quota.
 
 Cloud GPU for eval runs (RunPod A10G): ~$0.50/hr × ~10 hrs/month = **$5/month when needed**.
 
