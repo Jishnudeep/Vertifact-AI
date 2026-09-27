@@ -9,6 +9,7 @@ from app.services.cache import lookup_cache, insert_cache
 from app.scoring.engine import ScoringEngine
 from app.agents import factcheck_agent, crossref_agent, linguistic_agent
 from app.services.bias_lookup import get_bias_label
+from app.utils.errors import classify_provider_error
 from app.utils.text_processing import extract_domain
 
 logger = logging.getLogger(__name__)
@@ -24,8 +25,6 @@ class NonVerifiableClaimError(ValueError):
 class AllAgentsFailedError(RuntimeError):
     """Raised when all verification agents fail or time out (HTTP 500)."""
     pass
-
-import uuid
 
 async def verify_claim(raw_input: str, input_type: str = "text", bypass_cache: bool = False) -> Dict[str, Any]:
     """
@@ -57,7 +56,7 @@ async def verify_claim(raw_input: str, input_type: str = "text", bypass_cache: b
         raise NonVerifiableClaimError(ver_error)
 
     # 4. Generate embedding
-    embedding = generate_embedding(cleaned_text)
+    embedding = await asyncio.to_thread(generate_embedding, cleaned_text)
 
     # 5. Semantic cache lookup (skip if bypass_cache=True)
     if not bypass_cache:
@@ -77,7 +76,8 @@ async def verify_claim(raw_input: str, input_type: str = "text", bypass_cache: b
                 },
                 "confidence": {
                     "level": cached.get("confidence_level"),
-                    "warnings": cached.get("warnings") or []
+                    "warnings": cached.get("warnings") or [],
+                    "verdict_found": cached.get("confidence_level") == "high"
                 },
                 "linguistic_profile": cached.get("linguistic_profile") or {
                     "clickbait_syntax": 0.0,
@@ -99,9 +99,33 @@ async def verify_claim(raw_input: str, input_type: str = "text", bypass_cache: b
     results = await asyncio.gather(
         fc_task, cr_task, ling_task, return_exceptions=True
     )
-    fc_res = results[0] if isinstance(results[0], factcheck_agent.FactCheckResult) else factcheck_agent.make_neutral_factcheck(degraded=True, error=str(results[0]))
-    cr_res = results[1] if isinstance(results[1], crossref_agent.CrossRefResult) else crossref_agent.make_neutral_crossref(degraded=True, error=str(results[1]))
-    ling_res = results[2] if isinstance(results[2], linguistic_agent.LinguisticResult) else linguistic_agent.make_neutral_linguistic(degraded=True, error=str(results[2]))
+    fc_res = (
+        results[0]
+        if isinstance(results[0], factcheck_agent.FactCheckResult)
+        else factcheck_agent.make_neutral_factcheck(
+            degraded=True,
+            error=str(results[0]),
+            error_details=classify_provider_error(results[0], provider="factcheck_agent")
+        )
+    )
+    cr_res = (
+        results[1]
+        if isinstance(results[1], crossref_agent.CrossRefResult)
+        else crossref_agent.make_neutral_crossref(
+            degraded=True,
+            error=str(results[1]),
+            error_details=classify_provider_error(results[1], provider="crossref_agent")
+        )
+    )
+    ling_res = (
+        results[2]
+        if isinstance(results[2], linguistic_agent.LinguisticResult)
+        else linguistic_agent.make_neutral_linguistic(
+            degraded=True,
+            error=str(results[2]),
+            error_details=classify_provider_error(results[2], provider="linguistic_agent")
+        )
+    )
 
     # Compute success signal from typed dataclasses
     agents_succeeded = sum([
@@ -116,7 +140,8 @@ async def verify_claim(raw_input: str, input_type: str = "text", bypass_cache: b
         raise AllAgentsFailedError("All verification agents failed to complete analysis. Unable to verify claim.")
 
     # 8. Compute scoring
-    fact_check_found = fc_res.verdict_found
+    fact_check_found = fc_res.matched_review
+    verdict_found = fc_res.verdict_found
     engine = ScoringEngine()
     scoring_res = engine.compute(
         s_fact=fc_res.s_fact_score,
@@ -124,8 +149,19 @@ async def verify_claim(raw_input: str, input_type: str = "text", bypass_cache: b
         v_consensus=cr_res.v_consensus_score,
         agents_succeeded=agents_succeeded,
         total_agents=3,
-        fact_check_found=fact_check_found
+        fact_check_found=fact_check_found,
+        verdict_found=verdict_found,
     )
+
+    # Enrich warnings with transparent provider degradation reasons
+    enriched_warnings = list(scoring_res.warnings)
+    for agent_label, res in [("Fact-check", fc_res), ("Cross-reference", cr_res), ("Linguistic", ling_res)]:
+        if res.degraded:
+            ed = getattr(res, "error_details", None)
+            if ed is not None:
+                enriched_warnings.append(f"{agent_label} agent degraded: {ed.message} ({ed.provider})")
+            elif res.error:
+                enriched_warnings.append(f"{agent_label} agent degraded: {res.error}")
 
     # 9. Consolidate sources
     sources: List[Dict[str, Any]] = []
@@ -135,13 +171,14 @@ async def verify_claim(raw_input: str, input_type: str = "text", bypass_cache: b
         url_val = m.get("url") or ""
         domain = extract_domain(url_val)
         bias = get_bias_label(domain)
+        src_type = "corroborating" if m.get("rating") == "Web Search Result" else "fact_check"
         sources.append({
             "url": url_val,
             "title": m.get("claim_reviewed") or "Fact-Check Match",
             "publisher": m.get("publisher") or "Fact-Checker",
             "rating": m.get("rating"),
             "bias_label": bias,
-            "type": "fact_check"
+            "type": src_type
         })
         
     # Add corroborating sources
@@ -165,50 +202,51 @@ async def verify_claim(raw_input: str, input_type: str = "text", bypass_cache: b
 
     elapsed_ms = int((time.time() - start_time) * 1000)
 
-    # 10. Persist result and claim to Supabase cache (skip on bypass, low/insufficient confidence, or degraded worker)
+    # 10. Persist result and claim to Supabase (skip on bypass_cache; always persist otherwise so GET /api/results/{id} works; lookup_cache skips low/insufficient)
     claim_id: Optional[str] = None
-    should_cache = (
-        not bypass_cache
-        and scoring_res.confidence_level not in {"low", "insufficient"}
-        and not (fc_res.degraded or cr_res.degraded or ling_res.degraded)
-    )
-    if should_cache:
-        claim_id = await insert_cache(
-            input_type=input_type,
-            raw_input=raw_input,
-            extracted_claim=cleaned_text,
-            embedding=embedding,
-            c_total=scoring_res.c_total,
-            s_fact=scoring_res.components.s_fact,
-            b_ling=scoring_res.components.b_ling,
-            v_consensus=scoring_res.components.v_consensus,
-            weights=scoring_res.weights,
-            confidence_level=scoring_res.confidence_level,
-            agent_outputs={
-                "factcheck": {
-                    "matches_found": fc_res.matches_found,
-                    "s_fact_score": fc_res.s_fact_score,
-                    "degraded": fc_res.degraded,
-                    "error": fc_res.error
+    if not bypass_cache:
+        try:
+            claim_id = await insert_cache(
+                input_type=input_type,
+                raw_input=raw_input,
+                extracted_claim=cleaned_text,
+                embedding=embedding,
+                c_total=scoring_res.c_total,
+                s_fact=scoring_res.components.s_fact,
+                b_ling=scoring_res.components.b_ling,
+                v_consensus=scoring_res.components.v_consensus,
+                weights=scoring_res.weights,
+                confidence_level=scoring_res.confidence_level,
+                agent_outputs={
+                    "factcheck": {
+                        "matches_found": fc_res.matches_found,
+                        "s_fact_score": fc_res.s_fact_score,
+                        "degraded": fc_res.degraded,
+                        "error": fc_res.error,
+                        "error_details": fc_res.error_details.to_dict() if getattr(fc_res, "error_details", None) else None,
+                    },
+                    "crossref": {
+                        "entities_extracted": cr_res.entities_extracted,
+                        "v_consensus_score": cr_res.v_consensus_score,
+                        "degraded": cr_res.degraded,
+                        "error": cr_res.error,
+                        "error_details": cr_res.error_details.to_dict() if getattr(cr_res, "error_details", None) else None,
+                    },
+                    "linguistic": {
+                        "b_ling_score": ling_res.b_ling_score,
+                        "flagged_phrases": ling_res.flagged_phrases,
+                        "degraded": ling_res.degraded,
+                        "error": ling_res.error,
+                        "error_details": ling_res.error_details.to_dict() if getattr(ling_res, "error_details", None) else None,
+                    }
                 },
-                "crossref": {
-                    "entities_extracted": cr_res.entities_extracted,
-                    "v_consensus_score": cr_res.v_consensus_score,
-                    "degraded": cr_res.degraded,
-                    "error": cr_res.error
-                },
-                "linguistic": {
-                    "b_ling_score": ling_res.b_ling_score,
-                    "flagged_phrases": ling_res.flagged_phrases,
-                    "degraded": ling_res.degraded,
-                    "error": ling_res.error
-                }
-            },
-            source_citations=sources,
-            linguistic_profile=linguistic_profile,
-            processing_time_ms=elapsed_ms,
-            warnings=scoring_res.warnings
-        )
+                source_citations=sources,
+                linguistic_profile=linguistic_profile,
+                processing_time_ms=elapsed_ms,
+                warnings=enriched_warnings
+            )
+        except Exception as exc:
+            logger.warning(f"Failed to persist result to database: {exc}")
 
     return {
         "id": claim_id,
@@ -222,8 +260,8 @@ async def verify_claim(raw_input: str, input_type: str = "text", bypass_cache: b
         },
         "confidence": {
             "level": scoring_res.confidence_level,
-            "warnings": scoring_res.warnings,
-            "verdict_found": fact_check_found
+            "warnings": enriched_warnings,
+            "verdict_found": verdict_found
         },
         "linguistic_profile": linguistic_profile,
         "sources": sources,

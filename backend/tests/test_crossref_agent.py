@@ -2,6 +2,7 @@ import pytest
 import asyncio
 from unittest.mock import patch, AsyncMock
 from app.agents.crossref_agent import run, CrossRefResult, make_neutral_crossref
+from app.services.errors import EvidenceAPIError
 from app.services.bias_lookup import load_bias_ratings
 from app.config import settings
 
@@ -114,6 +115,41 @@ async def test_conspiracy_claim_cross_reference():
         
         # Consensus should be 0.0 because reputable source count is 0
         assert result.v_consensus_score == 0.0
+
+@pytest.mark.anyio
+async def test_agent_degrades_when_search_api_is_down():
+    """R7.B4: total Tavily outage must report degraded=True, not 'no corroborating sources'."""
+    with patch("app.agents.crossref_agent.search_web", side_effect=EvidenceAPIError("Tavily search returned HTTP 432")):
+        result = await run("NASA announces Mars landing")
+        assert result.degraded is True
+        assert result.v_consensus_score == 0.0
+        assert result.sources_found == []
+        assert result.error is not None and "unavailable" in result.error
+
+
+@pytest.mark.anyio
+async def test_agent_not_degraded_when_one_query_fails():
+    """R7.B4: a partial search failure still yields real evidence and is NOT degradation."""
+    good_results = [
+        {
+            "url": "https://www.reuters.com/science/mars-landing-2026.html",
+            "title": "Reuters - Mars landing",
+            "score": 0.9
+        }
+    ]
+    calls = {"n": 0}
+
+    async def flaky_search(*args, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise EvidenceAPIError("Tavily search returned HTTP 432")
+        return good_results
+
+    with patch("app.agents.crossref_agent.search_web", side_effect=flaky_search):
+        result = await run("NASA announces Mars landing")
+        assert result.degraded is False
+        assert len(result.sources_found) == 1
+
 
 @pytest.mark.anyio
 @pytest.mark.live

@@ -70,6 +70,10 @@ models/
 # Eval run outputs & generated reports (keep curated datasets in git)
 eval/reports/
 eval/**/*.out.json
+# Harness run reports are environment-dependent; a published baseline is a deliberate,
+# reviewed Track 3.1 deliverable produced with live keys (R7.B3).
+eval/results/*.json
+!eval/results/.gitkeep
 eval/metrics/*.png
 calibration_*.png
 

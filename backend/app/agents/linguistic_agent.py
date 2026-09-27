@@ -11,6 +11,8 @@ from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 
 from app.config import settings
 from app.utils.adk_helpers import run_adk_agent, parse_adk_response
+from app.utils.errors import AgentErrorDetails, classify_provider_error
+from app.utils.validators import neutralize_for_prompt
 
 logger = logging.getLogger(__name__)
 TIMEOUT = 8.0
@@ -61,8 +63,13 @@ class LinguisticResult:
     sensationalism_source: str = "heuristics" # "heuristics" or "llm"
     degraded: bool = False                   # True if agent timed out or failed
     error: Optional[str] = None              # Error message if degraded
+    error_details: Optional[AgentErrorDetails] = None # Structured error classification if degraded
 
-def make_neutral_linguistic(degraded: bool = False, error: Optional[str] = None) -> LinguisticResult:
+def make_neutral_linguistic(
+    degraded: bool = False,
+    error: Optional[str] = None,
+    error_details: Optional[AgentErrorDetails] = None
+) -> LinguisticResult:
     """
     Factory creating a fresh neutral LinguisticResult.
     """
@@ -75,7 +82,8 @@ def make_neutral_linguistic(degraded: bool = False, error: Optional[str] = None)
         flagged_phrases=[],
         sensationalism_source="heuristics",
         degraded=degraded,
-        error=error
+        error=error,
+        error_details=error_details
     )
 
 # Backward compatibility reference
@@ -86,7 +94,8 @@ async def _rate_sensationalism_adk(claim: str) -> float:
     Use an ADK agent to rate the sensationalism of the text on a 0.0 to 1.0 scale.
     Input text is strictly fenced and length-capped against prompt injection.
     """
-    safe_claim = claim[:500]
+    # R8.1: strip JSON-answer syntax so an echoed claim cannot impersonate the model's object
+    safe_claim = neutralize_for_prompt(claim[:500])
     instruction = (
         "You are a linguistic analysis assistant. Rate the sensationalism of the text enclosed in "
         "<untrusted_text> tags on a 0.0 to 1.0 scale (where 0.0 is completely neutral and objective, "
@@ -255,9 +264,19 @@ async def run(claim: str) -> LinguisticResult:
     """
     try:
         return await asyncio.wait_for(_analyze(claim), timeout=TIMEOUT)
-    except asyncio.TimeoutError:
+    except (asyncio.TimeoutError, TimeoutError) as te:
         logger.warning(f"Linguistic Agent timed out on claim: {claim}")
-        return make_neutral_linguistic(degraded=True, error="Timeout: Linguistic Agent exceeded 8.0s")
+        err_det = classify_provider_error(te, provider="linguistic_agent")
+        return make_neutral_linguistic(
+            degraded=True,
+            error="Timeout: Linguistic Agent exceeded 8.0s",
+            error_details=err_det
+        )
     except Exception as exc:
         logger.error(f"Linguistic Agent failed on claim: {claim}. Error: {exc}")
-        return make_neutral_linguistic(degraded=True, error=str(exc))
+        err_det = classify_provider_error(exc, provider="linguistic_agent")
+        return make_neutral_linguistic(
+            degraded=True,
+            error=str(exc),
+            error_details=err_det
+        )

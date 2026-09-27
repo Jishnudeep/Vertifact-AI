@@ -20,6 +20,24 @@ async def lifespan(app: FastAPI):
     # Preload heavy assets once at startup per CLAUDE.md Section 7
     logger.info("Initializing VeriFact AI application lifecyle...")
     
+    # 0. R8.4: an absent evidence key is now an outage (EvidenceAPIError), not a silent
+    # empty result. Say so once at startup so a mis-configured deployment is obvious
+    # instead of showing up as every claim degrading to "Partial Analysis". Non-fatal.
+    missing_keys = [
+        name for name, value in (
+            ("TAVILY_API_KEY", settings.tavily_api_key),
+            ("GOOGLE_FACTCHECK_API_KEY", settings.google_fact_check_api_key),
+            ("GROQ_API_KEY", settings.groq_api_key),
+        )
+        if not value
+    ]
+    if missing_keys:
+        logger.warning(
+            "Evidence/model API keys are NOT configured: %s. "
+            "Agents depending on them will degrade to 'Partial Analysis' on every request.",
+            ", ".join(missing_keys),
+        )
+
     # 1. Load AllSides bias ratings
     logger.info("Loading AllSides bias ratings...")
     load_bias_ratings()

@@ -32,6 +32,12 @@ async def lookup_cache(
         
         if response.data and len(response.data) > 0:
             match_data = response.data[0]
+            # Skip low/insufficient confidence entries from being served as cache hits per D4
+            conf = str(match_data.get("confidence_level", "")).lower()
+            if conf in {"low", "insufficient"}:
+                logger.info(f"Semantic match found but confidence is '{conf}'. Treating as cache miss.")
+                return None
+
             similarity = match_data.get("similarity")
             # Ensure warnings is always a list
             if "warnings" not in match_data or match_data["warnings"] is None:

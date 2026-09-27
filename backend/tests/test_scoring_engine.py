@@ -36,7 +36,8 @@ def test_scoring_success_no_capping():
         b_ling=0.1,
         v_consensus=0.7,
         agents_succeeded=3,
-        fact_check_found=True
+        fact_check_found=True,
+        verdict_found=True
     )
     
     assert result.c_total == 0.790
@@ -72,7 +73,8 @@ def test_scoring_half_true_preserves_fact_check_without_false_warning():
         b_ling=0.0,
         v_consensus=0.2,
         agents_succeeded=3,
-        fact_check_found=True  # Fact-checker explicitly rated it Half True / Mixed
+        fact_check_found=True,  # Fact-checker explicitly rated it Half True / Mixed
+        verdict_found=False
     )
     
     # Not capped by Rule 2
@@ -121,11 +123,12 @@ def test_scoring_boundary_zeros():
         b_ling=1.0,
         v_consensus=0.0,
         agents_succeeded=3,
-        fact_check_found=True
+        fact_check_found=True,
+        verdict_found=True
     )
     
     assert result.c_total == 0.0
-    assert result.confidence_level == "high"  # All succeeded, fact check found
+    assert result.confidence_level == "high"  # All succeeded, definitive verdict found
     assert len(result.warnings) == 0
 
 def test_scoring_boundary_ones():
@@ -136,7 +139,8 @@ def test_scoring_boundary_ones():
         b_ling=0.0,
         v_consensus=1.0,
         agents_succeeded=3,
-        fact_check_found=True
+        fact_check_found=True,
+        verdict_found=True
     )
     
     assert result.c_total == 1.0
@@ -145,7 +149,7 @@ def test_scoring_boundary_ones():
 
 def test_false_verdict_dominance_capping():
     """
-    Verify R2.B1 guardrail: When fact_check_found=True and s_fact <= 0.25 (confirmed false claim),
+    Verify R2.B1 guardrail: When verdict_found=True and s_fact <= 0.25 (confirmed false claim),
     c_total MUST NOT be inflated by high news consensus (v_consensus=0.6).
     """
     engine = ScoringEngine()
@@ -154,7 +158,8 @@ def test_false_verdict_dominance_capping():
         b_ling=0.1,
         v_consensus=0.6,
         agents_succeeded=3,
-        fact_check_found=True
+        fact_check_found=True,
+        verdict_found=True
     )
     # raw composite = 0.5*0.0 + 0.2*0.9 + 0.3*0.6 = 0.36
     # Capped by Rule 3 to min(0.36, 0.0 + 0.15) = 0.150
@@ -175,3 +180,16 @@ def test_high_v_consensus_without_fact_check_is_medium_confidence():
         fact_check_found=False
     )
     assert result.confidence_level == "medium"
+
+def test_verdict_found_without_fact_check_found_is_rejected():
+    """R7.D: verdict_found=True with fact_check_found=False is an impossible state and must assert."""
+    engine = ScoringEngine()
+    with pytest.raises(AssertionError):
+        engine.compute(
+            s_fact=0.0,
+            b_ling=0.1,
+            v_consensus=0.5,
+            agents_succeeded=3,
+            fact_check_found=False,
+            verdict_found=True
+        )

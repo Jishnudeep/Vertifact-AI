@@ -23,16 +23,62 @@ QUESTION_PATTERNS = [
     r"\?\s*$"
 ]
 
+# JSON keys the agents parse out of LLM output. If untrusted text can carry these as
+# `key:` syntax (or braces), an echoed claim becomes a syntactically valid answer object
+# that the parser may adopt (R8.1).
+PROMPT_JSON_KEYS = (
+    "rating",
+    "relevant",
+    "opposite",
+    "implied_rating",
+    "s_fact",
+    "explanation",
+    "confidence",
+)
+
+_JSON_KEY_COLON_RE = re.compile(
+    r"\b(" + "|".join(PROMPT_JSON_KEYS) + r")\s*:",
+    flags=re.IGNORECASE,
+)
+
+
+def neutralize_for_prompt(text: str) -> str:
+    """
+    Make untrusted text structurally incapable of impersonating the model's JSON answer.
+
+    R8.1 layer 1. Every agent prompt built from user- or third-party-controlled text runs
+    through this before it reaches an LLM, because the model echoes that text back in its
+    reasoning/preamble and the response parser then has to tell the echo apart from the
+    model's own object. Removing the syntax at the source is the only reliable cut:
+
+      - `{` / `}` become `(` / `)`  — an echoed claim can no longer form a JSON object.
+      - `rating:` / `relevant:` / ... become `rating -` / `relevant -` — an echoed claim can
+        no longer form a JSON (or bare) key/value pair for any key the agents read.
+
+    Factual claims do not meaningfully need literal braces or `key:` JSON syntax, so this is
+    lossless for the verification task. Layers 2 and 3 (the balanced-span parser and the
+    regex fallback in `adk_helpers`) are defence in depth behind this.
+    """
+    if not text:
+        return ""
+
+    neutral = text.replace("{", "(").replace("}", ")")
+    neutral = _JSON_KEY_COLON_RE.sub(r"\1 -", neutral)
+    return neutral
+
+
 def sanitize_text(text: str) -> str:
     """
     Sanitize raw input:
     - Strip HTML / XML / script tags
     - Strip tracking parameters from embedded URLs
     - Normalize whitespace
+    - Neutralize JSON-answer syntax (braces / `key:`) so the claim cannot impersonate
+      an LLM answer object when it is echoed back (R8.1)
     """
     if not text:
         return ""
-        
+
     # 1. Remove script tags and HTML tags
     clean = re.sub(r'<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>', '', text, flags=re.IGNORECASE)
     clean = re.sub(r'<[^>]+>', ' ', clean)
@@ -54,7 +100,10 @@ def sanitize_text(text: str) -> str:
                 clean = urlunparse(parsed._replace(query=new_query))
         except Exception:
             pass
-            
+
+    # 4. Neutralize JSON-answer syntax before the text can reach any prompt (R8.1)
+    clean = neutralize_for_prompt(clean)
+
     return clean
 
 def validate_input_length(text: str) -> Tuple[bool, Optional[str]]:

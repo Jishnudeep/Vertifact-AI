@@ -10,6 +10,7 @@ from app.agents.orchestrator import (
 from app.agents.factcheck_agent import FactCheckResult, make_neutral_factcheck
 from app.agents.crossref_agent import CrossRefResult, make_neutral_crossref
 from app.agents.linguistic_agent import LinguisticResult, make_neutral_linguistic
+from app.services.errors import EvidenceAPIError
 
 @pytest.mark.anyio
 async def test_verify_claim_cache_hit():
@@ -49,6 +50,7 @@ async def test_verify_claim_cache_miss_pipeline_success():
         best_match={"publisher": "PolitiFact", "rating": "True", "url": "https://politifact.com/1"},
         all_matches=[{"publisher": "PolitiFact", "rating": "True", "url": "https://politifact.com/1"}],
         s_fact_score=1.0,
+        matched_review=True,
         verdict_found=True,
         degraded=False
     )
@@ -122,6 +124,29 @@ async def test_verify_claim_partial_agent_degradation():
 
         assert result["trust_score"]["c_total"] <= 0.50
         assert any("Partial analysis" in w for w in result["confidence"]["warnings"])
+
+@pytest.mark.anyio
+async def test_evidence_api_outage_surfaces_partial_analysis_warning():
+    """
+    R7.B4 end-to-end: when every evidence API is down, the real fact-check and cross-ref
+    agents must report degraded=True so Rule 1 fires and the user sees the
+    'Partial analysis' flag instead of a confident-looking score.
+    """
+    outage = EvidenceAPIError("Tavily search returned HTTP 432")
+
+    with patch("app.agents.orchestrator.generate_embedding", return_value=[0.1] * 384), \
+         patch("app.agents.orchestrator.lookup_cache", return_value=None), \
+         patch("app.agents.factcheck_agent.search_factchecks", side_effect=EvidenceAPIError("Google Fact Check returned HTTP 503")), \
+         patch("app.agents.factcheck_agent.search_web", side_effect=outage), \
+         patch("app.agents.crossref_agent.search_web", side_effect=outage), \
+         patch("app.agents.orchestrator.insert_cache", return_value=None):
+
+        result = await verify_claim("NASA launched a rocket to Mars yesterday", bypass_cache=True)
+
+        assert any("Partial analysis" in w for w in result["confidence"]["warnings"])
+        assert result["confidence"]["level"] in {"low", "insufficient"}
+        assert result["confidence"]["verdict_found"] is False
+        assert result["trust_score"]["c_total"] <= 0.50
 
 @pytest.mark.anyio
 async def test_verify_claim_rejects_empty_input():

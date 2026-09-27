@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import uuid
 from fastapi import APIRouter, Request, HTTPException, status
 from slowapi import Limiter
 from slowapi.util import get_remote_address
@@ -30,7 +31,7 @@ async def verify_endpoint(request: Request, body: VerifyRequest):
     Accepts text claim and returns composite trust score, confidence level,
     linguistic profile, and citations.
     """
-    result = await verify_claim(body.input, body.input_type, body.bypass_cache)
+    result = await verify_claim(body.input, body.input_type)
     return result
 
 @router.get(
@@ -45,6 +46,14 @@ async def get_result_endpoint(request: Request, result_id: str):
     """
     Retrieve a previously verified claim result by result ID or claim ID.
     """
+    try:
+        uuid.UUID(result_id)
+    except (ValueError, AttributeError):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Invalid result ID format: '{result_id}'. Expected valid UUID."
+        )
+
     try:
         supabase = get_supabase()
         
@@ -79,7 +88,8 @@ async def get_result_endpoint(request: Request, result_id: str):
             },
             "confidence": {
                 "level": row.get("confidence_level"),
-                "warnings": row.get("warnings") or []
+                "warnings": row.get("warnings") or [],
+                "verdict_found": row.get("confidence_level") == "high"
             },
             "linguistic_profile": row.get("linguistic_profile") or {
                 "clickbait_syntax": 0.0,

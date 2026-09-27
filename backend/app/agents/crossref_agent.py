@@ -6,7 +6,9 @@ from typing import Optional, List, Dict, Any
 from app.config import settings
 from app.agents.linguistic_agent import get_spacy_nlp
 from app.services.search_api import search_web
+from app.services.errors import EvidenceAPIError
 from app.services.bias_lookup import get_bias_label, get_outlet_name
+from app.utils.errors import AgentErrorDetails, classify_provider_error
 from app.utils.text_processing import extract_domain
 
 logger = logging.getLogger(__name__)
@@ -20,8 +22,13 @@ class CrossRefResult:
     v_consensus_score: float                  # 0.0 to 1.0 (0.0 when no sources or degraded)
     degraded: bool = False                    # True if agent timed out or failed
     error: Optional[str] = None               # Failure message if degraded
+    error_details: Optional[AgentErrorDetails] = None # Structured error classification if degraded
 
-def make_neutral_crossref(degraded: bool = False, error: Optional[str] = None) -> CrossRefResult:
+def make_neutral_crossref(
+    degraded: bool = False,
+    error: Optional[str] = None,
+    error_details: Optional[AgentErrorDetails] = None
+) -> CrossRefResult:
     """
     Factory creating a fresh neutral CrossRefResult.
     v_consensus_score is strictly 0.0 on degradation or empty search.
@@ -32,7 +39,8 @@ def make_neutral_crossref(degraded: bool = False, error: Optional[str] = None) -
         coverage_distribution={"Left": 0, "Lean Left": 0, "Center": 0, "Lean Right": 0, "Right": 0},
         v_consensus_score=0.0,
         degraded=degraded,
-        error=error
+        error=error,
+        error_details=error_details
     )
 
 # Backward compatibility reference (fresh instance)
@@ -64,7 +72,7 @@ async def _analyze(claim: str) -> CrossRefResult:
 
     # 1. spaCy NER extraction
     nlp = get_spacy_nlp()
-    doc = nlp(claim)
+    doc = await asyncio.to_thread(nlp, claim)
     
     # We want entities of types: PERSON (people), ORG (organizations), GPE (locations), NORP (nationalities/religious/political groups)
     # also FAC (facilities), LOC (geographic features), PRODUCT, EVENT
@@ -99,6 +107,18 @@ async def _analyze(claim: str) -> CrossRefResult:
     ]
     
     results_nested = await asyncio.gather(*search_tasks, return_exceptions=True)
+
+    # R7.B4: if EVERY search failed with an evidence-API outage the agent reached no
+    # evidence source at all. That is degradation (→ "Partial Analysis"), not "no sources
+    # exist". A partial failure (at least one list returned) proceeds normally.
+    if results_nested and all(isinstance(res, EvidenceAPIError) for res in results_nested):
+        logger.error(f"Cross-Reference evidence retrieval unavailable: {results_nested[0]}")
+        err_det = classify_provider_error(results_nested[0], provider="tavily")
+        return make_neutral_crossref(
+            degraded=True,
+            error=f"Evidence retrieval API unavailable: {results_nested[0]}",
+            error_details=err_det
+        )
 
     # 4. Flatten and deduplicate results by domain
     all_results = []
@@ -149,12 +169,16 @@ async def _analyze(claim: str) -> CrossRefResult:
         }
         sources_found.append(source_dict)
 
-        # Reputable check: AllSides rated outlets or institutional/primary domains (.gov, .edu, who.int, nasa.gov) per B4/D3
+        # Reputable check: AllSides rated outlets or institutional/primary domains per B4/D3.
+        # Wire services (reuters/apnews/bbc) are intentionally NOT listed: they are AllSides-rated,
+        # so the first clause already covers them.
+        # Track 3.1: tighten institutional-domain trust (a .edu personal page is not a source)
         is_reputable = (
             bias_label in coverage_distribution
             or domain.endswith(".gov")
             or domain.endswith(".edu")
-            or domain in {"who.int", "nasa.gov", "reuters.com", "apnews.com", "bbc.com"}
+            # nasa.gov is intentionally NOT listed: `.gov` above already covers it.
+            or domain in {"who.int"}
         )
         
         if bias_label in coverage_distribution:
@@ -191,9 +215,19 @@ async def run(claim: str) -> CrossRefResult:
     """
     try:
         return await asyncio.wait_for(_analyze(claim), timeout=TIMEOUT)
-    except asyncio.TimeoutError:
+    except (asyncio.TimeoutError, TimeoutError) as te:
         logger.warning(f"Cross-Reference Agent timed out on claim: {claim}")
-        return make_neutral_crossref(degraded=True, error="Timeout: Cross-Reference Agent exceeded 8.0s")
+        err_det = classify_provider_error(te, provider="crossref_agent")
+        return make_neutral_crossref(
+            degraded=True,
+            error="Timeout: Cross-Reference Agent exceeded 8.0s",
+            error_details=err_det
+        )
     except Exception as exc:
         logger.error(f"Cross-Reference Agent failed on claim: {claim}. Error: {exc}")
-        return make_neutral_crossref(degraded=True, error=str(exc))
+        err_det = classify_provider_error(exc, provider="crossref_agent")
+        return make_neutral_crossref(
+            degraded=True,
+            error=str(exc),
+            error_details=err_det
+        )

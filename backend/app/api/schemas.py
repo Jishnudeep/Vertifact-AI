@@ -2,9 +2,8 @@ from typing import List, Dict, Optional, Literal
 from pydantic import BaseModel, Field, AliasChoices
 
 class VerifyRequest(BaseModel):
-    input: str = Field(..., description="The claim text to verify", validation_alias=AliasChoices("input", "text"))
+    input: str = Field(..., max_length=10000, description="The claim text to verify", validation_alias=AliasChoices("input", "text"))
     input_type: Literal["text", "url", "image"] = Field(default="text", description="Type of input provided")
-    bypass_cache: bool = Field(default=False, description="Skip semantic cache lookup and force fresh pipeline run")
 
 class TrustScoreModel(BaseModel):
     c_total: float = Field(..., ge=0.0, le=1.0)

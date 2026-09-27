@@ -39,20 +39,21 @@ class ScoringEngine:
         v_consensus: float,
         agents_succeeded: int,
         total_agents: int = 3,
-        fact_check_found: Optional[bool] = None,
+        fact_check_found: bool = False,
+        verdict_found: bool = False,
     ) -> ScoringResult:
         """
         Compute trust score, apply capping rules, and classify confidence level.
-        If fact_check_found is omitted, defaults to True if s_fact != 0.5.
+        fact_check_found indicates whether a matched review was found (matched_review).
+        verdict_found indicates whether a definitive verdict was found from a claim-review domain.
         """
+        # A definitive verdict can only come from a matched review; the inverse state is impossible.
+        assert not (verdict_found and not fact_check_found), "verdict_found implies fact_check_found"
+
         # Clamp inputs to [0.0, 1.0] to safeguard against anomalous agent values
         s_fact_clamped = max(0.0, min(1.0, s_fact))
         b_ling_clamped = max(0.0, min(1.0, b_ling))
         v_consensus_clamped = max(0.0, min(1.0, v_consensus))
-        
-        # If fact_check_found flag not explicitly passed, infer from s_fact
-        if fact_check_found is None:
-            fact_check_found = (s_fact_clamped != 0.5)
         
         # Raw composite: w1*s_fact + w2*(1 - b_ling) + w3*v_consensus
         c_total_raw = (
@@ -69,6 +70,7 @@ class ScoringEngine:
             agents_succeeded=agents_succeeded,
             total_agents=total_agents,
             fact_check_found=fact_check_found,
+            verdict_found=verdict_found,
         )
         
         # Determine confidence level
@@ -78,6 +80,7 @@ class ScoringEngine:
             v_consensus=v_consensus_clamped,
             total_agents=total_agents,
             fact_check_found=fact_check_found,
+            verdict_found=verdict_found,
         )
         
         # Final round and clamp to [0.0, 1.0]

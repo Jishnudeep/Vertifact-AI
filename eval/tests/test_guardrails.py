@@ -1,6 +1,11 @@
 import pytest
 from unittest.mock import patch, MagicMock
-from app.services.bias_lookup import get_bias_label, load_bias_ratings, BIAS_RATINGS
+from app.services.bias_lookup import (
+    get_bias_label,
+    load_bias_ratings,
+    BIAS_RATINGS,
+    UNRATED_BRIDGING_DOMAINS,
+)
 from app.scoring import ScoringEngine
 from app.agents.crossref_agent import make_neutral_crossref, run as run_crossref
 from app.agents.factcheck_agent import make_neutral_factcheck, run as run_factcheck
@@ -28,21 +33,67 @@ class TestBiasLeakageGuardrail:
 
     def test_unrated_bridging_orgs_resolve_to_unrated(self):
         """
-        Verify B8 zero-tolerance guardrail: Organizations with AllSides 'allsides' non-rating
-        (bridging/depolarization orgs like The Lincoln Project, StoryCorps, etc.)
-        must NEVER default or be fabricated as 'Center'. They must resolve strictly to 'Unrated'.
+        Verify B1 zero-tolerance guardrail: All 13 AllSides bridging/depolarization orgs
+        with no left-right political rating must resolve strictly to 'Unrated'.
         """
-        bridging_domains = [
-            "allsides.com",
-            "thelincolnproject.com",
-            "storycorps.org",
-            "dividedwefall.us",
-            "abridgenews.com",
-            "braverangels.org",
-            "theflipside.io"
-        ]
-        for domain in bridging_domains:
+        # Single source of truth: the list lives in app.services.bias_lookup (R7.D)
+        assert len(UNRATED_BRIDGING_DOMAINS) == 13
+        for domain in sorted(UNRATED_BRIDGING_DOMAINS):
             assert get_bias_label(domain) == "Unrated", f"Domain '{domain}' should be 'Unrated' but got '{get_bias_label(domain)}'"
+
+    def test_database_load_path_discards_bridging_orgs(self):
+        """
+        Ensure B1 guardrail holds across the DB path, MUTATION-SENSITIVELY (R7.P3).
+
+        The assertions are made directly on the loaded BIAS_RATINGS dict, not only through
+        get_bias_label() — which short-circuits bridging domains regardless of what was
+        loaded and therefore passes even if the loader's validation is deleted.
+
+        The poisoned table contains:
+          - a bridging org with a political rating (must be dropped),
+          - an unknown domain with a fabricated label (must be dropped),
+          - a clean row for a synthetic domain absent from the CSV (must survive, which
+            also proves the rows came from the DB and not from the CSV fallback).
+        """
+        mock_data = [
+            {"domain": "thelincolnproject.org", "outlet_name": "The Lincoln Project", "allsides_rating": "Center"},
+            {"domain": "allsides.com", "outlet_name": "AllSides", "allsides_rating": "Center"},
+            {"domain": "storycorps.org", "outlet_name": "StoryCorps", "allsides_rating": "Center"},
+            {"domain": "evil.xyz", "outlet_name": "Evil Propaganda Net", "allsides_rating": "Far Left Propaganda"},
+            {"domain": "db-only-probe.example", "outlet_name": "DB Only Probe", "allsides_rating": "Left"},
+            {"domain": "reuters.com", "outlet_name": "Reuters", "allsides_rating": "Center"},
+        ]
+        mock_response = MagicMock()
+        mock_response.data = mock_data
+
+        mock_supabase = MagicMock()
+        mock_supabase.table().select().execute.return_value = mock_response
+
+        try:
+            with patch("app.services.bias_lookup.get_supabase", return_value=mock_supabase):
+                load_bias_ratings()
+
+                # The DB rows really were the source of this load
+                assert BIAS_RATINGS.get("db-only-probe.example") == "Left"
+                assert get_bias_label("db-only-probe.example") == "Left"
+
+                # Poisoned rows never enter the in-memory map
+                assert BIAS_RATINGS.get("thelincolnproject.org") in (None, "Unrated")
+                assert BIAS_RATINGS.get("allsides.com") in (None, "Unrated")
+                assert BIAS_RATINGS.get("storycorps.org") in (None, "Unrated")
+                assert BIAS_RATINGS.get("evil.xyz") in (None, "Unrated")
+
+                # No fabricated label survives anywhere in the loaded map
+                assert "Far Left Propaganda" not in set(BIAS_RATINGS.values())
+
+                # Clean valid rows survive, and the public accessor agrees throughout
+                assert BIAS_RATINGS.get("reuters.com") == "Center"
+                assert get_bias_label("reuters.com") == "Center"
+                assert get_bias_label("thelincolnproject.org") == "Unrated"
+                assert get_bias_label("evil.xyz") == "Unrated"
+        finally:
+            # Restore normal bias ratings for the rest of the suite
+            load_bias_ratings()
 
 class TestConfidenceCappingGuardrails:
     """Guardrails ensuring uncertainty and partial results are capped and warned."""

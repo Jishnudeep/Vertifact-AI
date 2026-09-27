@@ -16,8 +16,31 @@ class Settings(BaseSettings):
     # Allowed CORS origins for frontend integration (Vite dev server default 5173)
     cors_origins: List[str] = ["http://localhost:5173", "http://localhost:3000"]
     
-    # Model ID comes from config as per AGENTS.md Section 3
-    model_id: str = "groq/openai/gpt-oss-20b"
+    # Model ID comes from config as per CLAUDE.md §3, TDD §4.1, PRD §5 — never hardcoded in agents.
+    #
+    # Dev model: `groq/openai/gpt-oss-120b`. This deviates from the originally documented
+    # `groq/llama-3.1-8b-instant` because Groq no longer serves ANY Llama chat model on the
+    # developer tier — those moved to Enterprise-tier access (contact sales), they are not
+    # deprecated. Verified live 2026-09-10 against this project's Groq key:
+    #   groq/llama-3.1-8b-instant    -> 404 NotFoundError: GroqException - {"error":{"message":
+    #     "The model `llama-3.1-8b-instant` does not exist or you do not have access to it.",
+    #     "type":"invalid_request_error","code":"model_not_found"}}
+    #   groq/llama-3.3-70b-versatile -> 404, identical model_not_found body
+    #   groq/openai/gpt-oss-120b     -> 200, clean JSON on both the verdict-extraction and the
+    #                                   claim-alignment prompts (reasoning in a separate field)
+    # GET https://api.groq.com/openai/v1/models on the same key lists exactly:
+    #   allam-2-7b, groq/compound, groq/compound-mini, llama-prompt-guard-2-22m,
+    #   llama-prompt-guard-2-86m, openai/gpt-oss-120b, openai/gpt-oss-20b,
+    #   openai/gpt-oss-safeguard-20b, qwen/qwen3.6-27b, qwen/qwen3.8-27b, whisper-*
+    # — no Llama chat model, so no Llama-family fallback is reachable.
+    # Model card: https://console.groq.com/docs/models (gpt-oss-120b is a PRODUCTION model,
+    # ~500 tok/s, $0.15 / $0.60 per M input/output tokens).
+    # 120b over 20b: stronger adherence to the strict JSON contract on the alignment and
+    # verdict-extraction prompts, which is what the response parser depends on.
+    # It is a reasoning model, so max_tokens is 1024 in adk_helpers.py — 256 truncated the JSON
+    # body and forced the (injection-prone) regex fallback (R7.B1/R7.P4).
+    # Revisit when prod moves to vLLM (PRD §5).
+    model_id: str = "groq/openai/gpt-oss-120b"
     
     # Model name for generating embeddings
     embedding_model_name: str = "all-MiniLM-L6-v2"
@@ -42,11 +65,21 @@ class Settings(BaseSettings):
 def get_settings() -> Settings:
     return Settings()
 
-settings = get_settings()
-
-# Module-level variables for clean backward compatibility
-SUPABASE_URL = settings.supabase_url
-SUPABASE_KEY = settings.supabase_secret_key
-GROQ_API_KEY = settings.groq_api_key
-TAVILY_API_KEY = settings.tavily_api_key
-GOOGLE_FACT_CHECK_API_KEY = settings.google_fact_check_api_key
+def __getattr__(name: str):
+    """
+    Lazy accessor for settings and backward-compatible module globals.
+    Defers Settings initialization until accessed.
+    """
+    if name == "settings":
+        return get_settings()
+    s = get_settings()
+    mapping = {
+        "SUPABASE_URL": s.supabase_url,
+        "SUPABASE_KEY": s.supabase_secret_key,
+        "GROQ_API_KEY": s.groq_api_key,
+        "TAVILY_API_KEY": s.tavily_api_key,
+        "GOOGLE_FACT_CHECK_API_KEY": s.google_fact_check_api_key,
+    }
+    if name in mapping:
+        return mapping[name]
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

@@ -18,6 +18,15 @@ BIAS_RATINGS: dict[str, str] = {}
 # In-memory dictionary: domain -> outlet_name
 OUTLET_NAMES: dict[str, str] = {}
 
+# AllSides bridging/depolarization organizations that have no left-right political rating
+UNRATED_BRIDGING_DOMAINS = {
+    "abridgenews.com", "allsides.com", "allsidescommunity.com", "braverangels.com",
+    "counterpointing.com", "dividedwefall.com", "listenfirstproject.org", "mismatch.org",
+    "storycorps.org", "suspendbeliefpodcast.com", "theflipside.com", "thelincolnproject.org",
+    "yahoothe360.com"
+}
+VALID_BIAS_RATINGS = {"Left", "Lean Left", "Center", "Lean Right", "Right"}
+
 def load_bias_ratings():
     """Load AllSides ratings from Supabase database, falling back to local files if unavailable."""
     global BIAS_RATINGS, OUTLET_NAMES
@@ -30,8 +39,15 @@ def load_bias_ratings():
         response = supabase.table("bias_ratings").select("domain, outlet_name, allsides_rating").execute()
         if response.data:
             for row in response.data:
-                BIAS_RATINGS[row["domain"]] = row["allsides_rating"]
-                OUTLET_NAMES[row["domain"]] = row["outlet_name"]
+                domain = row.get("domain", "").strip().lower()
+                rating = row.get("allsides_rating", "").strip()
+                # Zero-tolerance validation: only load valid political ratings and never unrated bridging orgs
+                if not domain or domain in UNRATED_BRIDGING_DOMAINS:
+                    continue
+                if rating not in VALID_BIAS_RATINGS:
+                    continue
+                BIAS_RATINGS[domain] = rating
+                OUTLET_NAMES[domain] = row.get("outlet_name", "")
             
             # Re-apply aliases for domain robustness even when loading from DB
             aliases = {
@@ -142,6 +158,8 @@ def get_bias_label(url_or_domain: str) -> str:
         load_bias_ratings()
         
     domain = extract_domain(url_or_domain)
+    if not domain or domain in UNRATED_BRIDGING_DOMAINS:
+        return "Unrated"
     return BIAS_RATINGS.get(domain, "Unrated")
 
 def get_outlet_name(url_or_domain: str) -> Optional[str]:

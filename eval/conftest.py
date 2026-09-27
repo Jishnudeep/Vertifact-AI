@@ -3,8 +3,14 @@ from pathlib import Path
 import os
 import pytest
 
-# Ensure backend directory is in sys.path so app modules can be imported in eval suite
-backend_path = Path(__file__).resolve().parent.parent / "backend"
+# Ensure the repo ROOT is importable (so `import eval.metrics...` resolves) and the backend
+# directory too (so `import app...` resolves). Without the root entry,
+# `pytest eval/tests` from the repo root fails to collect with ModuleNotFoundError: 'eval'.
+repo_root = Path(__file__).resolve().parent.parent
+if str(repo_root) not in sys.path:
+    sys.path.insert(0, str(repo_root))
+
+backend_path = repo_root / "backend"
 if str(backend_path) not in sys.path:
     sys.path.insert(0, str(backend_path))
 
