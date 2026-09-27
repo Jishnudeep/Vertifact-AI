@@ -48,6 +48,14 @@ class Settings(BaseSettings):
     # Dimension of the embeddings used (384 for MiniLM in dev, 1024 for BGE-M3 in prod)
     embedding_dimension: int = 384
     
+    # Local NLI cross-encoder for source stance (Cross-Ref agent) and claim equivalence
+    # (semantic cache). Spec: docs/superpowers/specs/2026-09-23-prd-tdd-review.md D1.
+    # Apache-2.0, ~0.1B params, CPU. Loaded once in main.py lifespan.
+    nli_model_name: str = "cross-encoder/nli-deberta-v3-small"
+
+    # Token budget per (premise, hypothesis) pair; longer snippets are truncated by the tokenizer.
+    nli_max_length: int = 256
+    
     # Linguistic agent LLM sensationalism flag (Build Order 1.2 default is False: heuristics only)
     enable_llm_sensationalism: bool = False
     

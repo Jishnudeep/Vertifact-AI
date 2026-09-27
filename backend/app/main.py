@@ -10,6 +10,7 @@ from app.config import settings
 from app.services.bias_lookup import load_bias_ratings
 from app.agents.linguistic_agent import get_spacy_nlp
 from app.services.embedding import generate_embedding
+from app.services.nli import get_nli_model
 from app.api.routes import router as api_router, limiter
 from app.agents.orchestrator import InvalidInputError, NonVerifiableClaimError, AllAgentsFailedError
 
@@ -55,6 +56,13 @@ async def lifespan(app: FastAPI):
         generate_embedding("VeriFact AI pipeline warmup embedding.")
     except Exception as exc:
         logger.warning(f"Embedding model preload warning: {exc}")
+        
+    # 4. Preload NLI cross-encoder (source stance + cache equivalence)
+    logger.info("Preloading NLI model...")
+    try:
+        get_nli_model()
+    except Exception as exc:
+        logger.warning(f"NLI model preload warning: {exc}")
         
     logger.info("Startup complete. Pipeline is ready.")
     yield
