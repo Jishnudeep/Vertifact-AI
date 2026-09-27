@@ -199,3 +199,23 @@ class TestDegradationContracts:
         neutral = make_neutral_linguistic(degraded=True, error="NLP load error")
         assert neutral.degraded is True
         assert neutral.b_ling_score == 0.5
+
+
+def test_disputed_claims_never_exceed_cap_without_verdict():
+    """C1 guardrail: when reputable coverage refutes a claim and no definitive verdict exists,
+    no combination of the other inputs may lift C_total above DISPUTED_CAP."""
+    from app.scoring import ScoringEngine
+    from app.scoring.confidence import DISPUTED_CAP
+
+    engine = ScoringEngine()
+    grid = [i / 10 for i in range(11)]
+    for s_fact in grid:
+        for b_ling in grid:
+            for v_consensus in [0.0, 0.1, 0.2, 0.29]:
+                result = engine.compute(
+                    s_fact=s_fact, b_ling=b_ling, v_consensus=v_consensus, v_refute=0.6,
+                    agents_succeeded=3, fact_check_found=False, verdict_found=False,
+                )
+                assert result.c_total <= DISPUTED_CAP, (s_fact, b_ling, v_consensus, result.c_total)
+                assert result.evidence_status == "disputed"
+

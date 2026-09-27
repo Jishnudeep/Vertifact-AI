@@ -193,3 +193,89 @@ def test_verdict_found_without_fact_check_found_is_rejected():
             fact_check_found=False,
             verdict_found=True
         )
+
+
+from app.scoring import determine_evidence_status
+from app.scoring.confidence import DISPUTED_CAP
+
+
+def test_disputed_claim_capped_into_red_band():
+    """Rule 4: refuting reputable coverage and no definitive verdict -> capped at 0.33."""
+    engine = ScoringEngine()
+    # raw = 0.5*0.5 + 0.2*(1-0.0) + 0.3*0.0 = 0.45 -> capped to 0.33
+    result = engine.compute(
+        s_fact=0.5, b_ling=0.0, v_consensus=0.0, v_refute=0.6,
+        agents_succeeded=3, fact_check_found=False, verdict_found=False,
+    )
+    assert result.c_total == DISPUTED_CAP
+    assert result.evidence_status == "disputed"
+    assert "Disputed: reputable sources contradict this claim" in result.warnings
+    # Rule 2's "insufficient sources" warning is suppressed: Rule 4 is the accurate one
+    assert not any(w.startswith("Low confidence") for w in result.warnings)
+    assert result.confidence_level == "medium"
+    assert result.components.v_refute == 0.6
+
+
+def test_definitive_verdict_overrides_dispute():
+    engine = ScoringEngine()
+    # raw = 0.5*1.0 + 0.2*1.0 + 0.3*0.0 = 0.70; no Rule 4 because verdict_found
+    result = engine.compute(
+        s_fact=1.0, b_ling=0.0, v_consensus=0.0, v_refute=0.8,
+        agents_succeeded=3, fact_check_found=True, verdict_found=True,
+    )
+    assert result.c_total == 0.7
+    assert result.evidence_status == "fact_checked"
+    assert not any(w.startswith("Disputed") for w in result.warnings)
+
+
+def test_support_outweighing_refute_is_corroborated_not_disputed():
+    engine = ScoringEngine()
+    result = engine.compute(
+        s_fact=0.5, b_ling=0.2, v_consensus=0.5, v_refute=0.4,
+        agents_succeeded=3, fact_check_found=False, verdict_found=False,
+    )
+    assert result.evidence_status == "corroborated"
+    assert not any(w.startswith("Disputed") for w in result.warnings)
+    # raw = 0.25 + 0.16 + 0.15 = 0.56, no cap applies
+    assert result.c_total == 0.56
+
+
+def test_refute_below_threshold_is_not_disputed():
+    engine = ScoringEngine()
+    result = engine.compute(
+        s_fact=0.5, b_ling=0.2, v_consensus=0.1, v_refute=0.2,
+        agents_succeeded=3, fact_check_found=False, verdict_found=False,
+    )
+    assert result.evidence_status == "unverified"
+    assert "Low confidence: no fact-checks found and insufficient corroborating sources" in result.warnings
+
+
+def test_v_refute_is_clamped():
+    engine = ScoringEngine()
+    result = engine.compute(
+        s_fact=0.5, b_ling=0.0, v_consensus=0.0, v_refute=1.7,
+        agents_succeeded=3,
+    )
+    assert result.components.v_refute == 1.0
+
+
+def test_default_v_refute_keeps_existing_behaviour():
+    """Callers that don't pass v_refute get exactly the pre-C1 result."""
+    engine = ScoringEngine()
+    result = engine.compute(s_fact=0.8, b_ling=0.1, v_consensus=0.7, agents_succeeded=3,
+                            fact_check_found=True, verdict_found=True)
+    assert result.c_total == 0.79
+    assert result.evidence_status == "fact_checked"
+
+
+@pytest.mark.parametrize("fact_check_found,verdict_found,v_consensus,v_refute,expected", [
+    (True,  True,  0.0, 0.9, "fact_checked"),   # definitive verdict wins over everything
+    (True,  False, 0.0, 0.5, "disputed"),       # "Half True" match + refuting coverage
+    (True,  False, 0.0, 0.0, "fact_checked"),   # "Half True" match alone is still a fact-check
+    (False, False, 0.4, 0.0, "corroborated"),
+    (False, False, 0.3, 0.3, "corroborated"),   # tie is not disputed (refute must exceed support)
+    (False, False, 0.29, 0.0, "unverified"),
+    (False, False, 0.0, 0.0, "unverified"),
+])
+def test_determine_evidence_status(fact_check_found, verdict_found, v_consensus, v_refute, expected):
+    assert determine_evidence_status(fact_check_found, verdict_found, v_consensus, v_refute) == expected

@@ -2,13 +2,18 @@ from dataclasses import dataclass
 from typing import List, Dict, Optional
 
 from app.scoring.weights import DEFAULT_W1, DEFAULT_W2, DEFAULT_W3, validate_weights
-from app.scoring.confidence import determine_confidence_level, apply_confidence_capping
+from app.scoring.confidence import (
+    determine_confidence_level,
+    apply_confidence_capping,
+    determine_evidence_status,
+)
 
 @dataclass
 class ScoreComponents:
     s_fact: float
     b_ling: float
     v_consensus: float
+    v_refute: float = 0.0
 
 @dataclass
 class ScoringResult:
@@ -17,6 +22,7 @@ class ScoringResult:
     weights: Dict[str, float]
     confidence_level: str
     warnings: List[str]
+    evidence_status: str = "unverified"
 
 class ScoringEngine:
     """
@@ -41,6 +47,7 @@ class ScoringEngine:
         total_agents: int = 3,
         fact_check_found: bool = False,
         verdict_found: bool = False,
+        v_refute: float = 0.0,
     ) -> ScoringResult:
         """
         Compute trust score, apply capping rules, and classify confidence level.
@@ -54,6 +61,7 @@ class ScoringEngine:
         s_fact_clamped = max(0.0, min(1.0, s_fact))
         b_ling_clamped = max(0.0, min(1.0, b_ling))
         v_consensus_clamped = max(0.0, min(1.0, v_consensus))
+        v_refute_clamped = max(0.0, min(1.0, v_refute))
         
         # Raw composite: w1*s_fact + w2*(1 - b_ling) + w3*v_consensus
         c_total_raw = (
@@ -71,6 +79,7 @@ class ScoringEngine:
             total_agents=total_agents,
             fact_check_found=fact_check_found,
             verdict_found=verdict_found,
+            v_refute=v_refute_clamped,
         )
         
         # Determine confidence level
@@ -81,6 +90,14 @@ class ScoringEngine:
             total_agents=total_agents,
             fact_check_found=fact_check_found,
             verdict_found=verdict_found,
+            v_refute=v_refute_clamped,
+        )
+
+        evidence_status = determine_evidence_status(
+            fact_check_found=fact_check_found,
+            verdict_found=verdict_found,
+            v_consensus=v_consensus_clamped,
+            v_refute=v_refute_clamped,
         )
         
         # Final round and clamp to [0.0, 1.0]
@@ -91,9 +108,11 @@ class ScoringEngine:
             components=ScoreComponents(
                 s_fact=s_fact_clamped,
                 b_ling=b_ling_clamped,
-                v_consensus=v_consensus_clamped
+                v_consensus=v_consensus_clamped,
+                v_refute=v_refute_clamped,
             ),
             weights={"w1": self.w1, "w2": self.w2, "w3": self.w3},
             confidence_level=confidence,
-            warnings=warnings
+            warnings=warnings,
+            evidence_status=evidence_status,
         )
