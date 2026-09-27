@@ -61,6 +61,9 @@ class Settings(BaseSettings):
     cache_ttl_fact_checked_hours: int = 720
     cache_ttl_default_hours: int = 24
     
+    # H1: total wall-clock budget per /api/verify request (PRD §10: < 10 s end-to-end).
+    request_deadline_s: float = 9.5
+    
     # Linguistic agent LLM sensationalism flag (Build Order 1.2 default is False: heuristics only)
     enable_llm_sensationalism: bool = False
     

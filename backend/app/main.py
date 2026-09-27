@@ -1,4 +1,5 @@
 import logging
+import time
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
@@ -87,6 +88,16 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+@app.middleware("http")
+async def process_time_header(request: Request, call_next):
+    """H1 / PRD §10: per-request latency, logged for p95 and returned to the client."""
+    start = time.perf_counter()
+    response = await call_next(request)
+    elapsed_ms = int((time.perf_counter() - start) * 1000)
+    response.headers["X-Process-Time-Ms"] = str(elapsed_ms)
+    logger.info("request_timing path=%s status=%s ms=%d", request.url.path, response.status_code, elapsed_ms)
+    return response
 
 # Custom exception handlers for pipeline errors
 @app.exception_handler(InvalidInputError)

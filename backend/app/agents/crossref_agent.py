@@ -268,19 +268,21 @@ async def _analyze(claim: str) -> CrossRefResult:
         error=None
     )
 
-async def run(claim: str) -> CrossRefResult:
+async def run(claim: str, timeout: Optional[float] = None) -> CrossRefResult:
     """
     Exposes the CrossReferenceAgent interface.
-    Enforces a strict 8-second timeout, falling back to degraded neutral (v_consensus=0.0).
+    Enforces a timeout (default TIMEOUT = 8 s; the orchestrator may pass less to fit its
+    request deadline), falling back to degraded neutral (v_consensus=0.0).
     """
+    budget = TIMEOUT if timeout is None else timeout
     try:
-        return await asyncio.wait_for(_analyze(claim), timeout=TIMEOUT)
+        return await asyncio.wait_for(_analyze(claim), timeout=budget)
     except (asyncio.TimeoutError, TimeoutError) as te:
         logger.warning(f"Cross-Reference Agent timed out on claim: {claim}")
         err_det = classify_provider_error(te, provider="crossref_agent")
         return make_neutral_crossref(
             degraded=True,
-            error="Timeout: Cross-Reference Agent exceeded 8.0s",
+            error=f"Timeout: Cross-Reference Agent exceeded {budget:.1f}s",
             error_details=err_det
         )
     except Exception as exc:

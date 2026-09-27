@@ -533,19 +533,21 @@ async def _analyze(claim: str) -> FactCheckResult:
         error=None
     )
 
-async def run(claim: str) -> FactCheckResult:
+async def run(claim: str, timeout: Optional[float] = None) -> FactCheckResult:
     """
     Exposes the FactCheckLookupAgent interface.
-    Enforces a strict 8-second timeout, falling back to degraded neutral.
+    Enforces a timeout (default TIMEOUT = 8 s; the orchestrator may pass less to fit its
+    request deadline), falling back to degraded neutral.
     """
+    budget = TIMEOUT if timeout is None else timeout
     try:
-        return await asyncio.wait_for(_analyze(claim), timeout=TIMEOUT)
+        return await asyncio.wait_for(_analyze(claim), timeout=budget)
     except (asyncio.TimeoutError, TimeoutError) as te:
         logger.warning(f"Fact-Check Agent timed out on claim: {claim}")
         err_det = classify_provider_error(te, provider="factcheck_agent")
         return make_neutral_factcheck(
             degraded=True,
-            error="Timeout: Fact-Check Agent exceeded 8.0s",
+            error=f"Timeout: Fact-Check Agent exceeded {budget:.1f}s",
             error_details=err_det
         )
     except Exception as exc:

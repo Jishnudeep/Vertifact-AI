@@ -3,6 +3,7 @@ import logging
 import time
 from typing import Dict, Any, List, Optional
 
+from app.config import settings
 from app.utils.validators import sanitize_text, validate_input_length, is_verifiable_claim
 from app.services.embedding import generate_embedding
 from app.services.cache import lookup_cache, insert_cache
@@ -26,6 +27,21 @@ class AllAgentsFailedError(RuntimeError):
     """Raised when all verification agents fail or time out (HTTP 500)."""
     pass
 
+# H1: request deadline plumbing
+AGENT_TIMEOUT_CAP = 8.0        # the per-agent contract (CLAUDE.md §2)
+MIN_AGENT_TIMEOUT = 1.0        # below this an agent cannot do useful work
+PERSIST_RESERVE_S = 1.0        # time kept back for the DB write
+CACHE_LOOKUP_TIMEOUT_S = 1.5   # pgvector round-trip + up to 3 NLI equivalence checks
+PERSIST_MIN_WAIT_S = 0.25
+
+# Persistence tasks that outlived their request; referenced so they are not GC'd mid-write.
+_background_tasks: set = set()
+
+
+def agent_budget(remaining_s: float) -> float:
+    """Per-agent timeout that fits the remaining request budget."""
+    return max(MIN_AGENT_TIMEOUT, min(AGENT_TIMEOUT_CAP, remaining_s - PERSIST_RESERVE_S))
+
 async def verify_claim(raw_input: str, input_type: str = "text", bypass_cache: bool = False) -> Dict[str, Any]:
     """
     Main orchestration pipeline for claim verification:
@@ -41,6 +57,8 @@ async def verify_claim(raw_input: str, input_type: str = "text", bypass_cache: b
     10. Return full structured verification response.
     """
     start_time = time.time()
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + settings.request_deadline_s
     
     # 1. Sanitize input
     cleaned_text = sanitize_text(raw_input)
@@ -60,7 +78,14 @@ async def verify_claim(raw_input: str, input_type: str = "text", bypass_cache: b
 
     # 5. Semantic cache lookup (skip if bypass_cache=True)
     if not bypass_cache:
-        cached = await lookup_cache(embedding, claim_text=cleaned_text, similarity_threshold=0.95)
+        try:
+            cached = await asyncio.wait_for(
+                lookup_cache(embedding, claim_text=cleaned_text, similarity_threshold=0.95),
+                timeout=CACHE_LOOKUP_TIMEOUT_S,
+            )
+        except (asyncio.TimeoutError, TimeoutError):
+            logger.warning("Semantic cache lookup exceeded its budget; treating as a miss.")
+            cached = None
         if cached:
             logger.info(f"Returning cached verification result for: {cleaned_text}")
             elapsed_ms = int((time.time() - start_time) * 1000)
@@ -94,9 +119,10 @@ async def verify_claim(raw_input: str, input_type: str = "text", bypass_cache: b
 
     # 6. Parallel agent dispatch
     logger.info(f"Cache miss/bypass. Dispatching verification workers in parallel for: {cleaned_text}")
-    fc_task = factcheck_agent.run(cleaned_text)
-    cr_task = crossref_agent.run(cleaned_text)
-    ling_task = linguistic_agent.run(cleaned_text)
+    per_agent_timeout = agent_budget(deadline - loop.time())
+    fc_task = factcheck_agent.run(cleaned_text, timeout=per_agent_timeout)
+    cr_task = crossref_agent.run(cleaned_text, timeout=per_agent_timeout)
+    ling_task = linguistic_agent.run(cleaned_text, timeout=per_agent_timeout)
     
     results = await asyncio.gather(
         fc_task, cr_task, ling_task, return_exceptions=True
@@ -211,9 +237,9 @@ async def verify_claim(raw_input: str, input_type: str = "text", bypass_cache: b
     claim_id: Optional[str] = None
     if not bypass_cache:
         try:
-            claim_id = await insert_cache(
+            persist_task = asyncio.create_task(insert_cache(
                 input_type=input_type,
-                raw_input=raw_input,
+                raw_input=cleaned_text,  # H4: never persist unsanitized input
                 extracted_claim=cleaned_text,
                 embedding=embedding,
                 c_total=scoring_res.c_total,
@@ -252,7 +278,17 @@ async def verify_claim(raw_input: str, input_type: str = "text", bypass_cache: b
                 warnings=enriched_warnings,
                 v_refute=scoring_res.components.v_refute,
                 evidence_status=scoring_res.evidence_status,
-            )
+            ))
+            try:
+                claim_id = await asyncio.wait_for(
+                    asyncio.shield(persist_task),
+                    timeout=max(PERSIST_MIN_WAIT_S, deadline - loop.time()),
+                )
+            except (asyncio.TimeoutError, TimeoutError):
+                logger.warning("Persistence exceeded the request deadline; returning without an id (write continues).")
+                _background_tasks.add(persist_task)
+                persist_task.add_done_callback(_background_tasks.discard)
+                claim_id = None
         except Exception as exc:
             logger.warning(f"Failed to persist result to database: {exc}")
 
