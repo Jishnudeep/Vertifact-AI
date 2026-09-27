@@ -74,6 +74,9 @@ class Settings(BaseSettings):
     # 0 = trust nothing (local dev); 1 = one platform proxy (Render/Railway/Fly).
     trusted_proxy_hops: int = 0
     
+    # H4: claims/results older than this are deleted by purge_old_claims (migration 05).
+    retention_days: int = 90
+    
     # Linguistic agent LLM sensationalism flag (Build Order 1.2 default is False: heuristics only)
     enable_llm_sensationalism: bool = False
     
