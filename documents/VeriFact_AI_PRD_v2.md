@@ -160,16 +160,33 @@ Where all weights satisfy Σwi = 1.0 and w1 ≥ 0.4 (fact-check match is always 
 - Note: (1 - B_ling) is used in C_total, so calm factual language increases the score
 
 **V_consensus (Cross-Source Validation Density) — Range: 0.0 to 1.0**
-- Based on how many reputable outlets corroborate the claim
-- 0.0 = No corroborating sources found
-- 0.5 = 1-2 sources with partial corroboration
-- 1.0 = 5+ independent reputable sources with strong semantic alignment
+- Counts only reputable sources whose text *supports* the claim, as judged by a local NLI
+  model (premise = article title + snippet, hypothesis = claim; probability ≥ 0.6)
+- Each supporting reputable source adds its search relevance; 5 fully relevant supporting sources = 1.0
+- 0.0 = no supporting reputable source (coverage that refutes or merely mentions the claim adds nothing)
+- Fact-check sites (the claim-review domains) are excluded: they are the Fact-Check agent's evidence
+
+**V_refute (Refutation Density) — Range: 0.0 to 1.0** — not part of the weighted sum
+- Same computation over reputable sources whose text *contradicts* the claim
+- Used only by capping Rule 4 and the evidence status
 
 ### Confidence Capping Rules
 
 - If S_fact = 0.5 (no fact-check found) AND V_consensus < 0.3: Cap C_total at 0.55 and display "Low Confidence — Insufficient Sources" warning
 - If only 1 agent returns results (others timeout/fail): Cap C_total at 0.5 and display "Partial Analysis" warning
 - If input is detected as opinion/question (not factual claim): Return no score, display "This doesn't appear to be a verifiable factual claim"
+- If reputable coverage refutes the claim (V_refute ≥ 0.3 and V_refute > V_consensus) and no definitive fact-check verdict exists: Cap C_total at 0.33 and display "Disputed: reputable sources contradict this claim"
+
+### Evidence Status
+
+Every result carries one of:
+
+| Status | Meaning | UI |
+|--------|---------|----|
+| `fact_checked` | A fact-check review matched (definitive or not) | Gauge + verdict |
+| `disputed` | Reputable coverage refutes the claim; no definitive verdict | Red gauge + "Disputed" |
+| `corroborated` | No fact-check; supporting reputable coverage (V_consensus ≥ 0.3) | Gauge |
+| `unverified` | None of the above | "Not enough evidence" in place of the gauge value |
 
 ---
 
@@ -196,6 +213,8 @@ results {
   s_fact: FLOAT
   b_ling: FLOAT
   v_consensus: FLOAT
+  v_refute: FLOAT
+  evidence_status: ENUM('fact_checked', 'disputed', 'corroborated', 'unverified')
   weights: JSONB  -- {w1: 0.5, w2: 0.2, w3: 0.3}
   confidence_level: ENUM('high', 'medium', 'low', 'insufficient')
   agent_outputs: JSONB  -- raw outputs from each agent

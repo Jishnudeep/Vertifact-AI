@@ -193,12 +193,14 @@ For URL input:
     "s_fact": 0.75,
     "b_ling": 0.22,
     "v_consensus": 0.68,
+    "v_refute": 0.0,
     "weights": { "w1": 0.50, "w2": 0.20, "w3": 0.30 }
   },
   "confidence": {
     "level": "high",
     "warnings": [],
-    "verdict_found": true
+    "verdict_found": true,
+    "evidence_status": "fact_checked"
   },
   "linguistic_profile": {
     "clickbait_syntax": 0.15,
@@ -220,7 +222,8 @@ For URL input:
       "title": "Mars water discovery confirmed by NASA scientists",
       "publisher": "Reuters",
       "bias_label": "Center",
-      "type": "corroborating"
+      "type": "corroborating",
+      "stance": "supports"
     }
   ],
   "processing_time_ms": 7420,
@@ -230,6 +233,9 @@ For URL input:
 
 `confidence.verdict_found` is `true` only when a DEFINITIVE verdict was matched from a recognized
 claim-review domain (see §7). It is the flag that gates `level: "high"`.
+
+`confidence.evidence_status` is defined in PRD §6 'Evidence Status'. `sources[].stance` is
+`supports`/`refutes`/`neutral` for corroborating sources and `null` for fact-check sources.
 
 **Request size limits (two distinct layers):**
 
@@ -367,9 +373,10 @@ RATING_MAP = {
 @dataclass
 class CrossRefResult:
     entities_extracted: list[str]   # People, organizations, locations
-    sources_found: list[dict]       # {url, title, publisher, bias_label, relevance_score}
+    sources_found: list[dict]       # {url, title, publisher, bias_label, relevance_score, stance, stance_confidence}
     coverage_distribution: dict     # {"Left": 2, "Center": 5, "Right": 1}
     v_consensus_score: float        # 0.0 to 1.0 (0.0 when no sources or degraded)
+    v_refute_score: float = 0.0     # 0.0 to 1.0, refuting reputable coverage
     degraded: bool = False          # True on timeout, or when EVERY search failed (evidence-API outage)
     error: Optional[str] = None
 ```
@@ -380,19 +387,21 @@ class CrossRefResult:
 3. Call Tavily with each query (parallel async calls)
 4. Deduplicate results by domain
 5. For each source URL, look up domain in `bias_ratings` table
-6. Compute V_consensus:
-   - Count unique reputable domains (domains rated in the AllSides DB, or the institutional/primary
-     allowlist: `.gov`, `.edu`, `who.int`, `nasa.gov`). Wire services (`reuters.com`, `apnews.com`,
-     `bbc.com`) are deliberately **not** in the explicit allowlist — they are AllSides-rated, so the
-     first clause already covers them; listing them twice hid the distinction.
-   - Weight by relevance score (how closely the article matches the claim)
-   - Normalize to 0-1 range: `min(reputable_source_count / 5, 1.0)` adjusted by avg relevance
+6. Classify stance for every source with the local NLI cross-encoder
+   (`app/services/nli.py`, `cross-encoder/nli-deberta-v3-small`, loaded once at startup):
+   premise = title + snippet (≤1000 chars), hypothesis = claim. `supports` / `refutes` when
+   that probability ≥ 0.6 and exceeds the other; otherwise `neutral`.
+7. Compute V_consensus / V_refute over reputable sources, excluding claim-review domains:
+   - Reputable = AllSides-rated, or the institutional/primary allowlist (`.gov`, `.edu`, `who.int`).
+   - `v_consensus = min(Σ relevance of supporting sources / 5, 1.0)`
+   - `v_refute = min(Σ relevance of refuting sources / 5, 1.0)`
 
 **Degradation (CLAUDE.md §4.3):** a search returning zero results means "no corroboration found"
 (`degraded=False`). A search that could **not run** — every Tavily query raising `EvidenceAPIError`
 (non-200/HTTP failure) — is an outage: the agent returns the neutral result with `degraded=True`, so
 Rule 1 caps the score and the response carries the "Partial analysis" warning. The same split applies
-to the Fact-Check agent across both of its evidence layers.
+to the Fact-Check agent across both of its evidence layers. If the NLI model fails, the agent returns the neutral
+result with `degraded=True`. It never falls back to counting coverage.
 
 ### 4.4 Linguistic Analysis Agent
 
@@ -472,6 +481,9 @@ CREATE TABLE results (
     s_fact FLOAT NOT NULL,
     b_ling FLOAT NOT NULL,
     v_consensus FLOAT NOT NULL,
+    v_refute FLOAT NOT NULL DEFAULT 0,
+    evidence_status VARCHAR(20)
+        CHECK (evidence_status IN ('fact_checked', 'disputed', 'corroborated', 'unverified')),
     weights JSONB NOT NULL DEFAULT '{"w1": 0.5, "w2": 0.2, "w3": 0.3}',
     confidence_level VARCHAR(15) NOT NULL
         CHECK (confidence_level IN ('high', 'medium', 'low', 'insufficient')),
@@ -546,27 +558,130 @@ LIMIT 1;
 
 ```python
 from dataclasses import dataclass
-from typing import Optional
+from typing import List, Dict, Tuple, Optional
+
+# Stance-aware thresholds (C1 / D2)
+CORROBORATED_MIN = 0.3      # v_consensus at/above this counts as real corroboration
+DISPUTED_REFUTE_MIN = 0.3   # v_refute at/above this, AND above v_consensus, marks a claim disputed
+DISPUTED_CAP = 0.33         # top of the red gauge band (TDD §9.1: 0-33 = likely false)
+
+EVIDENCE_STATUSES = ("fact_checked", "disputed", "corroborated", "unverified")
+
+
+def is_disputed(v_consensus: float, v_refute: float, verdict_found: bool) -> bool:
+    """Reputable coverage predominantly refutes the claim and no definitive verdict overrides it."""
+    return (not verdict_found) and v_refute >= DISPUTED_REFUTE_MIN and v_refute > v_consensus
+
+
+def determine_evidence_status(
+    fact_check_found: bool,
+    verdict_found: bool,
+    v_consensus: float,
+    v_refute: float,
+) -> str:
+    """
+    Classify what kind of evidence backs the score (D2). The UI shows "Not enough evidence"
+    instead of a gauge value when the status is "unverified".
+    - fact_checked: a definitive verdict, or any matched review not contradicted by coverage
+    - disputed:     reputable coverage refutes the claim and no definitive verdict exists
+    - corroborated: no fact-check, but supporting reputable coverage >= CORROBORATED_MIN
+    - unverified:   none of the above
+    """
+    if verdict_found:
+        return "fact_checked"
+    if is_disputed(v_consensus, v_refute, verdict_found):
+        return "disputed"
+    if fact_check_found:
+        return "fact_checked"
+    if v_consensus >= CORROBORATED_MIN:
+        return "corroborated"
+    return "unverified"
+
+
+def determine_confidence_level(
+    agents_succeeded: int,
+    s_fact: float,
+    v_consensus: float,
+    total_agents: int = 3,
+    fact_check_found: bool = False,
+    verdict_found: bool = False,
+    v_refute: float = 0.0,
+) -> str:
+    if agents_succeeded == total_agents and verdict_found:
+        return "high"
+    elif agents_succeeded >= 2 and (
+        v_consensus >= CORROBORATED_MIN
+        or v_refute >= DISPUTED_REFUTE_MIN
+        or fact_check_found
+        or verdict_found
+    ):
+        return "medium"
+    elif agents_succeeded >= 1:
+        return "low"
+    else:
+        return "insufficient"
+
+
+def apply_confidence_capping(
+    c_total: float,
+    s_fact: float,
+    v_consensus: float,
+    agents_succeeded: int,
+    total_agents: int = 3,
+    fact_check_found: bool = False,
+    verdict_found: bool = False,
+    v_refute: float = 0.0,
+) -> Tuple[float, List[str]]:
+    warnings = []
+    disputed = is_disputed(v_consensus, v_refute, verdict_found)
+
+    # Rule 1: Partial analysis cap
+    if agents_succeeded < total_agents:
+        c_total = min(c_total, 0.50)
+        warnings.append(f"Partial analysis: {agents_succeeded}/{total_agents} agents succeeded")
+
+    # Rule 2: Low confidence cap (no fact check found and low consensus). Skipped when
+    # disputed: Rule 4's cap is stricter and its warning is the accurate one.
+    if not fact_check_found and v_consensus < CORROBORATED_MIN and not disputed:
+        c_total = min(c_total, 0.55)
+        warnings.append("Low confidence: no fact-checks found and insufficient corroborating sources")
+
+    # Rule 3: Confirmed False Verdict Dominance Cap
+    if verdict_found and s_fact <= 0.25:
+        c_total = min(c_total, s_fact + 0.15)
+        c_total = min(c_total, 0.25)
+
+    # Rule 4: Disputed cap (C1). Refuting reputable coverage must pull the claim into the red band
+    if disputed:
+        c_total = min(c_total, DISPUTED_CAP)
+        warnings.append("Disputed: reputable sources contradict this claim")
+
+    return c_total, warnings
+
 
 @dataclass
 class ScoreComponents:
     s_fact: float
     b_ling: float
     v_consensus: float
+    v_refute: float = 0.0
 
 @dataclass
 class ScoringResult:
     c_total: float
     components: ScoreComponents
-    weights: dict
+    weights: Dict[str, float]
     confidence_level: str
-    warnings: list[str]
+    warnings: List[str]
+    evidence_status: str = "unverified"
 
 class ScoringEngine:
-    def __init__(self, w1=0.50, w2=0.20, w3=0.30):
+    def __init__(self, w1: float = 0.50, w2: float = 0.20, w3: float = 0.30):
         assert abs(w1 + w2 + w3 - 1.0) < 1e-6, "Weights must sum to 1.0"
         assert w1 >= 0.4, "Fact-check weight must be dominant (≥0.4)"
-        self.w1, self.w2, self.w3 = w1, w2, w3
+        self.w1 = w1
+        self.w2 = w2
+        self.w3 = w3
 
     def compute(
         self,
@@ -575,65 +690,68 @@ class ScoringEngine:
         v_consensus: float,
         agents_succeeded: int,
         total_agents: int = 3,
-        # `fact_check_found` (== FactCheckResult.matched_review): a review was matched,
-        # INCLUDING "Half True" / "Unproven". Passed explicitly rather than inferred from
-        # `s_fact == 0.5`, because those verdicts also map to exactly 0.5 and must NOT
-        # trigger the no-fact-check cap (Rule 2).
         fact_check_found: bool = False,
-        # `verdict_found` (== FactCheckResult.verdict_found): a DEFINITIVE verdict
-        # (true / mostly true / mostly false / false) from a recognized claim-review
-        # domain. Gates `high` confidence and the Rule-3 dominance cap: only a definitive
-        # verdict may license top confidence or override corroborating coverage.
-        # Invariant: verdict_found=True implies fact_check_found=True.
         verdict_found: bool = False,
+        v_refute: float = 0.0,
     ) -> ScoringResult:
-        assert not (verdict_found and not fact_check_found), \
-            "verdict_found implies fact_check_found"
-        warnings = []
+        assert not (verdict_found and not fact_check_found), "verdict_found implies fact_check_found"
+
+        s_fact_clamped = max(0.0, min(1.0, s_fact))
+        b_ling_clamped = max(0.0, min(1.0, b_ling))
+        v_consensus_clamped = max(0.0, min(1.0, v_consensus))
+        v_refute_clamped = max(0.0, min(1.0, v_refute))
 
         # Raw composite
-        c_total = (
-            self.w1 * s_fact
-            + self.w2 * (1 - b_ling)
-            + self.w3 * v_consensus
+        c_total_raw = (
+            self.w1 * s_fact_clamped
+            + self.w2 * (1.0 - b_ling_clamped)
+            + self.w3 * v_consensus_clamped
         )
 
-        # Confidence capping
-        if agents_succeeded < total_agents:
-            c_total = min(c_total, 0.50)
-            warnings.append(f"Partial analysis: {agents_succeeded}/{total_agents} agents succeeded")
+        # Apply confidence capping rules
+        c_total_capped, warnings = apply_confidence_capping(
+            c_total=c_total_raw,
+            s_fact=s_fact_clamped,
+            v_consensus=v_consensus_clamped,
+            agents_succeeded=agents_succeeded,
+            total_agents=total_agents,
+            fact_check_found=fact_check_found,
+            verdict_found=verdict_found,
+            v_refute=v_refute_clamped,
+        )
 
-        if not fact_check_found and v_consensus < 0.3:
-            c_total = min(c_total, 0.55)
-            warnings.append("Low confidence: no fact-checks found and insufficient corroborating sources")
+        # Determine confidence level
+        confidence = determine_confidence_level(
+            agents_succeeded=agents_succeeded,
+            s_fact=s_fact_clamped,
+            v_consensus=v_consensus_clamped,
+            total_agents=total_agents,
+            fact_check_found=fact_check_found,
+            verdict_found=verdict_found,
+            v_refute=v_refute_clamped,
+        )
 
-        # Rule 3 (dominance cap) keys on the DEFINITIVE flag: topical news coverage must not
-        # inflate a claim a claim-review authority already rated false.
-        if verdict_found and s_fact <= 0.25:
-            c_total = min(c_total, s_fact + 0.15)
-            c_total = min(c_total, 0.25)
+        evidence_status = determine_evidence_status(
+            fact_check_found=fact_check_found,
+            verdict_found=verdict_found,
+            v_consensus=v_consensus_clamped,
+            v_refute=v_refute_clamped,
+        )
 
-        # Determine confidence level. `high` keys on verdict_found (a definitive verdict),
-        # while Rule 2 above keys on fact_check_found (any matched review): a "Half True"
-        # match is real evidence — enough to suppress the no-fact-check cap — but never
-        # enough to claim high confidence.
-        if agents_succeeded == total_agents and verdict_found:
-            confidence = "high"
-        elif agents_succeeded >= 2 and (v_consensus >= 0.3 or fact_check_found or verdict_found):
-            confidence = "medium"
-        elif agents_succeeded >= 1:
-            confidence = "low"
-        else:
-            confidence = "insufficient"
-
-        c_total = round(max(0.0, min(1.0, c_total)), 3)
+        c_total_final = round(max(0.0, min(1.0, c_total_capped)), 3)
 
         return ScoringResult(
-            c_total=c_total,
-            components=ScoreComponents(s_fact, b_ling, v_consensus),
+            c_total=c_total_final,
+            components=ScoreComponents(
+                s_fact=s_fact_clamped,
+                b_ling=b_ling_clamped,
+                v_consensus=v_consensus_clamped,
+                v_refute=v_refute_clamped,
+            ),
             weights={"w1": self.w1, "w2": self.w2, "w3": self.w3},
             confidence_level=confidence,
             warnings=warnings,
+            evidence_status=evidence_status,
         )
 ```
 
@@ -735,6 +853,8 @@ Semi-circular gauge from 0 to 100. Color transitions:
 Needle animated with CSS `transition: transform 1.2s ease-out`.
 
 Score displayed as large centered number. Confidence badge shown below.
+
+When `confidence.evidence_status == "unverified"`, render 'Not enough evidence' in place of the numeric score and needle, and keep the confidence badge and warnings. When it is `disputed`, show a 'Disputed' chip under the gauge. Source cards show a stance chip (Supports / Refutes / Neutral).
 
 ### 9.2 Linguistic Volatility Radar (Recharts)
 
