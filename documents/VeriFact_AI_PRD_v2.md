@@ -71,7 +71,7 @@ VeriFact AI solves a specific problem: **a user encounters a suspicious claim on
 | ID | Feature | Priority |
 |----|---------|----------|
 | P1-01 | FastAPI backend with health check and input validation | P0 |
-| P1-02 | ADK orchestrator agent with LiteLLM integration (Llama 3.1 via Groq/Ollama) | P0 |
+| P1-02 | ADK orchestrator agent with LiteLLM integration (`groq/openai/gpt-oss-20b` via Groq; see §"Technology" — Groq no longer serves a Llama chat model on our key, verified 2026-09-10) | P0 |
 | P1-03 | Fact-Check Lookup Agent (Google Fact Check Tools API + Tavily web search) | P0 |
 | P1-04 | Cross-Reference Agent (entity extraction via spaCy, source corroboration via search) | P0 |
 | P1-05 | Linguistic Analysis Agent (VADER sentiment + HuggingFace sensationalism classifier) | P1 |
@@ -121,7 +121,7 @@ VeriFact AI solves a specific problem: **a user encounters a suspicious claim on
 | Visualization | Recharts | SVG-based, React-native, touch-responsive |
 | Backend | FastAPI (Python 3.11+) | Native async, type hints, auto-docs |
 | Agent Framework | Google ADK + LiteLLM | Model-agnostic orchestration, hub-and-spoke parallelism |
-| LLM (Dev) | Llama 3.1 8B via Groq (free tier) | Fast inference, zero cost during development |
+| LLM (Dev) | `groq/openai/gpt-oss-20b` via Groq (free tier) | Fast inference, zero cost during development. Verified 2026-09-10: `llama-3.1-8b-instant` and `llama-3.3-70b-versatile` both 404 `model_not_found` on our key, which serves no Llama chat model; gpt-oss-20b is the smallest served OSS instruct model that reliably emits strict JSON |
 | LLM (Prod) | Qwen3-30B-A3B or Llama 3.1 70B via vLLM | Higher quality for demo/production |
 | OCR | Surya | PyTorch-native, transformer-based, reading-order aware |
 | Embeddings | BGE-M3 via sentence-transformers | Hybrid retrieval (dense + sparse), multilingual |

@@ -30,7 +30,7 @@ ADK supports open-source models via **LiteLLM** integration. You can serve model
 | **Mistral 7B / Mixtral 8x7B** | 7B / 46.7B (MoE) | Excellent instruction following. Mixtral gives near-70B quality at MoE efficiency. | Smaller community ecosystem than Llama. |
 | **Gemma 2 9B / 27B** | 9B or 27B | Google's open model, natural fit with ADK. Strong on reasoning benchmarks for its size. | Still Google ecosystem (if you're trying to diversify). |
 
-**Verdict:** Use **Llama 3.1 8B** for development/testing (runs on consumer GPU, well-documented ADK integration). For production/demo quality, serve **Qwen3-30B-A3B** or **Llama 3.1 70B** via vLLM. The key is that your ADK agents are model-agnostic via LiteLLM, so you can swap without code changes.
+**Verdict:** Use **`groq/openai/gpt-oss-20b`** (hosted Groq free tier) for development/testing. This supersedes the original "Llama 3.1 8B" pick: verified 2026-09-10, Groq returns `404 model_not_found` for both `llama-3.1-8b-instant` and `llama-3.3-70b-versatile` on our key, and `GET /openai/v1/models` lists no Llama chat model at all — gpt-oss-20b is the smallest served OSS instruct model that reliably emits the strict JSON our agents parse (it is a reasoning model, hence `max_tokens=1024`). For production/demo quality, serve **Qwen3-30B-A3B** or **Llama 3.1 70B** via vLLM. The key is that your ADK agents are model-agnostic via LiteLLM, so you can swap without code changes.
 
 **ADK + LiteLLM setup pattern:**
 ```python
@@ -120,7 +120,7 @@ This is where the PRD has its biggest practical gap. Here's what actually works:
 Frontend:       Vite + React + Tailwind CSS + Recharts
 Backend:        FastAPI (Python 3.11+)
 Agent Framework: Google ADK + LiteLLM (model-agnostic)
-LLM:            Llama 3.1 8B (dev) / Qwen3-30B-A3B (prod) via Ollama/vLLM
+LLM:            groq/openai/gpt-oss-20b (dev, hosted Groq) / Qwen3-30B-A3B (prod) via vLLM
 OCR:            Surya
 Embeddings:     BGE-M3 (via sentence-transformers)
 Vector Search:  pgvector (via Supabase)

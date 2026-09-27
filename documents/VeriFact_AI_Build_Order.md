@@ -140,7 +140,7 @@ Build each agent independently, test it independently, then wire them together. 
 **Depends on:** Steps 1.1-1.5 (all agents + scoring + cache)
 
 1. Install `google-adk`, `litellm`
-2. Configure ADK with LiteLLM pointing to Groq (Llama 3.1 8B)
+2. Configure ADK with LiteLLM pointing to Groq (`groq/openai/gpt-oss-20b`, set in `app/config.py`; Groq serves no Llama chat model on our key — verified 2026-09-10)
 3. Implement orchestrator flow:
    - Input → sanitize → embed → cache check
    - Cache miss → parallel dispatch agents via ADK

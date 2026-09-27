@@ -197,7 +197,8 @@ For URL input:
   },
   "confidence": {
     "level": "high",
-    "warnings": []
+    "warnings": [],
+    "verdict_found": true
   },
   "linguistic_profile": {
     "clickbait_syntax": 0.15,
@@ -227,10 +228,22 @@ For URL input:
 }
 ```
 
+`confidence.verdict_found` is `true` only when a DEFINITIVE verdict was matched from a recognized
+claim-review domain (see §7). It is the flag that gates `level: "high"`.
+
+**Request size limits (two distinct layers):**
+
+- The Pydantic request schema caps `input` at `max_length=10000` characters. This is a transport-level
+  DoS ceiling enforced by FastAPI validation, so anything larger is rejected with `422` before the
+  pipeline runs.
+- The business rule (CLAUDE.md §9) caps a claim at **2000 characters**, enforced by
+  `validate_input_length` inside the orchestrator, and surfaced as `400`.
+- Net effect: 2001–10000 chars → `400` ("too long"); >10000 chars → `422` (schema rejection).
+
 **Error Responses:**
 
 - `400` — Invalid input (empty, too long >2000 chars, unsupported format)
-- `422` — Input classified as non-verifiable (opinion, question)
+- `422` — Input classified as non-verifiable (opinion, question), or request body exceeds the 10000-char schema ceiling
 - `429` — Rate limited
 - `500` — All agents failed
 - `503` — LLM provider unavailable
@@ -281,7 +294,10 @@ import litellm
 
 orchestrator = Agent(
     name="verifact_orchestrator",
-    model="groq/llama-3.1-8b-instant",  # via LiteLLM
+    model="groq/openai/gpt-oss-20b",  # via LiteLLM; set in app/config.py, never hardcoded.
+                                      # Verified 2026-09-10: groq/llama-3.1-8b-instant and
+                                      # groq/llama-3.3-70b-versatile both 404 model_not_found.
+                                      # Reasoning model → max_tokens=1024 in adk_helpers.py.
     description="Coordinates fact-checking pipeline",
     sub_agents=[factcheck_agent, crossref_agent, linguistic_agent],
     # ADK handles parallel dispatch natively
@@ -315,6 +331,10 @@ class FactCheckResult:
     all_matches: list[dict]
     s_fact_score: float         # 0.0 to 1.0
     search_queries_used: list[str]
+    matched_review: bool = False  # True when any valid fact-check review was aligned/found
+    verdict_found: bool = False   # True only on definitive verdicts from CLAIMREVIEW_DOMAINS
+    degraded: bool = False
+    error: Optional[str] = None
 ```
 
 **Logic (two layers, fact-checking is the motive at every step):**
@@ -349,7 +369,9 @@ class CrossRefResult:
     entities_extracted: list[str]   # People, organizations, locations
     sources_found: list[dict]       # {url, title, publisher, bias_label, relevance_score}
     coverage_distribution: dict     # {"Left": 2, "Center": 5, "Right": 1}
-    v_consensus_score: float        # 0.0 to 1.0
+    v_consensus_score: float        # 0.0 to 1.0 (0.0 when no sources or degraded)
+    degraded: bool = False          # True on timeout, or when EVERY search failed (evidence-API outage)
+    error: Optional[str] = None
 ```
 
 **Logic:**
@@ -359,9 +381,18 @@ class CrossRefResult:
 4. Deduplicate results by domain
 5. For each source URL, look up domain in `bias_ratings` table
 6. Compute V_consensus:
-   - Count unique reputable domains (domains in AllSides DB or institutional/primary allowlist: `.gov`, `.edu`, `who.int`, `nasa.gov`, `reuters.com`, `apnews.com`)
+   - Count unique reputable domains (domains rated in the AllSides DB, or the institutional/primary
+     allowlist: `.gov`, `.edu`, `who.int`, `nasa.gov`). Wire services (`reuters.com`, `apnews.com`,
+     `bbc.com`) are deliberately **not** in the explicit allowlist — they are AllSides-rated, so the
+     first clause already covers them; listing them twice hid the distinction.
    - Weight by relevance score (how closely the article matches the claim)
    - Normalize to 0-1 range: `min(reputable_source_count / 5, 1.0)` adjusted by avg relevance
+
+**Degradation (CLAUDE.md §4.3):** a search returning zero results means "no corroboration found"
+(`degraded=False`). A search that could **not run** — every Tavily query raising `EvidenceAPIError`
+(non-200/HTTP failure) — is an outage: the agent returns the neutral result with `degraded=True`, so
+Rule 1 caps the score and the response carries the "Partial analysis" warning. The same split applies
+to the Fact-Check agent across both of its evidence layers.
 
 ### 4.4 Linguistic Analysis Agent
 
@@ -544,11 +575,20 @@ class ScoringEngine:
         v_consensus: float,
         agents_succeeded: int,
         total_agents: int = 3,
-        # True when the fact-check agent actually matched a review. Passed explicitly
-        # rather than inferred from `s_fact == 0.5`, because "Half True" / "Unproven"
-        # verdicts also map to exactly 0.5 and must NOT trigger the no-fact-check cap.
+        # `fact_check_found` (== FactCheckResult.matched_review): a review was matched,
+        # INCLUDING "Half True" / "Unproven". Passed explicitly rather than inferred from
+        # `s_fact == 0.5`, because those verdicts also map to exactly 0.5 and must NOT
+        # trigger the no-fact-check cap (Rule 2).
         fact_check_found: bool = False,
+        # `verdict_found` (== FactCheckResult.verdict_found): a DEFINITIVE verdict
+        # (true / mostly true / mostly false / false) from a recognized claim-review
+        # domain. Gates `high` confidence and the Rule-3 dominance cap: only a definitive
+        # verdict may license top confidence or override corroborating coverage.
+        # Invariant: verdict_found=True implies fact_check_found=True.
+        verdict_found: bool = False,
     ) -> ScoringResult:
+        assert not (verdict_found and not fact_check_found), \
+            "verdict_found implies fact_check_found"
         warnings = []
 
         # Raw composite
@@ -567,14 +607,19 @@ class ScoringEngine:
             c_total = min(c_total, 0.55)
             warnings.append("Low confidence: no fact-checks found and insufficient corroborating sources")
 
-        if fact_check_found and s_fact <= 0.25:
+        # Rule 3 (dominance cap) keys on the DEFINITIVE flag: topical news coverage must not
+        # inflate a claim a claim-review authority already rated false.
+        if verdict_found and s_fact <= 0.25:
             c_total = min(c_total, s_fact + 0.15)
             c_total = min(c_total, 0.25)
 
-        # Determine confidence level
-        if agents_succeeded == total_agents and fact_check_found:
+        # Determine confidence level. `high` keys on verdict_found (a definitive verdict),
+        # while Rule 2 above keys on fact_check_found (any matched review): a "Half True"
+        # match is real evidence — enough to suppress the no-fact-check cap — but never
+        # enough to claim high confidence.
+        if agents_succeeded == total_agents and verdict_found:
             confidence = "high"
-        elif agents_succeeded >= 2 and (v_consensus >= 0.3 or fact_check_found):
+        elif agents_succeeded >= 2 and (v_consensus >= 0.3 or fact_check_found or verdict_found):
             confidence = "medium"
         elif agents_succeeded >= 1:
             confidence = "low"
@@ -625,12 +670,20 @@ from tavily import TavilyClient
 
 tavily = TavilyClient(api_key=TAVILY_API_KEY)
 
-# Reputable fact-check / wire-service domains. The Fact-Check agent (§4.2 Layer 2)
-# passes these so Tavily retrieval is biased toward fact-checking, not general web.
+# Broad Tavily retrieval domains for fact checking & news evidence
 FACTCHECK_DOMAINS = [
     "snopes.com", "politifact.com", "factcheck.org", "fullfact.org",
-    "apnews.com", "reuters.com",
+    "leadstories.com", "checkyourfact.com", "healthfeedback.org",
+    "climatefeedback.org", "afp.com", "factcheck.afp.com",
+    "reuters.com", "apnews.com", "usatoday.com"
 ]
+
+# Strict ClaimReview verdict-authority domains (Layer-2 verdict gating)
+CLAIMREVIEW_DOMAINS = {
+    "snopes.com", "politifact.com", "factcheck.org", "fullfact.org",
+    "leadstories.com", "checkyourfact.com", "healthfeedback.org",
+    "climatefeedback.org", "afp.com", "factcheck.afp.com"
+}
 
 async def search_web(
     query: str,
