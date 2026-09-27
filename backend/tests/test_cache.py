@@ -39,7 +39,8 @@ async def test_lookup_cache_offline_hit():
         "claim_id": "test-uuid",
         "extracted_claim": "NASA water Mars",
         "similarity": 0.98,
-        "c_total": 0.85
+        "c_total": 0.85,
+        "evidence_status": "fact_checked"
     }]
     mock_response = MagicMock()
     mock_response.data = mock_data
@@ -181,7 +182,8 @@ async def test_lookup_cache_offline_hit_missing_similarity():
         "claim_id": "test-uuid",
         "extracted_claim": "NASA water Mars",
         "similarity": None,
-        "c_total": 0.85
+        "c_total": 0.85,
+        "evidence_status": "fact_checked"
     }]
     mock_response = MagicMock()
     mock_response.data = mock_data
@@ -255,4 +257,42 @@ async def test_insert_cache_persists_warnings():
         results_insert_call = mock_supabase.table.return_value.insert.call_args_list[1]
         inserted_result_dict = results_insert_call[0][0]
         assert inserted_result_dict["warnings"] == ["Low confidence: no fact-checks found"]
+
+
+@pytest.mark.anyio
+async def test_lookup_cache_legacy_row_without_evidence_status_is_miss():
+    """Rows scored before stance-aware consensus (evidence_status NULL) must not be served (C1)."""
+    mock_response = MagicMock()
+    mock_response.data = [{
+        "claim_id": "legacy-uuid",
+        "similarity": 0.99,
+        "confidence_level": "high",
+        "evidence_status": None,
+    }]
+    mock_supabase = MagicMock()
+    mock_supabase.rpc.return_value.execute.return_value = mock_response
+
+    with patch("app.services.cache.get_supabase", return_value=mock_supabase):
+        assert await lookup_cache([0.1] * 384, similarity_threshold=0.95) is None
+
+
+@pytest.mark.anyio
+async def test_insert_cache_persists_refute_and_evidence_status():
+    mock_supabase = MagicMock()
+    mock_supabase.table.return_value.insert.return_value.execute.side_effect = [
+        MagicMock(data=[{"id": "claim-1"}]),
+        MagicMock(data=[{"id": "result-1"}]),
+    ]
+    with patch("app.services.cache.get_supabase", return_value=mock_supabase):
+        claim_id = await insert_cache(
+            input_type="text", raw_input="c", extracted_claim="c", embedding=[0.1] * 384,
+            c_total=0.33, s_fact=0.5, b_ling=0.0, v_consensus=0.0,
+            weights={"w1": 0.5, "w2": 0.2, "w3": 0.3}, confidence_level="medium",
+            agent_outputs={}, source_citations=[], linguistic_profile={}, processing_time_ms=10,
+            warnings=[], v_refute=0.6, evidence_status="disputed",
+        )
+    assert claim_id == "claim-1"
+    result_row = mock_supabase.table.return_value.insert.call_args_list[1][0][0]
+    assert result_row["v_refute"] == 0.6
+    assert result_row["evidence_status"] == "disputed"
 

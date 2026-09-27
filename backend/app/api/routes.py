@@ -84,12 +84,17 @@ async def get_result_endpoint(request: Request, result_id: str):
                 "s_fact": row.get("s_fact"),
                 "b_ling": row.get("b_ling"),
                 "v_consensus": row.get("v_consensus"),
+                "v_refute": row.get("v_refute") or 0.0,
                 "weights": row.get("weights") or {"w1": 0.5, "w2": 0.2, "w3": 0.3}
             },
             "confidence": {
                 "level": row.get("confidence_level"),
-                "warnings": row.get("warnings") or [],
-                "verdict_found": row.get("confidence_level") == "high"
+                "warnings": (row.get("warnings") or []) + (
+                    [] if row.get("evidence_status")
+                    else ["Legacy result: scored before stance-aware consensus; treat corroboration as unverified"]
+                ),
+                "verdict_found": row.get("confidence_level") == "high",
+                "evidence_status": row.get("evidence_status") or "unverified",
             },
             "linguistic_profile": row.get("linguistic_profile") or {
                 "clickbait_syntax": 0.0,

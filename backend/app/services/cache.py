@@ -38,6 +38,12 @@ async def lookup_cache(
                 logger.info(f"Semantic match found but confidence is '{conf}'. Treating as cache miss.")
                 return None
 
+            # C1: rows scored before stance-aware consensus have no evidence_status. Their
+            # V_consensus counted refuting coverage as support, so they must never be served.
+            if not match_data.get("evidence_status"):
+                logger.info("Semantic match predates stance-aware scoring (no evidence_status). Treating as cache miss.")
+                return None
+
             similarity = match_data.get("similarity")
             # Ensure warnings is always a list
             if "warnings" not in match_data or match_data["warnings"] is None:
@@ -70,7 +76,9 @@ async def insert_cache(
     source_citations: List[Dict[str, Any]],
     linguistic_profile: Dict[str, Any],
     processing_time_ms: int,
-    warnings: Optional[List[str]] = None
+    warnings: Optional[List[str]] = None,
+    v_refute: float = 0.0,
+    evidence_status: Optional[str] = None,
 ) -> Optional[str]:
     """
     Insert a verified claim and its results into Supabase.
@@ -111,6 +119,8 @@ async def insert_cache(
             "s_fact": s_fact,
             "b_ling": b_ling,
             "v_consensus": v_consensus,
+            "v_refute": v_refute,
+            "evidence_status": evidence_status,
             "weights": weights,
             "confidence_level": confidence_level,
             "agent_outputs": agent_outputs,

@@ -72,12 +72,14 @@ async def verify_claim(raw_input: str, input_type: str = "text", bypass_cache: b
                     "s_fact": cached.get("s_fact"),
                     "b_ling": cached.get("b_ling"),
                     "v_consensus": cached.get("v_consensus"),
+                    "v_refute": cached.get("v_refute") or 0.0,
                     "weights": cached.get("weights") or {"w1": 0.50, "w2": 0.20, "w3": 0.30}
                 },
                 "confidence": {
                     "level": cached.get("confidence_level"),
                     "warnings": cached.get("warnings") or [],
-                    "verdict_found": cached.get("confidence_level") == "high"
+                    "verdict_found": cached.get("confidence_level") == "high",
+                    "evidence_status": cached.get("evidence_status"),
                 },
                 "linguistic_profile": cached.get("linguistic_profile") or {
                     "clickbait_syntax": 0.0,
@@ -151,6 +153,7 @@ async def verify_claim(raw_input: str, input_type: str = "text", bypass_cache: b
         total_agents=3,
         fact_check_found=fact_check_found,
         verdict_found=verdict_found,
+        v_refute=cr_res.v_refute_score,
     )
 
     # Enrich warnings with transparent provider degradation reasons
@@ -178,7 +181,8 @@ async def verify_claim(raw_input: str, input_type: str = "text", bypass_cache: b
             "publisher": m.get("publisher") or "Fact-Checker",
             "rating": m.get("rating"),
             "bias_label": bias,
-            "type": src_type
+            "type": src_type,
+            "stance": None
         })
         
     # Add corroborating sources
@@ -189,7 +193,8 @@ async def verify_claim(raw_input: str, input_type: str = "text", bypass_cache: b
             "publisher": s.get("publisher") or "News Outlet",
             "rating": None,
             "bias_label": s.get("bias_label") or "Unrated",
-            "type": "corroborating"
+            "type": "corroborating",
+            "stance": s.get("stance")
         })
 
     # Linguistic profile
@@ -228,6 +233,7 @@ async def verify_claim(raw_input: str, input_type: str = "text", bypass_cache: b
                     "crossref": {
                         "entities_extracted": cr_res.entities_extracted,
                         "v_consensus_score": cr_res.v_consensus_score,
+                        "v_refute_score": cr_res.v_refute_score,
                         "degraded": cr_res.degraded,
                         "error": cr_res.error,
                         "error_details": cr_res.error_details.to_dict() if getattr(cr_res, "error_details", None) else None,
@@ -243,7 +249,9 @@ async def verify_claim(raw_input: str, input_type: str = "text", bypass_cache: b
                 source_citations=sources,
                 linguistic_profile=linguistic_profile,
                 processing_time_ms=elapsed_ms,
-                warnings=enriched_warnings
+                warnings=enriched_warnings,
+                v_refute=scoring_res.components.v_refute,
+                evidence_status=scoring_res.evidence_status,
             )
         except Exception as exc:
             logger.warning(f"Failed to persist result to database: {exc}")
@@ -256,12 +264,14 @@ async def verify_claim(raw_input: str, input_type: str = "text", bypass_cache: b
             "s_fact": scoring_res.components.s_fact,
             "b_ling": scoring_res.components.b_ling,
             "v_consensus": scoring_res.components.v_consensus,
+            "v_refute": scoring_res.components.v_refute,
             "weights": scoring_res.weights
         },
         "confidence": {
             "level": scoring_res.confidence_level,
             "warnings": enriched_warnings,
-            "verdict_found": verdict_found
+            "verdict_found": verdict_found,
+            "evidence_status": scoring_res.evidence_status,
         },
         "linguistic_profile": linguistic_profile,
         "sources": sources,

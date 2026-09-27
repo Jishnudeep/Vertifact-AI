@@ -25,6 +25,8 @@ async def test_verify_claim_cache_hit():
         "confidence_level": "high",
         "warnings": [],
         "weights": {"w1": 0.5, "w2": 0.2, "w3": 0.3},
+        "evidence_status": "fact_checked",
+        "v_refute": 0.0,
         "source_citations": [{"url": "https://snopes.com", "publisher": "Snopes", "type": "fact_check"}],
         "linguistic_profile": {"clickbait_syntax": 0.0, "sensationalism": 0.0, "emotional_framing": 0.1, "informational_density": 0.9}
     }
@@ -41,6 +43,8 @@ async def test_verify_claim_cache_hit():
         assert result["id"] == "cached-uuid-123"
         assert result["trust_score"]["c_total"] == 0.95
         assert result["confidence"]["level"] == "high"
+        assert result["confidence"]["evidence_status"] == "fact_checked"
+        assert result["trust_score"]["v_refute"] == 0.0
 
 @pytest.mark.anyio
 async def test_verify_claim_cache_miss_pipeline_success():
@@ -86,6 +90,9 @@ async def test_verify_claim_cache_miss_pipeline_success():
         assert result["trust_score"]["c_total"] > 0.8
         assert len(result["sources"]) == 2
         assert mock_insert.called
+        assert result["confidence"]["evidence_status"] == "fact_checked"
+        assert result["trust_score"]["v_refute"] == 0.0
+        assert mock_insert.call_args.kwargs["evidence_status"] == "fact_checked"
 
 @pytest.mark.anyio
 async def test_verify_claim_all_agents_fail_raises_error():
@@ -228,3 +235,42 @@ async def test_verify_claim_bypass_cache():
         assert not mock_lookup.called
         assert result["cached"] is False
         assert not mock_insert.called
+
+
+@pytest.mark.anyio
+async def test_disputed_claim_pipeline():
+    """C1 end-to-end: refuting reputable coverage and no fact-check -> red band, 'disputed'."""
+    mock_fc = make_neutral_factcheck(degraded=False)
+    mock_cr = CrossRefResult(
+        entities_extracted=["flu"],
+        sources_found=[{
+            "url": "https://www.reuters.com/fact/x", "title": "Claim is false", "publisher": "Reuters",
+            "bias_label": "Center", "relevance_score": 0.9, "stance": "refutes", "stance_confidence": 0.93,
+        }],
+        coverage_distribution={"Left": 0, "Lean Left": 0, "Center": 1, "Lean Right": 0, "Right": 0},
+        v_consensus_score=0.0,
+        v_refute_score=0.6,
+        degraded=False,
+    )
+    mock_ling = LinguisticResult(
+        clickbait_syntax=0.0, emotional_framing=0.0, sensationalism=0.0,
+        informational_density=1.0, b_ling_score=0.0, degraded=False,
+    )
+
+    with patch("app.agents.orchestrator.generate_embedding", return_value=[0.1] * 384), \
+         patch("app.agents.orchestrator.lookup_cache", return_value=None), \
+         patch("app.agents.factcheck_agent.run", return_value=mock_fc), \
+         patch("app.agents.crossref_agent.run", return_value=mock_cr), \
+         patch("app.agents.linguistic_agent.run", return_value=mock_ling), \
+         patch("app.agents.orchestrator.insert_cache", return_value="disputed-uuid") as mock_insert:
+
+        result = await verify_claim("Drinking bleach cures the flu")
+
+    assert result["trust_score"]["c_total"] <= 0.33
+    assert result["trust_score"]["v_refute"] == 0.6
+    assert result["confidence"]["evidence_status"] == "disputed"
+    assert "Disputed: reputable sources contradict this claim" in result["confidence"]["warnings"]
+    crossref_sources = [s for s in result["sources"] if s["type"] == "corroborating"]
+    assert crossref_sources[0]["stance"] == "refutes"
+    assert mock_insert.call_args.kwargs["v_refute"] == 0.6
+    assert mock_insert.call_args.kwargs["evidence_status"] == "disputed"

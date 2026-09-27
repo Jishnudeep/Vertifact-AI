@@ -10,12 +10,14 @@ class TrustScoreModel(BaseModel):
     s_fact: float = Field(..., ge=0.0, le=1.0)
     b_ling: float = Field(..., ge=0.0, le=1.0)
     v_consensus: float = Field(..., ge=0.0, le=1.0)
+    v_refute: float = Field(default=0.0, ge=0.0, le=1.0)
     weights: Dict[str, float]
 
 class ConfidenceModel(BaseModel):
     level: Literal["high", "medium", "low", "insufficient"]
     warnings: List[str] = Field(default_factory=list)
     verdict_found: bool = Field(default=False)
+    evidence_status: Literal["fact_checked", "disputed", "corroborated", "unverified"] = "unverified"
 
 class LinguisticProfileModel(BaseModel):
     clickbait_syntax: float
@@ -30,6 +32,7 @@ class SourceCitationModel(BaseModel):
     rating: Optional[str] = None
     bias_label: str
     type: Literal["fact_check", "corroborating"]
+    stance: Optional[Literal["supports", "refutes", "neutral"]] = None
 
 class VerifyResponse(BaseModel):
     id: Optional[str] = None

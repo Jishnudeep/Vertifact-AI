@@ -137,3 +137,22 @@ def test_get_result_invalid_uuid_returns_404():
     assert response.status_code == 404
     data = response.json()
     assert "Invalid result ID format" in data["detail"]
+
+
+def test_get_result_legacy_row_is_labelled():
+    """Rows saved before stance-aware scoring have no evidence_status; the API must say so."""
+    row = {
+        "id": "11111111-1111-1111-1111-111111111111", "c_total": 0.7, "s_fact": 0.5, "b_ling": 0.2,
+        "v_consensus": 0.6, "confidence_level": "medium", "warnings": [],
+        "claims": {"extracted_claim": "Old claim"}, "evidence_status": None,
+    }
+    mock_supabase = MagicMock()
+    mock_supabase.table.return_value.select.return_value.eq.return_value.execute.return_value = MagicMock(data=[row])
+    with patch("app.api.routes.get_supabase", return_value=mock_supabase):
+        response = client.get("/api/results/11111111-1111-1111-1111-111111111111")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["confidence"]["evidence_status"] == "unverified"
+    assert body["trust_score"]["v_refute"] == 0.0
+    assert any("Legacy result" in w for w in body["confidence"]["warnings"])
+
