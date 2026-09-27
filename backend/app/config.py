@@ -55,6 +55,11 @@ class Settings(BaseSettings):
 
     # Token budget per (premise, hypothesis) pair; longer snippets are truncated by the tokenizer.
     nli_max_length: int = 256
+
+    # Semantic cache TTLs (C2). A matched fact-check changes slowly; everything else is
+    # news-driven and may be overtaken by new reporting within a day.
+    cache_ttl_fact_checked_hours: int = 720
+    cache_ttl_default_hours: int = 24
     
     # Linguistic agent LLM sensationalism flag (Build Order 1.2 default is False: heuristics only)
     enable_llm_sensationalism: bool = False
