@@ -33,7 +33,7 @@
 │                         │                                        │
 │  ┌──────────────────────▼────────────────────────────────────┐   │
 │  │              SEMANTIC CACHE LAYER (pgvector)               │   │
-│  │  cosine_similarity(input_embedding, cached) ≥ 0.95?       │   │
+│  │  top-3 cosine ≥ 0.95 → row policy → NLI equivalence?      │   │
 │  │  YES → return cached result    NO → proceed to agents      │   │
 │  └──────────────────────┬────────────────────────────────────┘   │
 │                         │                                        │
@@ -541,16 +541,52 @@ def generate_embedding(text: str) -> list[float]:
 ### Cache Lookup Query
 
 ```sql
-SELECT r.*, c.extracted_claim,
-       1 - (c.embedding <=> $1::vector) AS similarity
+SELECT
+    r.id,
+    r.claim_id,
+    r.c_total,
+    r.s_fact,
+    r.b_ling,
+    r.v_consensus,
+    r.v_refute,
+    r.evidence_status,
+    r.weights,
+    r.confidence_level,
+    r.agent_outputs,
+    r.source_citations,
+    r.linguistic_profile,
+    r.warnings,
+    r.processing_time_ms,
+    r.created_at,
+    c.extracted_claim,
+    (1 - (c.embedding <=> query_embedding))::float AS similarity
 FROM claims c
 JOIN results r ON r.claim_id = c.id
-WHERE 1 - (c.embedding <=> $1::vector) >= 0.95
+WHERE (1 - (c.embedding <=> query_embedding)) >= similarity_threshold
 ORDER BY similarity DESC
-LIMIT 1;
+LIMIT match_count;
 ```
 
-**Cache invalidation:** No TTL for v2. Claims don't change truthfulness frequently enough to justify complexity. Revisit if the dataset grows past 10K entries.
+**Serving rules (C2).** Cosine similarity is only a candidate filter: bi-encoder embeddings
+score a claim and its negation, or a changed number, above 0.95. `lookup_cache` fetches the
+top 3 candidates and serves the first that passes, in order:
+
+1. **Row policy** (`app/services/cache_policy.py`, pure):
+   - confidence is not `low` or `insufficient`
+   - `evidence_status` is present (legacy rows never serve)
+   - every agent completed (no `degraded` output)
+   - the row is within its TTL
+2. **Equivalence** (`app/services/claim_equivalence.py`):
+   - identical numbers, and
+   - bidirectional NLI entailment ≥ 0.8 with the local cross-encoder.
+   One-way entailment (a narrower or broader claim) and contradiction (a negation) both miss.
+
+Any error is a miss (fail closed).
+
+**TTL:** `fact_checked` results live 30 days (`CACHE_TTL_FACT_CHECKED_HOURS=720`). All other
+statuses live 24 hours (`CACHE_TTL_DEFAULT_HOURS=24`), because news-driven evidence changes
+quickly. Expired rows stay in the database (so `GET /api/results/{id}` keeps working) but are
+never served as cache hits.
 
 ---
 

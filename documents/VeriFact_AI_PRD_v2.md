@@ -273,8 +273,10 @@ Cloud GPU for eval runs (RunPod A10G): ~$0.50/hr × ~10 hrs/month = **$5/month w
 | Bucketed accuracy (False/Mixed/True) | ≥ 70% on eval set | LIAR + FEVER + manual test set |
 | MAE of C_total vs ground truth | ≤ 0.20 | Eval harness |
 | Faithfulness (agent summaries) | ≥ 0.80 (DeepEval score) | DeepEval automated tests |
-| Cache hit rate (semantic match) | ≥ 15% of repeat/similar queries | pgvector query logs |
+| Cache hit rate (semantic match) | ≥ 15% of repeat/similar queries | pgvector query logs; hits counted only after the row-policy and equivalence checks pass |
 | Mobile Lighthouse score | ≥ 85 (Performance) | Lighthouse CI |
+
+Cache hits are served only for equivalent claims (TDD §6). A lower hit rate is an accepted cost of never serving a negated or numerically different claim.
 
 ---
 
