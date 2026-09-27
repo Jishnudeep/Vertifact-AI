@@ -3,7 +3,7 @@ import logging
 import uuid
 from fastapi import APIRouter, Request, HTTPException, status
 from slowapi import Limiter
-from slowapi.util import get_remote_address
+from app.api.client_ip import client_ip
 
 from app.api.schemas import VerifyRequest, VerifyResponse, ErrorResponse
 from app.agents.orchestrator import verify_claim
@@ -11,7 +11,7 @@ from app.db.connection import get_supabase
 
 logger = logging.getLogger(__name__)
 
-limiter = Limiter(key_func=get_remote_address)
+limiter = Limiter(key_func=client_ip)
 router = APIRouter(prefix="/api")
 
 @router.post(

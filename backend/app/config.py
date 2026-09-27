@@ -70,6 +70,10 @@ class Settings(BaseSettings):
     # Groq free tier for gpt-oss-120b = 1,000 requests/day; keep headroom for retries.
     llm_daily_call_budget: int = 900
     
+    # H3: number of reverse proxies in front of the API that append to X-Forwarded-For.
+    # 0 = trust nothing (local dev); 1 = one platform proxy (Render/Railway/Fly).
+    trusted_proxy_hops: int = 0
+    
     # Linguistic agent LLM sensationalism flag (Build Order 1.2 default is False: heuristics only)
     enable_llm_sensationalism: bool = False
     
