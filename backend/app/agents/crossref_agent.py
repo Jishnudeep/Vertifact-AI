@@ -1,18 +1,33 @@
 import asyncio
 import logging
 from dataclasses import dataclass, field
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Tuple
 
 from app.config import settings
 from app.agents.linguistic_agent import get_spacy_nlp
-from app.services.search_api import search_web
+from app.services.search_api import search_web, CLAIMREVIEW_DOMAINS
 from app.services.errors import EvidenceAPIError
 from app.services.bias_lookup import get_bias_label, get_outlet_name
+from app.services.nli import NLIScores, classify_pairs
 from app.utils.errors import AgentErrorDetails, classify_provider_error
 from app.utils.text_processing import extract_domain
 
 logger = logging.getLogger(__name__)
 TIMEOUT = 8.0
+
+# C1: a source counts as supporting/refuting only when the NLI model is at least this sure;
+# anything less is "neutral" and moves neither score.
+# Track 3.1: calibrate STANCE_MIN_PROB against the eval stance fixtures (Plan 3).
+STANCE_MIN_PROB = 0.6
+
+# Premise = title + snippet, truncated before tokenization (the model also truncates at
+# settings.nli_max_length tokens).
+PREMISE_MAX_CHARS = 1000
+
+# Fact-check sites belong to the Fact-Check agent. Their snippets restate the claim they
+# debunk ("Claim: X. Rating: False"), which NLI reads as entailment, so counting them here
+# would both double count and invert their stance.
+_CLAIMREVIEW_DOMAIN_SET = frozenset(CLAIMREVIEW_DOMAINS)
 
 @dataclass
 class CrossRefResult:
@@ -20,6 +35,7 @@ class CrossRefResult:
     sources_found: List[Dict[str, Any]]       # {url, title, publisher, bias_label, relevance_score}
     coverage_distribution: Dict[str, int]     # {"Left": 0, "Lean Left": 0, "Center": 0, "Lean Right": 0, "Right": 0}
     v_consensus_score: float                  # 0.0 to 1.0 (0.0 when no sources or degraded)
+    v_refute_score: float = 0.0               # 0.0 to 1.0: relevance-weighted refuting reputable coverage
     degraded: bool = False                    # True if agent timed out or failed
     error: Optional[str] = None               # Failure message if degraded
     error_details: Optional[AgentErrorDetails] = None # Structured error classification if degraded
@@ -31,13 +47,14 @@ def make_neutral_crossref(
 ) -> CrossRefResult:
     """
     Factory creating a fresh neutral CrossRefResult.
-    v_consensus_score is strictly 0.0 on degradation or empty search.
+    v_consensus_score and v_refute_score are strictly 0.0 on degradation or empty search.
     """
     return CrossRefResult(
         entities_extracted=[],
         sources_found=[],
         coverage_distribution={"Left": 0, "Lean Left": 0, "Center": 0, "Lean Right": 0, "Right": 0},
         v_consensus_score=0.0,
+        v_refute_score=0.0,
         degraded=degraded,
         error=error,
         error_details=error_details
@@ -62,6 +79,35 @@ def _clean_publisher_name(domain: str) -> str:
         pub_part = domain
         
     return pub_part.upper() if len(pub_part) <= 4 else pub_part.capitalize()
+
+def label_stance(scores: NLIScores) -> Tuple[str, float]:
+    """
+    Map NLI probabilities (premise = source text, hypothesis = claim) to a stance label
+    and the probability behind it.
+    """
+    if scores.entailment >= STANCE_MIN_PROB and scores.entailment > scores.contradiction:
+        return "supports", round(scores.entailment, 3)
+    if scores.contradiction >= STANCE_MIN_PROB and scores.contradiction > scores.entailment:
+        return "refutes", round(scores.contradiction, 3)
+    return "neutral", round(scores.neutral, 3)
+
+
+def compute_consensus(reputable_sources: List[Dict[str, Any]]) -> Tuple[float, float]:
+    """
+    Stance-aware consensus (C1). Returns (v_consensus, v_refute), each in [0, 1].
+    Each supporting (refuting) reputable source adds its relevance score; five fully relevant
+    sources saturate the scale, matching the PRD's "5+ reputable sources = 1.0".
+    Neutral sources add to neither side.
+    """
+    support = sum(s["relevance_score"] for s in reputable_sources if s.get("stance") == "supports")
+    refute = sum(s["relevance_score"] for s in reputable_sources if s.get("stance") == "refutes")
+    return round(min(support / 5.0, 1.0), 3), round(min(refute / 5.0, 1.0), 3)
+
+
+def _premise(article: Dict[str, Any]) -> str:
+    title = (article.get("title") or "").strip()
+    content = (article.get("content") or "").strip()
+    return f"{title}. {content}".strip(". ")[:PREMISE_MAX_CHARS]
 
 async def _analyze(claim: str) -> CrossRefResult:
     """
@@ -140,7 +186,22 @@ async def _analyze(claim: str) -> CrossRefResult:
         if domain not in domain_to_best_article or score > domain_to_best_article[domain].get("score", 0.0):
             domain_to_best_article[domain] = item
 
-    # 5. Bias lookup and coverage distribution calculation
+    # 5. Stance per source (C1): premise = article text, hypothesis = claim.
+    articles = list(domain_to_best_article.items())
+    pairs = [(_premise(article), claim) for _, article in articles]
+    try:
+        nli_scores = await asyncio.to_thread(classify_pairs, pairs)
+    except Exception as exc:
+        # Without stance, coverage cannot be read as agreement: degrade, never fall back to
+        # the coverage-only count (that is the bug C1 fixes).
+        logger.error(f"Stance model failed during cross-reference: {exc}")
+        return make_neutral_crossref(
+            degraded=True,
+            error=f"Stance model unavailable: {exc}",
+            error_details=classify_provider_error(exc, provider="nli"),
+        )
+
+    # 6. Bias lookup and coverage distribution calculation
     coverage_distribution = {
         "Left": 0,
         "Lean Left": 0,
@@ -148,24 +209,27 @@ async def _analyze(claim: str) -> CrossRefResult:
         "Lean Right": 0,
         "Right": 0
     }
-    
+
     sources_found = []
     reputable_sources = []
 
-    for domain, article in domain_to_best_article.items():
+    for (domain, article), scores in zip(articles, nli_scores):
         bias_label = get_bias_label(domain)
         known_outlet = get_outlet_name(domain)
         publisher = known_outlet if known_outlet else _clean_publisher_name(domain)
 
         # Map search relevance score to 0.0 - 1.0 (Tavily score is typically 0.0 - 1.0)
         relevance_score = float(article.get("score", 0.5))
+        stance, stance_confidence = label_stance(scores)
 
         source_dict = {
             "url": article.get("url"),
             "title": article.get("title", ""),
             "publisher": publisher,
             "bias_label": bias_label,
-            "relevance_score": round(relevance_score, 2)
+            "relevance_score": round(relevance_score, 2),
+            "stance": stance,
+            "stance_confidence": stance_confidence,
         }
         sources_found.append(source_dict)
 
@@ -180,30 +244,26 @@ async def _analyze(claim: str) -> CrossRefResult:
             # nasa.gov is intentionally NOT listed: `.gov` above already covers it.
             or domain in {"who.int"}
         )
-        
+
         if bias_label in coverage_distribution:
             coverage_distribution[bias_label] += 1
-            
-        if is_reputable:
+
+        # Claim-review sites are shown but never counted (see _CLAIMREVIEW_DOMAIN_SET).
+        if is_reputable and domain not in _CLAIMREVIEW_DOMAIN_SET:
             reputable_sources.append(source_dict)
 
     # Sort sources by relevance score descending
     sources_found.sort(key=lambda s: s["relevance_score"], reverse=True)
 
-    # 6. Compute consensus score
-    reputable_count = len(reputable_sources)
-    if reputable_count == 0:
-        v_consensus_score = 0.0
-    else:
-        avg_relevance = sum(s["relevance_score"] for s in reputable_sources) / reputable_count
-        v_consensus_score = min(reputable_count / 5.0, 1.0) * avg_relevance
-        v_consensus_score = round(v_consensus_score, 3)
+    # 7. Stance-aware consensus
+    v_consensus_score, v_refute_score = compute_consensus(reputable_sources)
 
     return CrossRefResult(
         entities_extracted=entities,
         sources_found=sources_found,
         coverage_distribution=coverage_distribution,
         v_consensus_score=v_consensus_score,
+        v_refute_score=v_refute_score,
         degraded=False,
         error=None
     )

@@ -1,14 +1,30 @@
 import pytest
 import asyncio
 from unittest.mock import patch, AsyncMock
-from app.agents.crossref_agent import run, CrossRefResult, make_neutral_crossref
+from app.agents.crossref_agent import (
+    run, CrossRefResult, make_neutral_crossref, label_stance, compute_consensus, STANCE_MIN_PROB
+)
 from app.services.errors import EvidenceAPIError
 from app.services.bias_lookup import load_bias_ratings
+from app.services.nli import NLIScores
 from app.config import settings
 
 @pytest.fixture(autouse=True)
 def setup_bias():
     load_bias_ratings()
+
+SUPPORT = NLIScores(entailment=0.9, contradiction=0.05, neutral=0.05)
+REFUTE = NLIScores(entailment=0.05, contradiction=0.9, neutral=0.05)
+NEUTRAL = NLIScores(entailment=0.2, contradiction=0.2, neutral=0.6)
+
+
+@pytest.fixture(autouse=True)
+def stub_nli():
+    """Default: every source supports the claim. Tests override side_effect as needed."""
+    def _all_support(pairs):
+        return [SUPPORT for _ in pairs]
+    with patch("app.agents.crossref_agent.classify_pairs", side_effect=_all_support) as mock_nli:
+        yield mock_nli
 
 @pytest.mark.anyio
 async def test_agent_degrades_on_timeout():
@@ -180,3 +196,85 @@ async def test_live_cross_reference():
     assert first_src["url"].startswith("http")
     assert len(first_src["title"]) > 0
     assert first_src["relevance_score"] >= 0.0
+
+
+def test_label_stance_thresholds():
+    assert label_stance(SUPPORT) == ("supports", 0.9)
+    assert label_stance(REFUTE) == ("refutes", 0.9)
+    assert label_stance(NEUTRAL)[0] == "neutral"
+    # Below STANCE_MIN_PROB the model is not confident enough to take a side
+    weak = NLIScores(entailment=STANCE_MIN_PROB - 0.01, contradiction=0.0, neutral=1 - (STANCE_MIN_PROB - 0.01))
+    assert label_stance(weak)[0] == "neutral"
+
+
+def test_compute_consensus_splits_support_and_refute():
+    sources = [
+        {"relevance_score": 0.9, "stance": "supports"},
+        {"relevance_score": 0.8, "stance": "supports"},
+        {"relevance_score": 0.7, "stance": "refutes"},
+        {"relevance_score": 1.0, "stance": "neutral"},
+    ]
+    assert compute_consensus(sources) == (0.34, 0.14)
+
+
+def test_compute_consensus_saturates_at_one():
+    sources = [{"relevance_score": 1.0, "stance": "supports"} for _ in range(7)]
+    assert compute_consensus(sources) == (1.0, 0.0)
+
+
+@pytest.mark.anyio
+async def test_refuting_coverage_does_not_raise_consensus(stub_nli):
+    """C1: reputable outlets debunking a claim must NOT count as corroboration."""
+    stub_nli.side_effect = lambda pairs: [REFUTE for _ in pairs]
+    mock_results = [
+        {"url": "https://www.reuters.com/fact-check/a", "title": "Claim is false", "content": "No evidence.", "score": 0.9},
+        {"url": "https://www.foxnews.com/health/b", "title": "Experts reject claim", "content": "Debunked.", "score": 0.8},
+        {"url": "https://www.nytimes.com/c", "title": "Viral post misleads", "content": "Untrue.", "score": 0.7},
+    ]
+    with patch("app.agents.crossref_agent.search_web", return_value=mock_results):
+        result = await run("Drinking bleach cures the flu")
+    assert result.degraded is False
+    assert result.v_consensus_score == 0.0
+    assert result.v_refute_score == 0.48  # (0.9 + 0.8 + 0.7) / 5
+    assert all(s["stance"] == "refutes" for s in result.sources_found)
+
+
+@pytest.mark.anyio
+async def test_premise_is_source_text_and_hypothesis_is_claim(stub_nli):
+    mock_results = [{"url": "https://www.reuters.com/x", "title": "T", "content": "Body text", "score": 0.9}]
+    with patch("app.agents.crossref_agent.search_web", return_value=mock_results):
+        await run("NASA announces Mars landing")
+    pairs = stub_nli.call_args[0][0]
+    assert pairs == [("T. Body text", "NASA announces Mars landing")]
+
+
+@pytest.mark.anyio
+async def test_claimreview_domains_excluded_from_consensus(stub_nli):
+    """Fact-check sites restate the claim they debunk; they belong to the Fact-Check agent."""
+    mock_results = [
+        {"url": "https://www.politifact.com/factchecks/x", "title": "Claim: X", "content": "Rating: False", "score": 0.95},
+    ]
+    with patch("app.agents.crossref_agent.search_web", return_value=mock_results):
+        result = await run("Senator X voted against the bill")
+    assert len(result.sources_found) == 1          # still shown to the user
+    assert result.v_consensus_score == 0.0         # but never counted as corroboration
+    assert result.v_refute_score == 0.0
+
+
+@pytest.mark.anyio
+async def test_nli_failure_degrades_instead_of_falling_back(stub_nli):
+    """Without stance, coverage cannot be read as agreement: degrade, never use the old count."""
+    stub_nli.side_effect = RuntimeError("model file missing")
+    mock_results = [{"url": "https://www.reuters.com/x", "title": "T", "content": "C", "score": 0.9}]
+    with patch("app.agents.crossref_agent.search_web", return_value=mock_results):
+        result = await run("NASA announces Mars landing")
+    assert result.degraded is True
+    assert result.v_consensus_score == 0.0
+    assert result.v_refute_score == 0.0
+    assert "Stance model unavailable" in result.error
+
+
+@pytest.mark.anyio
+async def test_neutral_degraded_result_has_zero_refute():
+    assert make_neutral_crossref(degraded=True).v_refute_score == 0.0
+
