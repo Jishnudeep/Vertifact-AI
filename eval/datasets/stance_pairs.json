@@ -1,0 +1,19 @@
+[
+  {"premise": "NASA scientists confirmed on Monday that liquid water was detected beneath the Martian surface.", "claim": "NASA confirms water found on Mars", "label": "supports"},
+  {"premise": "Health officials warned that drinking bleach is dangerous and does not cure any infection.", "claim": "Drinking bleach cures the flu", "label": "refutes"},
+  {"premise": "The city council met on Tuesday to discuss the new budget for road repairs.", "claim": "The mayor resigned last week", "label": "neutral"},
+  {"premise": "A viral post claims the vaccine alters DNA. Experts say mRNA vaccines cannot change a person's DNA.", "claim": "COVID vaccines alter human DNA", "label": "refutes"},
+  {"premise": "The Federal Reserve raised its benchmark rate by a quarter point on Wednesday.", "claim": "The Fed raised interest rates", "label": "supports"},
+  {"premise": "Officials denied reports that the bridge had collapsed, saying it remains open to traffic.", "claim": "The Golden Gate Bridge collapsed", "label": "refutes"},
+  {"premise": "The company reported quarterly revenue of $12 billion, up 8% from a year earlier.", "claim": "The company's revenue grew last quarter", "label": "supports"},
+  {"premise": "Researchers are still studying whether the drug is effective; results are expected next year.", "claim": "The drug cures Alzheimer's disease", "label": "neutral"},
+  {"premise": "Fact-checkers found no evidence that the election machines switched votes.", "claim": "Voting machines switched millions of votes", "label": "refutes"},
+  {"premise": "The World Health Organization declared the outbreak a public health emergency on Thursday.", "claim": "WHO declared a public health emergency", "label": "supports"},
+  {"premise": "Claims that 5G towers spread the virus have been repeatedly debunked by scientists.", "claim": "5G towers spread coronavirus", "label": "refutes"},
+  {"premise": "The senator spoke about agriculture policy at a town hall in Iowa.", "claim": "The senator voted against the farm bill", "label": "neutral"},
+  {"premise": "Wildfires have burned more than 2 million acres in California this year, officials said.", "claim": "California wildfires burned over a million acres this year", "label": "supports"},
+  {"premise": "The Eiffel Tower remains in Paris, where it was completed in 1889.", "claim": "The Eiffel Tower was moved to London", "label": "refutes"},
+  {"premise": "Analysts debated the merger's likely impact on consumer prices.", "claim": "The merger was blocked by regulators", "label": "neutral"},
+  {"premise": "The Supreme Court ruled 6-3 to uphold the law on Friday.", "claim": "The Supreme Court upheld the law", "label": "supports"},
+  {"premise": "Viral video claims drinking bleach cures COVID-19", "claim": "Drinking bleach cures COVID-19", "label": "neutral"}
+]

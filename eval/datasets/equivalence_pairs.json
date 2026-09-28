@@ -1,0 +1,18 @@
+[
+  {"a": "NASA confirms water found on Mars", "b": "NASA has confirmed that water was found on Mars", "equivalent": true, "kind": "paraphrase"},
+  {"a": "The Fed raised interest rates", "b": "Interest rates were raised by the Federal Reserve", "equivalent": true, "kind": "paraphrase"},
+  {"a": "Drinking bleach cures COVID-19", "b": "COVID-19 can be cured by drinking bleach", "equivalent": true, "kind": "paraphrase"},
+  {"a": "The Eiffel Tower is in Paris", "b": "The Eiffel Tower is located in Paris", "equivalent": true, "kind": "paraphrase"},
+  {"a": "Vaccines cause autism", "b": "Vaccines do not cause autism", "equivalent": false, "kind": "negation"},
+  {"a": "The bridge is open", "b": "The bridge is not open", "equivalent": false, "kind": "negation"},
+  {"a": "The senator supported the bill", "b": "The senator opposed the bill", "equivalent": false, "kind": "antonym"},
+  {"a": "Crime rose last year", "b": "Crime fell last year", "equivalent": false, "kind": "antonym"},
+  {"a": "Biden visited Paris", "b": "Macron visited Paris", "equivalent": false, "kind": "entity_swap"},
+  {"a": "Apple acquired the startup", "b": "Google acquired the startup", "equivalent": false, "kind": "entity_swap"},
+  {"a": "The president visited France", "b": "The president visited Paris", "equivalent": false, "kind": "scope"},
+  {"a": "All schools closed", "b": "Some schools closed", "equivalent": false, "kind": "scope"},
+  {"a": "Inflation hit 3% in May", "b": "Inflation hit 8% in May", "equivalent": false, "kind": "number"},
+  {"a": "The law passed in 2019", "b": "The law passed in 2021", "equivalent": false, "kind": "number"},
+  {"a": "Unemployment fell to 3.5%", "b": "Unemployment fell to 3.5 percent", "equivalent": true, "kind": "paraphrase"},
+  {"a": "The company laid off workers", "b": "The company hired workers", "equivalent": false, "kind": "antonym"}
+]
