@@ -493,7 +493,7 @@ CREATE TABLE claims (
     input_type VARCHAR(10) NOT NULL CHECK (input_type IN ('text', 'url', 'image')),
     raw_input TEXT NOT NULL,
     extracted_claim TEXT NOT NULL,
-    embedding vector(1024),  -- BGE-M3 embedding
+    embedding vector(384),  -- 384 dev (MiniLM) / 1024 prod (BGE-M3); match EMBEDDING_DIMENSION
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
