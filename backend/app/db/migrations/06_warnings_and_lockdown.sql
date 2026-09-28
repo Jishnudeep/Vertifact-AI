@@ -1,5 +1,5 @@
 -- VeriFact AI - Migration 06: restore results.warnings and lock down the public API roles
--- Safe to re-run.
+-- Requires migrations 04 and 05 (the REVOKEs name their function signatures). Safe to re-run.
 --
 -- 1. Migration 02 step 3 did not apply on the live project (its information_schema guard
 --    had no table_schema filter), so match_claims (03/04) failed with 42703
@@ -23,5 +23,12 @@ REVOKE EXECUTE ON FUNCTION public.purge_old_claims(int) FROM PUBLIC, anon, authe
 REVOKE EXECUTE ON FUNCTION public.match_claims(vector, double precision, integer) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.purge_old_claims(int) TO service_role;
 GRANT EXECUTE ON FUNCTION public.match_claims(vector, double precision, integer) TO service_role;
+
+-- 2c. Supabase's default privileges grant EXECUTE on every NEW function in public to
+--     anon/authenticated, so a later DROP + CREATE (e.g. the 384 -> 1024 embedding swap
+--     recreating match_claims) would silently re-open it. Stop that for functions created
+--     by this role (the SQL editor's). Tables created later still need RLS enabled by hand.
+ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC, anon, authenticated;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT EXECUTE ON FUNCTIONS TO service_role;
 
 NOTIFY pgrst, 'reload schema';

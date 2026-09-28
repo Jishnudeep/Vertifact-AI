@@ -1,6 +1,8 @@
 -- VeriFact AI - Migration 04: top-k cache candidates + created_at for TTL (C2)
 -- Spec: docs/superpowers/specs/2026-09-23-prd-tdd-review.md
 -- Requires migration 03 (v_refute, evidence_status).
+-- If you re-run this (or any migration that recreates match_claims) after 06, re-run 06
+-- afterwards so the recreated function is not executable by anon/authenticated.
 
 -- The signature gains match_count and the result gains created_at: drop both old shapes.
 DROP FUNCTION IF EXISTS match_claims(vector, double precision);
