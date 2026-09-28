@@ -46,4 +46,6 @@ class VerifyResponse(BaseModel):
 
 class ErrorResponse(BaseModel):
     error: str
+    code: Literal["invalid_input", "non_verifiable_claim", "request_validation", "rate_limited", "all_agents_failed"]
     detail: Optional[str] = None
+

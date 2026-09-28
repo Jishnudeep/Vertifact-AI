@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
-from slowapi import _rate_limit_exceeded_handler
+from fastapi.exceptions import RequestValidationError
 from slowapi.errors import RateLimitExceeded
 
 from app.config import settings
@@ -84,7 +84,6 @@ app = FastAPI(
 
 # Attach slowapi rate limiter state
 app.state.limiter = limiter
-app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 # CORS middleware for frontend integration (Vite + React dev server)
 app.add_middleware(
@@ -108,25 +107,40 @@ async def process_time_header(request: Request, call_next):
     return response
 
 # Custom exception handlers for pipeline errors
+@app.exception_handler(RequestValidationError)
+async def request_validation_handler(request: Request, exc: RequestValidationError):
+    # Schema-level rejection (missing field, >10000-char body). Distinct from an opinion (TDD §3.1).
+    return JSONResponse(
+        status_code=422,
+        content={"error": "Invalid Request", "code": "request_validation", "detail": str(exc.errors()[:3])},
+    )
+
+@app.exception_handler(RateLimitExceeded)
+async def rate_limited_handler(request: Request, exc: RateLimitExceeded):
+    return JSONResponse(
+        status_code=429,
+        content={"error": "Rate Limited", "code": "rate_limited", "detail": str(exc.detail)},
+    )
+
 @app.exception_handler(InvalidInputError)
 async def invalid_input_handler(request: Request, exc: InvalidInputError):
     return JSONResponse(
         status_code=400,
-        content={"error": "Invalid Input", "detail": str(exc)}
+        content={"error": "Invalid Input", "code": "invalid_input", "detail": str(exc)}
     )
 
 @app.exception_handler(NonVerifiableClaimError)
 async def non_verifiable_handler(request: Request, exc: NonVerifiableClaimError):
     return JSONResponse(
         status_code=422,
-        content={"error": "Non-Verifiable Claim", "detail": str(exc)}
+        content={"error": "Non-Verifiable Claim", "code": "non_verifiable_claim", "detail": str(exc)}
     )
 
 @app.exception_handler(AllAgentsFailedError)
 async def all_agents_failed_handler(request: Request, exc: AllAgentsFailedError):
     return JSONResponse(
         status_code=500,
-        content={"error": "Verification Failed", "detail": str(exc)}
+        content={"error": "Verification Failed", "code": "all_agents_failed", "detail": str(exc)}
     )
 
 # Include API routes
