@@ -274,6 +274,9 @@ async def test_claimreview_domains_carry_no_stance_label(stub_nli):
     assert by_url["https://www.politifact.com/factchecks/x"]["stance"] is None
     assert by_url["https://www.politifact.com/factchecks/x"]["stance_confidence"] is None
     assert by_url["https://www.reuters.com/x"]["stance"] == "supports"
+    # Their stance is discarded, so they must not spend NLI time inside the agent budget.
+    premises = [premise for premise, _ in stub_nli.call_args[0][0]]
+    assert premises == ["T. C"]
 
 
 @pytest.mark.anyio

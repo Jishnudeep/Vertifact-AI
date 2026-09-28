@@ -82,8 +82,9 @@ async def test_slow_persistence_does_not_block_the_response(monkeypatch):
          patch("app.agents.linguistic_agent.run", new=AsyncMock(return_value=ling)), \
          patch("app.agents.orchestrator.insert_cache", side_effect=slow_insert):
         result = await verify_claim("The Earth orbits the Sun")
-    assert result["id"] is None
-    assert time.perf_counter() - start < 2.0
+        assert result["id"] is None
+        assert time.perf_counter() - start < 2.0
+        await orchestrator.drain_background_tasks(timeout=5.0)  # no pending task at teardown
 
 
 @pytest.mark.anyio
@@ -188,3 +189,5 @@ async def test_drain_gives_up_after_timeout():
     await orchestrator.drain_background_tasks(timeout=0.05)
     assert time.perf_counter() - start < 1.0
     task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task

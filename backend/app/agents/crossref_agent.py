@@ -189,9 +189,11 @@ async def _analyze(claim: str) -> CrossRefResult:
 
     # 5. Stance per source (C1): premise = article text, hypothesis = claim.
     articles = list(domain_to_best_article.items())
-    pairs = [(_premise(article), claim) for _, article in articles]
+    # Claim-review sources get no stance (see _CLAIMREVIEW_DOMAIN_SET), so don't spend NLI on them.
+    scored = [(domain, article) for domain, article in articles if domain not in _CLAIMREVIEW_DOMAIN_SET]
+    pairs = [(_premise(article), claim) for _, article in scored]
     try:
-        nli_scores = await asyncio.to_thread(classify_pairs, pairs)
+        nli_scores = await asyncio.to_thread(classify_pairs, pairs) if pairs else []
     except Exception as exc:
         # Without stance, coverage cannot be read as agreement: degrade, never fall back to
         # the coverage-only count (that is the bug C1 fixes).
@@ -214,7 +216,8 @@ async def _analyze(claim: str) -> CrossRefResult:
     sources_found = []
     reputable_sources = []
 
-    for (domain, article), scores in zip(articles, nli_scores):
+    scores_by_domain = {domain: scores for (domain, _), scores in zip(scored, nli_scores)}
+    for domain, article in articles:
         bias_label = get_bias_label(domain)
         known_outlet = get_outlet_name(domain)
         publisher = known_outlet if known_outlet else _clean_publisher_name(domain)
@@ -223,7 +226,7 @@ async def _analyze(claim: str) -> CrossRefResult:
         relevance_score = float(article.get("score", 0.5))
         is_claimreview = domain in _CLAIMREVIEW_DOMAIN_SET
         # Claim-review stance is unreliable (see _CLAIMREVIEW_DOMAIN_SET): show no chip at all.
-        stance, stance_confidence = (None, None) if is_claimreview else label_stance(scores)
+        stance, stance_confidence = (None, None) if is_claimreview else label_stance(scores_by_domain[domain])
 
         source_dict = {
             "url": article.get("url"),
