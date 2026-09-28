@@ -71,7 +71,7 @@ VeriFact AI solves a specific problem: **a user encounters a suspicious claim on
 | ID | Feature | Priority |
 |----|---------|----------|
 | P1-01 | FastAPI backend with health check and input validation | P0 |
-| P1-02 | ADK orchestrator agent with LiteLLM integration (`groq/openai/gpt-oss-20b` via Groq; see §"Technology" — Groq no longer serves a Llama chat model on our key, verified 2026-09-10) | P0 |
+| P1-02 | Deterministic orchestrator + ADK leaf prompts (ADK leaf LLM prompts via LiteLLM (`groq/openai/gpt-oss-120b`; Groq serves no Llama chat model on our key, verified 2026-09-10)) | P0 |
 | P1-03 | Fact-Check Lookup Agent (Google Fact Check Tools API + Tavily web search) | P0 |
 | P1-04 | Cross-Reference Agent (entity extraction via spaCy, source corroboration via search) | P0 |
 | P1-05 | Linguistic Analysis Agent (VADER sentiment + HuggingFace sensationalism classifier) | P1 |
@@ -120,11 +120,11 @@ VeriFact AI solves a specific problem: **a user encounters a suspicious claim on
 | Frontend | Vite + React + Tailwind CSS | Fast builds, responsive-first, no SSR complexity |
 | Visualization | Recharts | SVG-based, React-native, touch-responsive |
 | Backend | FastAPI (Python 3.11+) | Native async, type hints, auto-docs |
-| Agent Framework | Google ADK + LiteLLM | Model-agnostic orchestration, hub-and-spoke parallelism |
-| LLM (Dev) | `groq/openai/gpt-oss-20b` via Groq (free tier) | Fast inference, zero cost during development. Verified 2026-09-10: `llama-3.1-8b-instant` and `llama-3.3-70b-versatile` both 404 `model_not_found` on our key, which serves no Llama chat model; gpt-oss-20b is the smallest served OSS instruct model that reliably emits strict JSON |
+| Agent Framework | Google ADK + LiteLLM | ADK LlmAgent + LiteLLM for leaf prompts; asyncio fan-out for orchestration |
+| LLM (Dev) | `groq/openai/gpt-oss-120b` via Groq (free tier) | Fast inference, zero cost during development. Verified 2026-09-10: Groq serves no Llama chat model on our key; 120b chosen over 20b for strict-JSON adherence |
 | LLM (Prod) | Qwen3-30B-A3B or Llama 3.1 70B via vLLM | Higher quality for demo/production |
 | OCR | Surya | PyTorch-native, transformer-based, reading-order aware |
-| Embeddings | BGE-M3 via sentence-transformers | Hybrid retrieval (dense + sparse), multilingual |
+| Embeddings | `all-MiniLM-L6-v2` (384-d, dev) / `BAAI/bge-m3` (1024-d, prod); dimension is config | Hybrid retrieval (dense + sparse), multilingual |
 | Database | Supabase (PostgreSQL) | Free tier, auth, JSONB storage, real-time |
 | Vector Search | pgvector (via Supabase) | Co-located with relational data, HNSW indexing |
 | Fact-Check API | Google Fact Check Tools API | Free, ClaimReview standard, 100+ orgs |

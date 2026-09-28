@@ -296,22 +296,23 @@ WebSocket endpoint for real-time agent pipeline status during verification.
 
 **Role:** Single entry point. Parses input, manages parallel dispatch, aggregates results.
 
-**ADK Configuration:**
-```python
-from google.adk import Agent, ParallelAgent
-import litellm
+**Orchestration model.** The orchestrator is a deterministic Python coroutine
+(`app/agents/orchestrator.py::verify_claim`), **not** an LLM agent. It fans out to the three
+workers with `asyncio.gather` and gives each a per-agent timeout that fits the request
+deadline (TDD §3.1). It then aggregates in code. Nothing is delegated by an LLM.
 
-orchestrator = Agent(
-    name="verifact_orchestrator",
-    model="groq/openai/gpt-oss-20b",  # via LiteLLM; set in app/config.py, never hardcoded.
-                                      # Verified 2026-09-10: groq/llama-3.1-8b-instant and
-                                      # groq/llama-3.3-70b-versatile both 404 model_not_found.
-                                      # Reasoning model → max_tokens=1024 in adk_helpers.py.
-    description="Coordinates fact-checking pipeline",
-    sub_agents=[factcheck_agent, crossref_agent, linguistic_agent],
-    # ADK handles parallel dispatch natively
-)
-```
+Google ADK is used at the **leaves** only. `app/utils/adk_helpers.py::run_adk_agent` wraps one
+`LlmAgent` per prompt type (`rating_classifier`, `claim_aligner`, `verdict_extractor`,
+`sensationalism_analyzer`), using `LiteLlm(model=settings.model_id, temperature=0, max_tokens=1024)`.
+Runners are cached per prompt, and there is a fresh session per call.
+
+Why not `LlmAgent(sub_agents=[...])`: in ADK that configures LLM-driven *transfer* to one
+sub-agent, not parallel execution. `ParallelAgent` (`google.adk.agents`) runs branches
+concurrently but has no per-branch timeout or typed-result contract. Explicit `asyncio` gives
+both, plus deterministic degradation.
+
+Model: `settings.model_id` (dev: `groq/openai/gpt-oss-120b`; see `app/config.py` for the
+verified 404s on Groq's Llama models). It is never hardcoded in agent logic.
 
 **Input processing logic:**
 1. Receive raw input + type
