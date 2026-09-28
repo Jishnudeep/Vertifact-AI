@@ -13,9 +13,13 @@ from app.agents.linguistic_agent import get_spacy_nlp
 from app.services.embedding import generate_embedding
 from app.services.nli import get_nli_model
 from app.api.routes import router as api_router, limiter
-from app.agents.orchestrator import InvalidInputError, NonVerifiableClaimError, AllAgentsFailedError
+from app.agents.orchestrator import (
+    InvalidInputError, NonVerifiableClaimError, AllAgentsFailedError, drain_background_tasks
+)
 
 logger = logging.getLogger(__name__)
+
+SHUTDOWN_DRAIN_TIMEOUT_S = 5.0
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -68,6 +72,8 @@ async def lifespan(app: FastAPI):
     logger.info("Startup complete. Pipeline is ready.")
     yield
     logger.info("Shutting down VeriFact AI application...")
+    # Let cache writes that outlived their request finish instead of dropping them.
+    await drain_background_tasks(timeout=SHUTDOWN_DRAIN_TIMEOUT_S)
 
 app = FastAPI(
     title="VeriFact AI Verification Pipeline API",
@@ -87,6 +93,8 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    # Without this, browsers hide the latency header from the cross-origin frontend.
+    expose_headers=["X-Process-Time-Ms"],
 )
 
 @app.middleware("http")

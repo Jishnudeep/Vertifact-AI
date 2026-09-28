@@ -13,6 +13,12 @@ from app.agents.linguistic_agent import LinguisticResult
 from app.config import settings
 
 
+@pytest.fixture(autouse=True)
+def _fresh_background_tasks(monkeypatch):
+    """Late writes from one test must not leak into another's assertions."""
+    monkeypatch.setattr(orchestrator, "_background_tasks", set())
+
+
 def test_agent_budget_bounds():
     assert agent_budget(9.5) == 8.0          # capped at the 8 s agent contract
     assert agent_budget(5.0) == 4.0          # leaves PERSIST_RESERVE_S for the DB write
@@ -110,3 +116,75 @@ def test_process_time_header():
     from app.main import app
     response = TestClient(app).get("/health")
     assert int(response.headers["X-Process-Time-Ms"]) >= 0
+
+
+def test_process_time_header_is_readable_cross_origin():
+    """The frontend runs on another origin; browsers hide non-exposed headers from JS."""
+    from app.main import app
+    response = TestClient(app).get("/health", headers={"Origin": settings.cors_origins[0]})
+    exposed = response.headers.get("access-control-expose-headers", "")
+    assert "x-process-time-ms" in exposed.lower()
+
+
+def _slow_insert_patches(slow_insert):
+    fc, cr, ling = _ok_results()
+    return (
+        patch("app.agents.orchestrator.generate_embedding", return_value=[0.1] * 384),
+        patch("app.agents.orchestrator.lookup_cache", return_value=None),
+        patch("app.agents.factcheck_agent.run", new=AsyncMock(return_value=fc)),
+        patch("app.agents.crossref_agent.run", new=AsyncMock(return_value=cr)),
+        patch("app.agents.linguistic_agent.run", new=AsyncMock(return_value=ling)),
+        patch("app.agents.orchestrator.insert_cache", side_effect=slow_insert),
+    )
+
+
+@pytest.mark.anyio
+async def test_late_write_is_tracked_then_released(monkeypatch):
+    monkeypatch.setattr(settings, "request_deadline_s", 1.0)
+    done = asyncio.Event()
+    async def slow_insert(**kwargs):
+        await asyncio.sleep(1.5)   # outlives the ~0.95 s left of the 1.0 s deadline
+        done.set()
+        return "late-id"
+    p = _slow_insert_patches(slow_insert)
+    with p[0], p[1], p[2], p[3], p[4], p[5]:
+        result = await verify_claim("The Earth orbits the Sun")
+        assert result["id"] is None
+        assert len(orchestrator._background_tasks) == 1
+        await orchestrator.drain_background_tasks(timeout=3.0)
+    assert done.is_set()
+    assert len(orchestrator._background_tasks) == 0
+
+
+@pytest.mark.anyio
+async def test_cancelled_request_keeps_its_write_referenced(monkeypatch):
+    """A client disconnect cancels the request; the shielded write must stay referenced."""
+    monkeypatch.setattr(settings, "request_deadline_s", 9.5)
+    started = asyncio.Event()
+    async def slow_insert(**kwargs):
+        started.set()
+        await asyncio.sleep(0.3)
+        return "id"
+    p = _slow_insert_patches(slow_insert)
+    with p[0], p[1], p[2], p[3], p[4], p[5]:
+        request = asyncio.create_task(verify_claim("The Earth orbits the Sun"))
+        await started.wait()
+        request.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await request
+        assert len(orchestrator._background_tasks) == 1
+        await orchestrator.drain_background_tasks(timeout=2.0)
+    assert len(orchestrator._background_tasks) == 0
+
+
+@pytest.mark.anyio
+async def test_drain_gives_up_after_timeout():
+    async def never_finishes():
+        await asyncio.sleep(10)
+    task = asyncio.create_task(never_finishes())
+    orchestrator._background_tasks.add(task)
+    task.add_done_callback(orchestrator._background_tasks.discard)
+    start = time.perf_counter()
+    await orchestrator.drain_background_tasks(timeout=0.05)
+    assert time.perf_counter() - start < 1.0
+    task.cancel()

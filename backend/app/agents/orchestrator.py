@@ -42,6 +42,16 @@ def agent_budget(remaining_s: float) -> float:
     """Per-agent timeout that fits the remaining request budget."""
     return max(MIN_AGENT_TIMEOUT, min(AGENT_TIMEOUT_CAP, remaining_s - PERSIST_RESERVE_S))
 
+
+async def drain_background_tasks(timeout: float) -> None:
+    """Give in-flight persistence writes up to `timeout` seconds to finish (app shutdown)."""
+    pending = list(_background_tasks)
+    if not pending:
+        return
+    _, still_running = await asyncio.wait(pending, timeout=timeout)
+    if still_running:
+        logger.warning("%d persistence write(s) still running at shutdown; they will be lost.", len(still_running))
+
 async def verify_claim(raw_input: str, input_type: str = "text", bypass_cache: bool = False) -> Dict[str, Any]:
     """
     Main orchestration pipeline for claim verification:
@@ -279,6 +289,10 @@ async def verify_claim(raw_input: str, input_type: str = "text", bypass_cache: b
                 v_refute=scoring_res.components.v_refute,
                 evidence_status=scoring_res.evidence_status,
             ))
+            # Referenced from creation, so the write survives both the deadline and a
+            # cancelled request (client disconnect); released when it finishes.
+            _background_tasks.add(persist_task)
+            persist_task.add_done_callback(_background_tasks.discard)
             try:
                 claim_id = await asyncio.wait_for(
                     asyncio.shield(persist_task),
@@ -286,8 +300,6 @@ async def verify_claim(raw_input: str, input_type: str = "text", bypass_cache: b
                 )
             except (asyncio.TimeoutError, TimeoutError):
                 logger.warning("Persistence exceeded the request deadline; returning without an id (write continues).")
-                _background_tasks.add(persist_task)
-                persist_task.add_done_callback(_background_tasks.discard)
                 claim_id = None
         except Exception as exc:
             logger.warning(f"Failed to persist result to database: {exc}")
