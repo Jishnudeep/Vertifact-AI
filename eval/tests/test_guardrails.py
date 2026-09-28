@@ -219,3 +219,30 @@ def test_disputed_claims_never_exceed_cap_without_verdict():
                 assert result.c_total <= DISPUTED_CAP, (s_fact, b_ling, v_consensus, result.c_total)
                 assert result.evidence_status == "disputed"
 
+
+def test_disputed_cap_holds_across_matched_reviews_and_partial_runs():
+    """Wider grid than above: a matched (non-definitive) review, 1-3 agents succeeding, and
+    v_consensus >= 0.3 that is still outweighed by v_refute. None may escape the cap or
+    reach 'high' confidence without a definitive verdict."""
+    from app.scoring import ScoringEngine
+    from app.scoring.confidence import DISPUTED_CAP, DISPUTED_REFUTE_MIN
+
+    engine = ScoringEngine()
+    grid = [i / 10 for i in range(11)]
+    for v_refute in [DISPUTED_REFUTE_MIN, 0.5, 0.8, 1.0]:
+        consensus_values = [v for v in grid if v < v_refute]
+        for s_fact in grid:
+            for b_ling in grid:
+                for v_consensus in consensus_values:
+                    for agents_succeeded in (1, 2, 3):
+                        for fact_check_found in (False, True):
+                            result = engine.compute(
+                                s_fact=s_fact, b_ling=b_ling, v_consensus=v_consensus,
+                                v_refute=v_refute, agents_succeeded=agents_succeeded,
+                                fact_check_found=fact_check_found, verdict_found=False,
+                            )
+                            case = (s_fact, b_ling, v_consensus, v_refute, agents_succeeded, fact_check_found)
+                            assert result.c_total <= DISPUTED_CAP, (case, result.c_total)
+                            assert result.confidence_level != "high", case
+                            assert result.evidence_status == "disputed", case
+

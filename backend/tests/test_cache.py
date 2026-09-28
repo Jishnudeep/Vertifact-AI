@@ -56,6 +56,16 @@ async def test_lookup_cache_offline_miss():
 
 
 @pytest.mark.anyio
+async def test_lookup_cache_rpc_error_is_miss():
+    """A broken match_claims (e.g. 42703 missing column, as seen live 2026-09-27) must fail closed."""
+    mock_supabase = MagicMock()
+    mock_supabase.rpc.return_value.execute.side_effect = Exception("42703: column r.warnings does not exist")
+    with patch("app.services.cache.get_supabase", return_value=mock_supabase):
+        result = await lookup_cache([0.1] * 384, claim_text="NASA water Mars")
+    assert result is None
+
+
+@pytest.mark.anyio
 async def test_lookup_cache_offline_hit():
     with patch("app.services.cache.get_supabase", return_value=_supabase_returning([_servable_row()])), \
          patch("app.services.cache.are_equivalent", return_value=True):
