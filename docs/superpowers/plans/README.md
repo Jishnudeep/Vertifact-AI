@@ -17,7 +17,7 @@ column (1 → 2 → 4 → 3 → 5). Each plan's Task 0 checks its prerequisites.
 | 3rd | Plan 4 | [hardening](2026-09-23-hardening.md) | H1–H4: deadline, budgets, proxy-aware limits, SSRF guard, retention | Plans 1, 2 | completed |
 | 3rd+ | Review follow-ups | (no plan file; see below) | Fixes from the 2026-09-27 review of Plans 1, 2, 4 | Plans 1, 2, 4 | completed 2026-09-28 (Claude Code) |
 | 4th | Plan 3 | [eval-integrity](2026-09-23-eval-integrity.md) | C3, C4: replay, leave-source-out, segments, LIAR/FEVER, NLI calibration | Plans 1, 2, 4 | completed 2026-09-28 (Antigravity) |
-| 5th | Plan 5 | [doc-sync](2026-09-23-doc-sync.md) | Medium drift, H5, H6: error codes, rating map, docs, skills | Plans 1–4 | not started |
+| 5th | Plan 5 | [doc-sync](2026-09-23-doc-sync.md) | Medium drift, H5, H6: error codes, rating map, docs, skills | Plans 1–4 | completed 2026-09-28 (Antigravity) |
 
 Plan 4 runs before Plan 3 because it switches Cross-Ref to basic search depth, and that
 changes the replay cache keys Plan 3 records.
