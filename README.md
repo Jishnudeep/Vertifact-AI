@@ -64,7 +64,7 @@ The scoring engine is **pure and deterministic** (`Σw = 1.0`, `w1 ≥ 0.4`, out
 | Layer | Choice |
 |-------|--------|
 | Backend | Python 3.12+, FastAPI (async), managed with [`uv`](https://docs.astral.sh/uv/) |
-| Agents | Google ADK + LiteLLM — model swapped via config (dev: `groq/llama-3.1-8b-instant`) |
+| Agents | Google ADK + LiteLLM — model swapped via config (dev: `groq/openai/gpt-oss-120b`) |
 | Database | Supabase (Postgres + pgvector) |
 | Embeddings | `all-MiniLM-L6-v2` (384-dim) dev · `BAAI/bge-m3` (1024-dim) prod — dimension is a config var |
 | Frontend | Vite + React + Tailwind + Recharts (mobile-first, 375px baseline) |
@@ -130,6 +130,16 @@ Active development, built in phases (see [`documents/VeriFact_AI_Build_Order.md`
 ## Documentation
 
 The canonical spec lives in [`documents/`](documents/): product requirements (PRD), technical design (TDD), phased build order, and the open-source stack & evaluation framework.
+
+## Data & model licenses
+
+| Component | License | Obligation |
+|-----------|---------|-----------|
+| AllSides Media Bias Ratings | CC BY-NC 4.0 | Visible attribution ("Media bias ratings: AllSides.com") in the UI source list and the README; **non-commercial only**, a commercial license is needed otherwise |
+| Surya OCR model weights | Modified OpenRAIL-M | Free for research, personal use and small companies under the revenue cap in `MODEL_LICENSE`; re-check before any commercial use |
+| cross-encoder/nli-deberta-v3-small | Apache-2.0 | Keep the notice |
+| all-MiniLM-L6-v2 / BGE-M3 | Apache-2.0 / MIT | Keep the notice |
+| LIAR / FEVER samples | Research datasets | Eval only; commit derived samples, not raw dumps |
 
 ## License
 

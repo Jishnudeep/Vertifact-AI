@@ -266,6 +266,16 @@ Daily budgets (TDD §11) keep the service inside these limits. Eval runs use rec
 
 Cloud GPU for eval runs (RunPod A10G): ~$0.50/hr × ~10 hrs/month = **$5/month when needed**.
 
+### Licensing obligations
+
+| Component | License | Obligation |
+|-----------|---------|-----------|
+| AllSides Media Bias Ratings | CC BY-NC 4.0 | Visible attribution ("Media bias ratings: AllSides.com") in the UI source list and the README; **non-commercial only**, a commercial license is needed otherwise |
+| Surya OCR model weights | Modified OpenRAIL-M | Free for research, personal use and small companies under the revenue cap in `MODEL_LICENSE`; re-check before any commercial use |
+| cross-encoder/nli-deberta-v3-small | Apache-2.0 | Keep the notice |
+| all-MiniLM-L6-v2 / BGE-M3 | Apache-2.0 / MIT | Keep the notice |
+| LIAR / FEVER samples | Research datasets | Eval only; commit derived samples, not raw dumps |
+
 ---
 
 ## 10. Success Metrics
@@ -302,8 +312,10 @@ Cache hits are served only for equivalent claims (TDD §6). A lower hit rate is 
 
 | Risk | Likelihood | Impact | Mitigation |
 |------|-----------|--------|------------|
-| Google Fact Check API deprecation | Low | High | Abstract behind interface; Tavily + DataCommons as fallbacks |
+| Google Fact Check API decline (alpha v1alpha1 API, no SLA; Google removed ClaimReview snippets from Search in June 2025, weakening publisher markup incentives) | Medium | High | Layer 2 (Tavily, fact-check domains) already covers misses; track the Layer-1 hit rate per eval run; abstract behind factcheck_api.py |
 | Groq free tier rate limits during demo | Medium | Medium | Cache aggressively; Together.ai as backup provider |
 | Eval set too small for meaningful metrics | Medium | High | Commit to 200+ labeled claims before Phase 3 |
 | Linguistic volatility model poorly calibrated | High | Medium | Start with VADER baseline; iterate with human-rated calibration set |
 | Claims about very recent events (no fact-checks exist) | High | Medium | Confidence capping; transparent "no verified sources" messaging |
+| Free-tier hosting cannot hold the ML backend | High | Medium | See TDD §10 open decision |
+| Free-tier API quotas (Tavily 1K credits/mo, Groq 1K req/day) | High | Medium | Daily budgets (TDD §11), cache, eval replay |

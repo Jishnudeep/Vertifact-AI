@@ -931,7 +931,7 @@ When `confidence.evidence_status == "unverified"`, render 'Not enough evidence' 
 
 ### 9.3 Source Coverage List
 
-Vertical list of source cards, each showing: publisher name, article title (linked), AllSides bias label (colored chip: blue=Left, light blue=Lean Left, gray=Center, light red=Lean Right, red=Right), and type badge (Fact-Check or Corroborating).
+Vertical list of source cards, each showing: publisher name, article title (linked), AllSides bias label (colored chip: blue=Left, light blue=Lean Left, gray=Center, light red=Lean Right, red=Right), and type badge (Fact-Check or Corroborating). Below the source list, render 'Media bias ratings: AllSides.com (CC BY-NC 4.0)' as a link. This is required by the license.
 
 ---
 
@@ -966,7 +966,21 @@ services:
 
 ### Production / Demo
 
-Deploy backend on **Railway** or **Render** (free tier). Frontend on **Vercel** (free). Database stays on Supabase cloud. LLM stays on Groq or switches to Together.ai for higher limits.
+**Hosting constraints (verified 2026-09):** the backend holds torch + sentence-transformers
+(MiniLM + the NLI cross-encoder) + spaCy, so it needs about 2 GB of RAM (more with Surya OCR).
+- Render's free tier (512 MB, sleeps when idle) cannot hold it.
+- Railway has no permanent free tier.
+- Hugging Face stopped allowing Docker/Gradio Spaces on free CPU Basic for new Spaces in June 2026 (PRO required).
+
+**Open decision (owner: project lead):** pick one of
+(a) Hugging Face Spaces with PRO, running the Docker backend;
+(b) a free-tier VM (for example an always-free ARM instance) running `docker compose`;
+(c) a local demo plus a recorded walkthrough for the portfolio.
+The frontend stays on a static host (Vercel/Netlify/static Space).
+
+**Supabase free projects pause after 7 days without API activity.** Keep the project active
+with a daily scheduled request (for example a GitHub Actions cron calling an endpoint that
+queries the DB), or accept a resume delay before demos.
 
 ---
 
