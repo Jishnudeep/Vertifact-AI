@@ -221,7 +221,9 @@ async def _analyze(claim: str) -> CrossRefResult:
 
         # Map search relevance score to 0.0 - 1.0 (Tavily score is typically 0.0 - 1.0)
         relevance_score = float(article.get("score", 0.5))
-        stance, stance_confidence = label_stance(scores)
+        is_claimreview = domain in _CLAIMREVIEW_DOMAIN_SET
+        # Claim-review stance is unreliable (see _CLAIMREVIEW_DOMAIN_SET): show no chip at all.
+        stance, stance_confidence = (None, None) if is_claimreview else label_stance(scores)
 
         source_dict = {
             "url": article.get("url"),
@@ -250,7 +252,7 @@ async def _analyze(claim: str) -> CrossRefResult:
             coverage_distribution[bias_label] += 1
 
         # Claim-review sites are shown but never counted (see _CLAIMREVIEW_DOMAIN_SET).
-        if is_reputable and domain not in _CLAIMREVIEW_DOMAIN_SET:
+        if is_reputable and not is_claimreview:
             reputable_sources.append(source_dict)
 
     # Sort sources by relevance score descending

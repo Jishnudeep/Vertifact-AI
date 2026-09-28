@@ -262,6 +262,21 @@ async def test_claimreview_domains_excluded_from_consensus(stub_nli):
 
 
 @pytest.mark.anyio
+async def test_claimreview_domains_carry_no_stance_label(stub_nli):
+    """NLI misreads fact-check snippets, so their cards must not show a Supports/Refutes chip."""
+    mock_results = [
+        {"url": "https://www.politifact.com/factchecks/x", "title": "Claim: X", "content": "Rating: False", "score": 0.95},
+        {"url": "https://www.reuters.com/x", "title": "T", "content": "C", "score": 0.9},
+    ]
+    with patch("app.agents.crossref_agent.search_web", return_value=mock_results):
+        result = await run("Senator X voted against the bill")
+    by_url = {s["url"]: s for s in result.sources_found}
+    assert by_url["https://www.politifact.com/factchecks/x"]["stance"] is None
+    assert by_url["https://www.politifact.com/factchecks/x"]["stance_confidence"] is None
+    assert by_url["https://www.reuters.com/x"]["stance"] == "supports"
+
+
+@pytest.mark.anyio
 async def test_nli_failure_degrades_instead_of_falling_back(stub_nli):
     """Without stance, coverage cannot be read as agreement: degrade, never use the old count."""
     stub_nli.side_effect = RuntimeError("model file missing")
