@@ -1,11 +1,13 @@
 import ipaddress
 import socket
-from typing import Callable
+from typing import Callable, FrozenSet, Tuple
 from urllib.parse import urlsplit
 
 MAX_URL_LENGTH = 2048
 ALLOWED_SCHEMES = {"http", "https"}
 ALLOWED_PORTS = {None, 80, 443}
+# RFC 6052 well-known NAT64 prefix: the last 32 bits are an IPv4 address.
+_NAT64_PREFIX = ipaddress.ip_network("64:ff9b::/96")
 
 
 class UnsafeURLError(ValueError):
@@ -14,16 +16,23 @@ class UnsafeURLError(ValueError):
 
 def _is_public(ip: str) -> bool:
     addr = ipaddress.ip_address(ip.split("%", 1)[0])  # drop IPv6 zone id
-    if addr.version == 6 and addr.ipv4_mapped is not None:
-        addr = addr.ipv4_mapped
-    return addr.is_global
+    if addr.version == 6:
+        if addr.ipv4_mapped is not None:
+            addr = addr.ipv4_mapped
+        elif addr in _NAT64_PREFIX:
+            addr = ipaddress.IPv4Address(int(addr) & 0xFFFFFFFF)
+    # is_global alone treats multicast (224.0.0.0/4, ff00::/8) as public.
+    return addr.is_global and not addr.is_multicast
 
 
-def validate_public_url(url: str, resolver: Callable = socket.getaddrinfo) -> str:
+def resolve_public_url(url: str, resolver: Callable = socket.getaddrinfo) -> Tuple[str, FrozenSet[str]]:
     """
     Allow only http(s) URLs on default ports, without credentials, whose host resolves
-    exclusively to public addresses. Callers that fetch must re-validate every redirect hop
-    and connect to the validated address (DNS-rebinding defence). See TDD §11.
+    exclusively to public addresses. Returns the URL and the validated IPs.
+
+    Callers that fetch must connect to one of the returned IPs (never re-resolve the host:
+    DNS rebinding) and re-validate every redirect hop. getaddrinfo blocks, so async callers
+    must run this via asyncio.to_thread. See TDD §11.
     """
     if len(url) > MAX_URL_LENGTH:
         raise UnsafeURLError("URL too long")
@@ -45,7 +54,12 @@ def validate_public_url(url: str, resolver: Callable = socket.getaddrinfo) -> st
         infos = resolver(host, port or (443 if parts.scheme.lower() == "https" else 80), proto=socket.IPPROTO_TCP)
     except (socket.gaierror, UnicodeError) as exc:
         raise UnsafeURLError("host does not resolve") from exc
-    ips = {info[4][0] for info in infos}
+    ips = frozenset(info[4][0] for info in infos)
     if not ips or not all(_is_public(ip) for ip in ips):
         raise UnsafeURLError("host resolves to a non-public address")
-    return url
+    return url, ips
+
+
+def validate_public_url(url: str, resolver: Callable = socket.getaddrinfo) -> str:
+    """resolve_public_url without the addresses. Prefer resolve_public_url when fetching."""
+    return resolve_public_url(url, resolver=resolver)[0]
