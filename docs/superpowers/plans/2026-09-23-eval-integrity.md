@@ -27,7 +27,9 @@
 ## Global Constraints
 
 - **Depends on Plans 1, 2 and 4 being merged** (run order 1 → 2 → 4 → 3; see `README.md`). You need `confidence.evidence_status` in responses, `app.services.nli`, `app.services.claim_equivalence`, and Plan 4's `search_depth` (it changes replay cache keys).
-- Python **3.12+**, `uv` only. Run eval commands from the **repo root** (`uv run pytest eval/tests/`, `uv run python eval/run_eval.py`).
+- Python **3.12+**, `uv` only. Run eval commands from the **repo root**. The repo root has no uv project, so **every `uv run` in this plan needs `--project backend`**: `uv run --project backend pytest eval/tests/ -q`, `uv run --project backend python eval/run_eval.py ...`. A bare `uv run pytest eval/tests/` from the root fails with `Failed to spawn: pytest`. (Equivalent from `backend/`: `uv run pytest ../eval/tests/ -q`.) On this machine `uv` is `C:\Users\user\.local\bin\uv.exe`.
+- **Keep the budget override in `run_eval.py` (added 2026-09-28).** The top of `eval/run_eval.py` sets `TAVILY_DAILY_CREDIT_BUDGET` and `LLM_DAILY_CALL_BUDGET` to `"0"` (unlimited) *before* importing `app`. Without it the default 30-credit budget degrades every claim after about 3, and the metrics measure the budget. When Task 4 rewrites `run_eval.py`, keep those lines above the `app` imports. Quota is protected by replay mode, not by the budgets.
+- **Supabase state (2026-09-28):** migrations 03–05 are applied. Migration 06 (`06_warnings_and_lockdown.sql`) must also be applied before any `--replay record` run, or result persistence fails. `eval/run_eval.py` uses `bypass_cache=True`, so eval itself does not depend on the cache.
 - This plan changes **no backend code**. Leave-source-out and replay are eval-only monkeypatches that are active only inside `run_eval.py`.
 - A zero-tolerance guardrail may never be reported green on an invalid run (existing rule R8.3, keep it).
 - **Downloads need user permission.** Never fetch LIAR or FEVER yourself. Ask the user to place the files locally (Task 5 gives the exact files).
@@ -57,7 +59,7 @@
 
 - [ ] **Step 1:** Run `git status --short` and expect empty output. Confirm Plans 1, 2 and 4 are merged: `backend/app/services/claim_equivalence.py` and `backend/app/services/budget.py` must exist, and `grep evidence_status backend/app/agents/orchestrator.py` must match.
 - [ ] **Step 2:** `git checkout -b fix/eval-integrity`
-- [ ] **Step 3:** Run `uv run pytest eval/tests/ -q`. Expected: all pass. Record the count.
+- [ ] **Step 3:** Run `uv run --project backend pytest eval/tests/ -q`. Expected: all pass (32 on 2026-09-28, including 1 `live` test that uses only the local NLI model). Record the count.
 
 ---
 
@@ -983,9 +985,15 @@ grow it over time with the same shape:
   {"premise": "Wildfires have burned more than 2 million acres in California this year, officials said.", "claim": "California wildfires burned over a million acres this year", "label": "supports"},
   {"premise": "The Eiffel Tower remains in Paris, where it was completed in 1889.", "claim": "The Eiffel Tower was moved to London", "label": "refutes"},
   {"premise": "Analysts debated the merger's likely impact on consumer prices.", "claim": "The merger was blocked by regulators", "label": "neutral"},
-  {"premise": "The Supreme Court ruled 6-3 to uphold the law on Friday.", "claim": "The Supreme Court upheld the law", "label": "supports"}
+  {"premise": "The Supreme Court ruled 6-3 to uphold the law on Friday.", "claim": "The Supreme Court upheld the law", "label": "supports"},
+  {"premise": "Viral video claims drinking bleach cures COVID-19", "claim": "Drinking bleach cures COVID-19", "label": "neutral"}
 ]
 ```
+
+The last row is a known failure found in review on 2026-09-27: news that merely *reports* a
+claim was labelled `supports` at 0.97 by the real model. Keep it in the set so calibration
+shows the cost of this failure mode. Report its predicted label in the Step 6 JSON; do not
+tune the threshold just to make this one row pass.
 
 Create `eval/datasets/equivalence_pairs.json`. Each row is `{a, b, equivalent, kind}`:
 
