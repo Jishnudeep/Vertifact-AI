@@ -495,3 +495,20 @@ async def test_live_factchecks():
     else:
         sun_res = await run("The Earth orbits the Sun")
         assert sun_res.s_fact_score in [1.0, 0.5]
+
+
+from app.agents.factcheck_agent import map_rating_to_score
+
+
+@pytest.mark.parametrize("rating,expected", [
+    ("Misleading", 0.25), ("Misleading.", 0.25), ("Exaggerated", 0.25),
+    ("Missing context", 0.5), ("Needs context", 0.5), ("Unsupported", 0.5), ("No evidence", 0.5),
+    ("Four Pinocchios", 0.0), ("Three Pinocchios", 0.25), ("Two Pinocchios", 0.5),
+    ("One Pinocchio", 0.75), ("Geppetto Checkmark", 1.0),
+    ("Satire", 0.0), ("Altered", 0.0), ("Fabricated", 0.0), ("Scam", 0.0), ("Misattributed", 0.0),
+    ("Correct attribution", 1.0),
+    ("Pants on Fire!", 0.0), ("Mostly True", 0.75),   # existing behaviour kept
+])
+def test_real_world_textual_ratings(rating, expected):
+    assert map_rating_to_score(rating) == expected
+

@@ -47,6 +47,25 @@ RATING_MAP = {
     "unproven": 0.5,
     "unverified": 0.5,
     "outdated": 0.4,
+    # Real-world ClaimReview textualRating values (review 2026-09, M). Satire/altered/fabricated
+    # rate the LITERAL claim, which is untrue; context-type ratings are not verdicts.
+    "misleading": 0.25,
+    "exaggerated": 0.25,
+    "missing context": 0.5,
+    "needs context": 0.5,
+    "unsupported": 0.5,
+    "no evidence": 0.5,
+    "four pinocchios": 0.0,
+    "three pinocchios": 0.25,
+    "two pinocchios": 0.5,
+    "one pinocchio": 0.75,
+    "geppetto checkmark": 1.0,
+    "satire": 0.0,
+    "altered": 0.0,
+    "fabricated": 0.0,
+    "scam": 0.0,
+    "misattributed": 0.0,
+    "correct attribution": 1.0,
 }
 
 @dataclass
@@ -114,14 +133,15 @@ def map_rating_to_score(rating: str) -> float:
     if not rating:
         return 0.5
         
-    clean_rating = rating.strip().lower()
+    # Strip punctuation so "Misleading." and "Pants on Fire!" hit the exact map.
+    clean_rating = re.sub(r"[^\w\s]", "", rating).strip().lower()
     
     # Exact lookup
     if clean_rating in RATING_MAP:
         return RATING_MAP[clean_rating]
         
     # Substring fallback matching for external ClaimReview text (Order: Mixed/Half first)
-    if any(word in clean_rating for word in ["mixed", "mixture", "half", "somewhat", "misleading", "distorted"]):
+    if any(word in clean_rating for word in ["mixed", "mixture", "half", "somewhat", "distorted"]):
         return 0.5
         
     if any(word in clean_rating for word in ["false", "incorrect", "pants on fire", "fake", "debunk", "lying", "untrue", "lie"]):
