@@ -8,6 +8,16 @@ ALLOWED_SCHEMES = {"http", "https"}
 ALLOWED_PORTS = {None, 80, 443}
 # RFC 6052 well-known NAT64 prefix: the last 32 bits are an IPv4 address.
 _NAT64_PREFIX = ipaddress.ip_network("64:ff9b::/96")
+# IPv6 blocks that embed or tunnel IPv4, or are deprecated, rejected outright. Listed
+# explicitly because `is_global` for some of them changed across 3.12 patch releases.
+_BLOCKED_V6 = tuple(ipaddress.ip_network(n) for n in (
+    "::/96",              # IPv4-compatible (deprecated, RFC 4291), incl. ::1 and ::
+    "::ffff:0:0:0/96",    # SIIT IPv4-translated (RFC 2765)
+    "64:ff9b:1::/48",     # local-use NAT64 (RFC 8215)
+    "2001::/32",          # Teredo
+    "2002::/16",          # 6to4
+    "fec0::/10",          # site-local (deprecated)
+))
 
 
 class UnsafeURLError(ValueError):
@@ -17,6 +27,8 @@ class UnsafeURLError(ValueError):
 def _is_public(ip: str) -> bool:
     addr = ipaddress.ip_address(ip.split("%", 1)[0])  # drop IPv6 zone id
     if addr.version == 6:
+        if any(addr in net for net in _BLOCKED_V6):
+            return False
         if addr.ipv4_mapped is not None:
             addr = addr.ipv4_mapped
         elif addr in _NAT64_PREFIX:

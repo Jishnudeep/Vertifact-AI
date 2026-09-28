@@ -22,7 +22,13 @@ def test_public_https_url_is_allowed():
     "::1", "fe80::1", "fc00::1", "::ffff:127.0.0.1", "0.0.0.0",
     "224.0.0.1", "ff02::1",          # multicast
     "64:ff9b::a00:1",                # NAT64 of 10.0.0.1
-    "2002:a00:1::1",                 # 6to4 of 10.0.0.1
+    "2002:a00:1::1",                 # 6to4: the whole 2002::/16 block is rejected
+    "2002:5db8:d822::1",             # ...including 6to4 of a public IPv4
+    "64:ff9b:1::a00:1",              # local-use NAT64 (64:ff9b:1::/48)
+    "2001::1",                       # Teredo (2001::/32)
+    "::7f00:1", "::a9fe:a9fe",       # IPv4-compatible (::/96) 127.0.0.1, 169.254.169.254
+    "::ffff:0:a00:1",                # SIIT IPv4-translated (::ffff:0:0/96)
+    "fec0::1",                       # deprecated site-local
 ])
 def test_non_public_addresses_are_rejected(ip):
     with pytest.raises(UnsafeURLError):
