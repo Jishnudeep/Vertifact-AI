@@ -235,7 +235,8 @@ For URL input:
 claim-review domain (see §7). It is the flag that gates `level: "high"`.
 
 `confidence.evidence_status` is defined in PRD §6 'Evidence Status'. `sources[].stance` is
-`supports`/`refutes`/`neutral` for corroborating sources and `null` for fact-check sources.
+`supports`/`refutes`/`neutral` for corroborating sources and `null` for fact-check sources
+(including claim-review sites returned by the Cross-Ref search).
 
 **Request size limits (two distinct layers):**
 
@@ -254,7 +255,7 @@ claim-review domain (see §7). It is the flag that gates `level: "high"`.
 - `500` — All agents failed
 - `503` — LLM provider unavailable
 
-Every response carries `X-Process-Time-Ms`. The pipeline runs under a 9.5 s request deadline (`REQUEST_DEADLINE_S`). Agents get `min(8 s, remaining − 1 s)`. A slow DB write returns the result with `id: null` while the write completes in the background.
+Every response carries `X-Process-Time-Ms`. The pipeline runs under a 9.5 s request deadline (`REQUEST_DEADLINE_S`). Agents get `min(8 s, remaining − 1 s)`, floored at 1 s (`MIN_AGENT_TIMEOUT`), so when the cache lookup or embedding has eaten most of the budget a request can overrun the deadline by up to about 1 s rather than give agents no time at all. A slow DB write returns the result with `id: null` while the write completes in the background; on shutdown the app waits up to 5 s for such writes. The header is listed in CORS `expose_headers` so the cross-origin frontend can read it.
 
 ### 3.2 POST /api/verify/image
 
@@ -392,7 +393,9 @@ class CrossRefResult:
 6. Classify stance for every source with the local NLI cross-encoder
    (`app/services/nli.py`, `cross-encoder/nli-deberta-v3-small`, loaded once at startup):
    premise = title + snippet (≤1000 chars), hypothesis = claim. `supports` / `refutes` when
-   that probability ≥ 0.6 and exceeds the other; otherwise `neutral`.
+   that probability ≥ 0.6 and exceeds the other; otherwise `neutral`. Claim-review domains
+   (`CLAIMREVIEW_DOMAINS`) get `stance: null`: their snippets restate the claim they debunk,
+   which NLI misreads as support, so they are shown without a chip and never counted.
 7. Compute V_consensus / V_refute over reputable sources, excluding claim-review domains:
    - Reputable = AllSides-rated, or the institutional/primary allowlist (`.gov`, `.edu`, `who.int`).
    - `v_consensus = min(Σ relevance of supporting sources / 5, 1.0)`
@@ -645,6 +648,9 @@ def determine_confidence_level(
     verdict_found: bool = False,
     v_refute: float = 0.0,
 ) -> str:
+    # `high` keys on verdict_found (a definitive verdict), while Rule 2 keys on
+    # fact_check_found (any matched review): a "Half True" match is real evidence — enough
+    # to suppress the no-fact-check cap — but never enough to claim high confidence.
     if agents_succeeded == total_agents and verdict_found:
         return "high"
     elif agents_succeeded >= 2 and (
@@ -728,7 +734,16 @@ class ScoringEngine:
         v_consensus: float,
         agents_succeeded: int,
         total_agents: int = 3,
+        # `fact_check_found` (== FactCheckResult.matched_review): a review was matched,
+        # INCLUDING "Half True" / "Unproven". Passed explicitly rather than inferred from
+        # `s_fact == 0.5`, because those verdicts also map to exactly 0.5 and must NOT
+        # trigger the no-fact-check cap (Rule 2).
         fact_check_found: bool = False,
+        # `verdict_found` (== FactCheckResult.verdict_found): a DEFINITIVE verdict
+        # (true / mostly true / mostly false / false) from a recognized claim-review
+        # domain. Gates `high` confidence, the Rule-3 dominance cap, and overrides Rule 4:
+        # only a definitive verdict may license top confidence or override coverage.
+        # Invariant: verdict_found=True implies fact_check_found=True.
         verdict_found: bool = False,
         v_refute: float = 0.0,
     ) -> ScoringResult:
@@ -945,8 +960,9 @@ Deploy backend on **Railway** or **Render** (free tier). Frontend on **Vercel** 
 - **Rate limiting:** 10 requests/minute per client IP (slowapi). The key is `app/api/client_ip.py`: behind `TRUSTED_PROXY_HOPS` proxies it takes the N-th `X-Forwarded-For` entry from the right; with 0 hops it uses the socket peer. Set `TRUSTED_PROXY_HOPS=1` on Render/Railway/Fly.
 - **Spend budgets:** per-UTC-day ceilings on Tavily credits (`TAVILY_DAILY_CREDIT_BUDGET`, default 30) and LLM calls (`LLM_DAILY_CALL_BUDGET`, default 900). When a budget is exhausted, the call raises an outage error, the agent degrades and the response carries "Partial analysis". It never returns a confident score. The counters are in-process (single instance).
 - **Prompt injection:** every LLM prompt fences untrusted text in XML tags, states an instruction hierarchy, strips JSON-answer syntax (`neutralize_for_prompt`), length-caps inputs, and enum-validates outputs. Adversarial claims in the eval set must never yield `verdict_found=true` or `high` confidence.
-- **SSRF (URL inputs, P2-02):** the scraper must call `validate_public_url` (`app/utils/url_safety.py`) on the initial URL and on every redirect hop (at most 3, `follow_redirects=False`). It must connect to the validated address, cap the response at 2 MB and 5 s, and accept only `text/html`.
+- **SSRF (URL inputs, P2-02):** the scraper must call `resolve_public_url` (`app/utils/url_safety.py`, via `asyncio.to_thread` because DNS resolution blocks) on the initial URL and on every redirect hop (at most 3, `follow_redirects=False`). It must connect to one of the IPs it returns rather than re-resolving the host (DNS rebinding), cap the response at 2 MB and 5 s, and accept only `text/html`. Every resolved IP must be globally routable and not multicast; IPv4-mapped and NAT64 (`64:ff9b::/96`) addresses are checked as the IPv4 address they carry.
 - **API keys:** never exposed to the frontend. All external calls happen server-side.
 - **Image uploads:** validate the MIME type, reject files over 5 MB, process in memory (no disk writes), and never store image bytes.
 - **Retention:** claims and results older than `RETENTION_DAYS` (default 90) are deleted by `purge_old_claims` (migration 05; pg_cron recommended). Shared result links expire with them.
+- **Database roles:** the backend connects with the service-role key, and the frontend never talks to Supabase. Migration 06 therefore enables RLS with no policies on `claims`, `results`, `bias_ratings` and `eval_runs`, and revokes `EXECUTE` on `match_claims` and `purge_old_claims` from `PUBLIC`/`anon`/`authenticated`, so the publishable key can neither read the data nor call the purge.
 - **CORS:** restricted to the frontend domain in production.
