@@ -294,6 +294,7 @@ Cache hits are served only for equivalent claims (TDD §6). A lower hit rate is 
 - Multi-language claim support (English only for v2)
 - Native mobile apps (Capacitor/iOS/Android)
 - Custom model fine-tuning (deferred to Phase 4 stretch goal)
+- Multi-claim decomposition. v2 verifies the submitted text as one claim. Posts that bundle several independent assertions should be split by the user; the UI hint says so.
 
 ---
 

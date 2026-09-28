@@ -232,6 +232,8 @@ Take 100 headlines. Have 3 people rate each on a 1-5 scale for each axis. Use th
 | **Bucketed Accuracy** | Bin C_total into 3 buckets: False (0-0.33), Mixed (0.34-0.66), True (0.67-1.0). Measure classification accuracy. | >= 0.70 |
 | **Calibration** | Among claims scored 0.8, are ~80% actually true? Plot calibration curve. | Monotonically increasing |
 
+**Calibration curve (reliability diagram):** C_total is a credibility score, not a probability. The 'calibration curve' is a reliability diagram. Predicted C_total is binned (5 equal-width bins); each bin's mean continuous ground-truth score is plotted. It passes when populated bins (n ≥ 3) are monotonic. The Brier score is not used (the ground truth is continuous).
+
 **Critical failure modes to test:**
 - **Sophisticated misinformation:** False claims from reputable-looking sources with calm language. If C_total > 0.5, your system is fooled.
 - **True but sensational:** Real facts reported with clickbait headlines. If C_total < 0.5, your B_ling weight is too high.
@@ -258,7 +260,7 @@ hallucination = HallucinationMetric(threshold=0.5)
 ```
 
 **Guardrails to implement and test:**
-- **Source attribution:** Every factual statement in the output must trace to a retrieved source. Measure with DeepEval's Faithfulness metric.
+- **Source attribution / Hallucination detection:** Every factual statement in the output must trace to a retrieved source. Guardrails catch >80% of hallucinated outputs (linked to PRD §4 Phase 3 exit criteria). Defined as: On a seeded set of ≥30 verdict explanations, each paired with its source snippets (half faithful, half with an injected unsupported fact), the DeepEval faithfulness check flags ≥80% of the injected ones and ≤20% of the faithful ones.
 - **Confidence calibration:** If S_fact returns no results, C_total must be capped (e.g., max 0.5) with a "no verified sources found" warning.
 - **Input rejection:** Detect and refuse non-factual inputs (opinions, questions, nonsense). Measure false rejection rate on valid claims.
 - **Bias leakage:** The system should never generate its own political bias assessment. Verify that bias ratings ONLY come from the AllSides static data. Test with claims about politically charged topics.

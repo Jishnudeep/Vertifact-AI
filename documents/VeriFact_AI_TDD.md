@@ -470,6 +470,15 @@ class OCRResult:
 4. If extracted text < 10 characters: return error "insufficient text detected"
 5. Return cleaned text for downstream processing
 
+### 4.6 Scraper Agent (Phase 2, P2-02)
+
+**Input:** URL (already passed through `validate_public_url`, TDD §11).
+**Claim extraction:** the claim is the article headline: `og:title`, else `<title>`, with the
+site-name suffix removed. The article body (first 1,500 words) goes to the Linguistic agent
+only. On 403 or a paywall, use `og:title` + `og:description` (PRD §8).
+**Output:** `ScrapeResult(headline: str, body: str, final_url: str, degraded: bool, error: Optional[str])`.
+**Limits:** 3 redirects (each re-validated), 2 MB, 5 s, `text/html` only.
+
 ---
 
 ## 5. Database Schema (SQL)
