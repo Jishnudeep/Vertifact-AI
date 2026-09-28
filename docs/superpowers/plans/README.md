@@ -16,7 +16,7 @@ column (1 → 2 → 4 → 3 → 5). Each plan's Task 0 checks its prerequisites.
 | 2nd | Plan 2 | [cache-safety](2026-09-23-cache-safety.md) | C2: top-k, row policy, NLI equivalence, TTL | Plan 1 | completed |
 | 3rd | Plan 4 | [hardening](2026-09-23-hardening.md) | H1–H4: deadline, budgets, proxy-aware limits, SSRF guard, retention | Plans 1, 2 | completed |
 | 3rd+ | Review follow-ups | (no plan file; see below) | Fixes from the 2026-09-27 review of Plans 1, 2, 4 | Plans 1, 2, 4 | completed 2026-09-28 (Claude Code) |
-| 4th | Plan 3 | [eval-integrity](2026-09-23-eval-integrity.md) | C3, C4: replay, leave-source-out, segments, LIAR/FEVER, NLI calibration | Plans 1, 2, 4 | not started |
+| 4th | Plan 3 | [eval-integrity](2026-09-23-eval-integrity.md) | C3, C4: replay, leave-source-out, segments, LIAR/FEVER, NLI calibration | Plans 1, 2, 4 | completed 2026-09-28 (Antigravity) |
 | 5th | Plan 5 | [doc-sync](2026-09-23-doc-sync.md) | Medium drift, H5, H6: error codes, rating map, docs, skills | Plans 1–4 | not started |
 
 Plan 4 runs before Plan 3 because it switches Cross-Ref to basic search depth, and that
@@ -42,7 +42,7 @@ Plans 3 and 5 were amended to match. In particular, from the repo root use `uv r
 ## Before starting (user)
 
 1. **Commit or stash the current working tree.** Every plan's Task 0 stops on a dirty tree.
-2. **Supabase migrations run by hand**, in the SQL editor, in order: `03_stance_aware_consensus.sql` (Plan 1), `04_cache_topk_and_ttl.sql` (Plan 2), `05_retention.sql` (Plan 4), `06_warnings_and_lockdown.sql` (review follow-ups). 03–05 were applied 2026-09-27. **06 is pending.** Never re-run 01–03 after 04: they recreate an old `match_claims` overload.
+2. **Supabase migrations run by hand**, in the SQL editor, in order: `03_stance_aware_consensus.sql` (Plan 1), `04_cache_topk_and_ttl.sql` (Plan 2), `05_retention.sql` (Plan 4), `06_warnings_and_lockdown.sql` (review follow-ups). 03–06 were applied. Never re-run 01–03 after 04: they recreate an old `match_claims` overload.
 3. **Quota spend needs your OK.** The first eval `--replay record` run (Plan 3) spends Tavily and Groq quota. The LIAR/FEVER raw files are downloaded by you (Plan 3, Task 5).
 4. **The dev model decision** (Plan 5, Task 0) is yours: `gpt-oss-120b` in config vs `gpt-oss-20b` in docs.
 
