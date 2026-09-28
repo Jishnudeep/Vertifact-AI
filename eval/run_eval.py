@@ -16,6 +16,14 @@ BACKEND_DIR = BASE_DIR / "backend"
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
+# The harness calls verify_claim in-process, so the service's daily spend budgets (H2) would
+# otherwise degrade every claim after the first few and the metrics would measure the budget,
+# not the pipeline. 0 = unlimited. Must be set before app.config is imported; an explicit
+# environment value still wins. Quota is protected by replay mode (Plan 3), not by these.
+import os
+os.environ.setdefault("TAVILY_DAILY_CREDIT_BUDGET", "0")
+os.environ.setdefault("LLM_DAILY_CALL_BUDGET", "0")
+
 from app.agents.orchestrator import verify_claim, NonVerifiableClaimError
 from app.utils.validators import is_verifiable_claim
 from app.services.bias_lookup import load_bias_ratings, get_bias_label, UNRATED_BRIDGING_DOMAINS

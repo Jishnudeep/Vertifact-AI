@@ -24,6 +24,12 @@ os.environ.setdefault("TAVILY_API_KEY", "dummy_tavily_key")
 os.environ.setdefault("GOOGLE_FACT_CHECK_API_KEY", "dummy_factcheck_key")
 os.environ.setdefault("GOOGLE_FACTCHECK_API_KEY", "dummy_factcheck_key")
 
+def pytest_configure(config):
+    # eval/tests is collected with the repo root as rootdir, so backend/pyproject.toml's marker
+    # registration does not apply here. Live tests in this suite use only the local NLI model.
+    config.addinivalue_line("markers", "live: tests that need a real model or external API")
+
+
 @pytest.fixture
 def anyio_backend():
     return "asyncio"
