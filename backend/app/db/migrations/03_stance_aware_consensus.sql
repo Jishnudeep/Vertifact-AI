@@ -1,5 +1,7 @@
 -- VeriFact AI - Migration 03: stance-aware consensus (C1) and evidence status (D2)
 -- Spec: docs/superpowers/specs/2026-09-23-prd-tdd-review.md
+-- Do NOT re-run after migration 04: it recreates the 2-argument match_claims next to 04's
+-- 3-argument version, and PostgREST calls then fail as ambiguous (cache always misses).
 
 -- 1. New result columns
 ALTER TABLE results ADD COLUMN IF NOT EXISTS v_refute FLOAT NOT NULL DEFAULT 0;

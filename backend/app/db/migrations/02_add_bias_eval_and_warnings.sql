@@ -1,5 +1,7 @@
 -- VeriFact AI - Migration 02: Add bias_ratings, eval_runs, and results warnings
 -- Implements TDD Section 5 schemas and adds warnings support to semantic cache results.
+-- Do NOT re-run after migration 04: step 4 recreates the 2-argument match_claims next to
+-- 04's 3-argument version, and PostgREST calls then fail as ambiguous (cache always misses).
 
 -- 1. Static bias ratings table (pre-loaded from AllSides CSV)
 CREATE TABLE IF NOT EXISTS bias_ratings (
@@ -25,15 +27,9 @@ CREATE TABLE IF NOT EXISTS eval_runs (
 );
 
 -- 3. Add warnings column to results table if not exists
-DO $$
-BEGIN
-    IF NOT EXISTS (
-        SELECT 1 FROM information_schema.columns 
-        WHERE table_name = 'results' AND column_name = 'warnings'
-    ) THEN
-        ALTER TABLE results ADD COLUMN warnings JSONB DEFAULT '[]';
-    END IF;
-END $$;
+-- (The earlier information_schema guard had no table_schema filter and was skipped on the
+-- live project; migration 06 repairs that.)
+ALTER TABLE public.results ADD COLUMN IF NOT EXISTS warnings JSONB DEFAULT '[]';
 
 -- 4. Update match_claims RPC function to include warnings
 CREATE OR REPLACE FUNCTION match_claims(
