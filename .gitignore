@@ -75,6 +75,8 @@ eval/**/*.out.json
 eval/results/*.json
 !eval/results/.gitkeep
 eval/metrics/*.png
+eval/results/evidence_cache/
+eval/datasets/raw/
 calibration_*.png
 
 # Large/generated data (commit small curated CSV/JSON deliberately via -f)
