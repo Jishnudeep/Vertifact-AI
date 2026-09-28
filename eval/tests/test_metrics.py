@@ -103,3 +103,16 @@ def test_compute_recall_at_k():
     ground_truth = {"snopes.com", "politifact.com"}
     recall = compute_recall_at_k(retrieved, ground_truth, k=3)
     assert recall == 1.0
+
+
+def test_replay_miss_invalidates_run():
+    from eval.run_eval import assess_run_validity, STATUS_INVALID_RUN
+    status, reasons = assess_run_validity(
+        verifiable_preds=[0.2, 0.8], verifiable_targets=[0.0, 1.0],
+        zero_source_rate=0.0, error_rate=0.0,
+        bias_metrics={"passed": True}, bridging_violations=[], adversarial_results=[],
+        replay_misses=3,
+    )
+    assert status == STATUS_INVALID_RUN
+    assert any("replay" in r for r in reasons)
+
