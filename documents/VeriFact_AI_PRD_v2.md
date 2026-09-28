@@ -272,11 +272,14 @@ Cloud GPU for eval runs (RunPod A10G): ~$0.50/hr × ~10 hrs/month = **$5/month w
 | Metric | Target | Measurement |
 |--------|--------|-------------|
 | End-to-end latency (text input) | < 10 seconds (cold), < 500ms (cache hit) | P95 measured in FastAPI middleware |
-| Bucketed accuracy (False/Mixed/True) | ≥ 70% on eval set | LIAR + FEVER + manual test set |
-| MAE of C_total vs ground truth | ≤ 0.20 | Eval harness |
+| Selective bucketed accuracy (answered claims: evidence_status ≠ unverified) | ≥ 70% on the curated set | Eval harness `segments.selective` |
+| Coverage (share of verifiable claims answered, not "unverified") | Reported; no target until a live baseline exists | Eval harness `segments.selective.coverage` |
+| MAE of C_total, per dataset | ≤ 0.20 on curated `fact_checked`; others reported | Eval harness `segments.by_dataset` / `by_evidence_status` |
 | Faithfulness (agent summaries) | ≥ 0.80 (DeepEval score) | DeepEval automated tests |
 | Cache hit rate (semantic match) | ≥ 15% of repeat/similar queries | pgvector query logs; hits counted only after the row-policy and equivalence checks pass |
 | Mobile Lighthouse score | ≥ 85 (Performance) | Lighthouse CI |
+
+Metrics are never blended across datasets. LIAR is evaluated leave-source-out (politifact.com evidence excluded), because its labels *are* PolitiFact verdicts. FEVER (Wikipedia-derived) is reported as its own segment.
 
 Cache hits are served only for equivalent claims (TDD §6). A lower hit rate is an accepted cost of never serving a negated or numerically different claim.
 

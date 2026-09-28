@@ -261,7 +261,7 @@ hallucination = HallucinationMetric(threshold=0.5)
 - **Source attribution:** Every factual statement in the output must trace to a retrieved source. Measure with DeepEval's Faithfulness metric.
 - **Confidence calibration:** If S_fact returns no results, C_total must be capped (e.g., max 0.5) with a "no verified sources found" warning.
 - **Input rejection:** Detect and refuse non-factual inputs (opinions, questions, nonsense). Measure false rejection rate on valid claims.
-- **Bias leakage:** The system should never generate its own political bias assessment. Verify that bias ratings ONLY come from the AllSides/Ad Fontes static data. Test with claims about politically charged topics.
+- **Bias leakage:** The system should never generate its own political bias assessment. Verify that bias ratings ONLY come from the AllSides static data. Test with claims about politically charged topics.
 
 ### 2.6 Evaluation Pipeline Architecture
 
@@ -321,6 +321,34 @@ for w1 in np.arange(0.2, 0.8, 0.05):
 **Constraint:** w1 (fact-check match) should always be the dominant weight. A direct fact-check from PolitiFact should matter more than linguistic tone or coverage volume. Enforce w1 >= 0.4 in your grid search.
 
 **Validation:** Use k-fold cross-validation on your eval set to prevent overfitting the weights to your test data. Report mean +/- std of MAE across folds.
+
+### 2.8 Segmentation, Leave-Source-Out, and Replay (C3, C4)
+
+#### Segment Definitions and Selective Accuracy
+Blended metrics across heterogeneous claim types obscure pipeline behavior. Claims with an authoritative fact-check match (`S_fact`) carry high certainty, whereas claims without one rely on cross-referencing and tone analysis with confidence bounded to roughly 0.25–0.75 by construction.
+
+VeriFact AI segments evaluation metrics by:
+- **`source_dataset`:** `curated`, `liar`, or `fever`. Metrics are never blended across datasets.
+- **`evidence_status`:** `fact_checked`, `disputed`, `corroborated`, `unverified`, or `insufficient_evidence`.
+
+Claims with `evidence_status == "unverified"` are treated as abstentions:
+- **Selective Bucketed Accuracy:** Bucketed accuracy computed strictly over the answered set (`fact_checked`, `disputed`, `corroborated`).
+- **Coverage:** Proportion of verifiable claims that received an answered status (`n_answered / n_total`).
+
+#### Leave-Source-Out Domain Exclusion
+When evaluating claims derived from a fact-checking benchmark (such as LIAR, whose labels originate from PolitiFact), the pipeline must not grade a claim using the labeller's own article:
+- Each claim may specify an `origin_domain` (e.g., `politifact.com` for LIAR).
+- During evaluation, evidence retrieval calls filter out all results originating from `origin_domain` across both web search and fact-check endpoints.
+
+#### Replay and Reproducibility
+To prevent burning API quotas (Tavily, Groq) during repeated eval iterations and to guarantee deterministic test execution:
+- `--replay record`: Calls live evidence and LLM APIs, saving raw responses to `eval/results/evidence_cache/`.
+- `--replay replay`: Serves responses strictly from the cache. Any cache miss raises `ReplayMissError` and invalidates the run (`STATUS_INVALID_RUN`).
+- `--replay live`: Calls external APIs live without caching. Refused when any claim in the dataset has `origin_domain` set (leave-source-out requires record or replay mode).
+
+#### Benchmark Label Maps
+- **LIAR (6-class):** `pants-fire` = 0.0, `false` = 0.15, `barely-true` = 0.3, `half-true` = 0.5, `mostly-true` = 0.75, `true` = 1.0.
+- **FEVER (3-class):** `SUPPORTS` = 1.0, `REFUTES` = 0.0, `NOT ENOUGH INFO` = 0.5.
 
 ---
 
