@@ -9,6 +9,7 @@ from app.agents.factcheck_agent import (
     make_neutral_factcheck,
 )
 from app.services.errors import EvidenceAPIError
+from app.services.budget import LLMBudgetExceeded
 from app.config import settings
 
 @pytest.mark.anyio
@@ -77,6 +78,56 @@ async def test_google_factcheck_api_hit():
         assert result.s_fact_score == 0.0
         assert result.best_match["publisher"] == "Snopes"
         assert result.best_match["rating"] == "False"
+
+@pytest.mark.anyio
+async def test_llm_budget_exhausted_during_rating_classification_degrades():
+    """An unclassified verbose rating must degrade, never become a non-degraded 'fact_checked' 0.5."""
+    mock_google_response = [
+        {
+            "text": "The Earth is flat",
+            "claimReview": [
+                {
+                    "url": "https://www.snopes.com/fact-check/flat-earth/",
+                    "publisher": {"name": "Snopes"},
+                    "textualRating": "Needs more context to be understood",
+                    "reviewDate": "2026-01-01"
+                }
+            ]
+        }
+    ]
+
+    with patch("app.agents.factcheck_agent.search_factchecks", return_value=mock_google_response), \
+         patch("app.agents.factcheck_agent.run_adk_agent", side_effect=LLMBudgetExceeded("Daily LLM call budget exhausted")):
+        result = await run("The Earth is flat")
+
+    assert result.degraded is True
+    assert result.matched_review is False
+    assert result.s_fact_score == 0.5
+
+@pytest.mark.anyio
+async def test_llm_budget_exhausted_during_alignment_degrades():
+    """A real Google match that could not be aligned must not be silently reported as 'no fact-checks'."""
+    mock_google_response = [
+        {
+            "text": "The Earth is flat",
+            "claimReview": [
+                {
+                    "url": "https://www.snopes.com/fact-check/flat-earth/",
+                    "publisher": {"name": "Snopes"},
+                    "textualRating": "False",
+                    "reviewDate": "2026-01-01"
+                }
+            ]
+        }
+    ]
+
+    with patch("app.agents.factcheck_agent.search_factchecks", return_value=mock_google_response), \
+         patch("app.agents.factcheck_agent.search_web", return_value=[]), \
+         patch("app.agents.factcheck_agent.run_adk_agent", side_effect=LLMBudgetExceeded("Daily LLM call budget exhausted")):
+        result = await run("The Earth is flat and round")
+
+    assert result.degraded is True
+    assert result.matched_review is False
 
 @pytest.mark.anyio
 async def test_tavily_fallback_with_llm():

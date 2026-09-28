@@ -10,6 +10,7 @@ from app.config import settings
 from app.services.factcheck_api import search_factchecks
 from app.services.search_api import search_web, FACTCHECK_DOMAINS, CLAIMREVIEW_DOMAINS
 from app.services.errors import EvidenceAPIError
+from app.services.budget import LLMBudgetExceeded
 from app.utils.adk_helpers import run_adk_agent, parse_adk_response
 from app.utils.errors import AgentErrorDetails, classify_provider_error
 from app.utils.text_processing import extract_domain
@@ -163,6 +164,9 @@ async def _classify_rating_with_llm(claim: str, rating_text: str) -> str:
         data = parse_adk_response(content, expected_keys=["rating", "explanation"])
         raw_rating = str(data.get("rating", "unproven")).strip().lower()
         return raw_rating if raw_rating in VALID_RATINGS else "unproven"
+    except LLMBudgetExceeded:
+        # Budget refusal is an outage, not an "unproven" rating: let run() degrade (TDD §11).
+        raise
     except Exception as exc:
         logger.error(f"Error classifying verbose rating with ADK: {exc}")
         return "unproven"
@@ -215,6 +219,9 @@ If the claim is relevant, determine the implied rating for the user query:
         if rating not in VALID_RATINGS:
             rating = "unproven"
         return RATING_MAP.get(rating, 0.5)
+    except LLMBudgetExceeded:
+        # Budget refusal is an outage, not "not relevant": let run() degrade (TDD §11).
+        raise
     except Exception as exc:
         logger.error(f"Error in claim match alignment: {exc}")
         return None
