@@ -90,6 +90,7 @@ verifact-ai/
 │   │   ├── api/
 │   │   │   ├── routes.py            # /verify, /verify/image, /results
 │   │   │   ├── schemas.py           # Pydantic request/response models
+│   │   │   ├── client_ip.py         # Client IP extraction (trusted proxy hops)
 │   │   │   └── websocket.py         # WebSocket handler for agent status
 │   │   ├── agents/
 │   │   │   ├── orchestrator.py      # ADK orchestrator agent
@@ -107,15 +108,21 @@ verifact-ai/
 │   │   │   ├── search_api.py        # Tavily search client
 │   │   │   ├── embedding.py         # BGE-M3 embedding generation
 │   │   │   ├── cache.py             # Semantic cache (pgvector queries)
+│   │   │   ├── cache_policy.py      # Cache policy and TTL enforcement
+│   │   │   ├── claim_equivalence.py # Bidirectional NLI claim equivalence
+│   │   │   ├── nli.py               # Cross-encoder NLI model
+│   │   │   ├── budget.py            # Daily API spend budgets
 │   │   │   └── bias_lookup.py       # AllSides static data lookup
 │   │   ├── db/
 │   │   │   ├── connection.py        # Supabase client setup
 │   │   │   ├── models.py            # SQLAlchemy / raw SQL models
+│   │   │   ├── purge.py             # 90-day retention purge
 │   │   │   └── migrations/          # Schema migrations
 │   │   └── utils/
 │   │       ├── text_processing.py   # URL stripping, input sanitization
+│   │       ├── url_safety.py        # SSRF protection and URL validation
 │   │       └── validators.py        # Input type detection, claim vs opinion
-│   ├── requirements.txt
+│   ├── pyproject.toml + uv.lock     # uv-managed; never pip
 │   ├── Dockerfile
 │   └── .env.example
 ├── frontend/
@@ -150,6 +157,8 @@ verifact-ai/
 │   │   ├── report_generator.py
 │   │   └── calibration_plot.py
 │   ├── conftest.py
+│   ├── replay.py
+│   ├── calibrate_nli.py
 │   └── run_eval.py
 ├── data/
 │   ├── allsides_bias_ratings.csv
@@ -345,6 +354,7 @@ class FactCheckResult:
     verdict_found: bool = False   # True only on definitive verdicts from CLAIMREVIEW_DOMAINS
     degraded: bool = False
     error: Optional[str] = None
+    error_details: Optional[AgentErrorDetails] = None
 ```
 
 **Logic (two layers, fact-checking is the motive at every step):**
@@ -383,6 +393,7 @@ class CrossRefResult:
     v_refute_score: float = 0.0     # 0.0 to 1.0, refuting reputable coverage
     degraded: bool = False          # True on timeout, or when EVERY search failed (evidence-API outage)
     error: Optional[str] = None
+    error_details: Optional[AgentErrorDetails] = None
 ```
 
 **Logic:**
@@ -422,6 +433,9 @@ class LinguisticResult:
     informational_density: float  # 0.0 (sparse) to 1.0 (information-rich)
     b_ling_score: float           # Composite: mean of axes (with density inverted)
     flagged_phrases: list[str]    # Specific phrases that triggered high scores
+    degraded: bool = False
+    error: Optional[str] = None
+    error_details: Optional[AgentErrorDetails] = None
 ```
 
 **Logic:**
@@ -534,15 +548,24 @@ CREATE TABLE eval_runs (
 
 ```python
 from sentence_transformers import SentenceTransformer
+from app.config import get_settings
 
-model = SentenceTransformer("BAAI/bge-m3")
+_model = None
+
+def get_embedding_model() -> SentenceTransformer:
+    global _model
+    if _model is None:
+        settings = get_settings()
+        _model = SentenceTransformer(settings.embedding_model_name)
+    return _model
 
 def generate_embedding(text: str) -> list[float]:
-    """Generate 1024-dim BGE-M3 embedding for a claim."""
+    """Generate normalized embedding using the configured model."""
+    model = get_embedding_model()
     return model.encode(text, normalize_embeddings=True).tolist()
 ```
 
-**Important:** Load the model once at FastAPI startup (`@app.on_event("startup")`), not per-request. BGE-M3 takes ~2GB RAM when loaded. On 8GB RAM, this is not feasible alongside the rest of the stack. **Development config:** Use `all-MiniLM-L6-v2` (384-dim, ~100MB) and set `vector(384)` in the schema. **Production config:** Use `BAAI/bge-m3` (1024-dim) and set `vector(1024)`. Make the dimension a config variable so swapping requires no code changes, only a schema migration and re-embedding of cached claims.
+**Important:** Load the model once at startup via the FastAPI `lifespan` handler in `app/main.py` (embeddings, spaCy, NLI, AllSides are preloaded there), not per-request. BGE-M3 takes ~2GB RAM when loaded. On 8GB RAM, this is not feasible alongside the rest of the stack. **Development config:** Use `all-MiniLM-L6-v2` (384-dim, ~100MB) and set `vector(384)` in the schema. **Production config:** Use `BAAI/bge-m3` (1024-dim) and set `vector(1024)`. Make the dimension a config variable so swapping requires no code changes, only a schema migration and re-embedding of cached claims.
 
 ### Cache Lookup Query
 
@@ -837,11 +860,9 @@ async def search_factchecks(query: str, api_key: str) -> list[dict]:
 
 ### 8.2 Tavily Search
 
+`app/services/search_api.py::search_web` posts to `https://api.tavily.com/search` with `httpx.AsyncClient` (5 s timeout). Non-200, network error or budget exhaustion raise `EvidenceAPIError` (an outage), while `[]` means 'no results'. `search_depth` is `advanced` for the Fact-Check agent and `basic` for Cross-Ref.
+
 ```python
-from tavily import TavilyClient
-
-tavily = TavilyClient(api_key=TAVILY_API_KEY)
-
 # Broad Tavily retrieval domains for fact checking & news evidence
 FACTCHECK_DOMAINS = [
     "snopes.com", "politifact.com", "factcheck.org", "fullfact.org",
@@ -856,21 +877,6 @@ CLAIMREVIEW_DOMAINS = {
     "leadstories.com", "checkyourfact.com", "healthfeedback.org",
     "climatefeedback.org", "afp.com", "factcheck.afp.com"
 }
-
-async def search_web(
-    query: str,
-    max_results: int = 5,
-    include_domains: list[str] | None = None,
-) -> list[dict]:
-    response = tavily.search(
-        query=query,
-        search_depth="advanced",
-        max_results=max_results,
-        # Fact-Check agent passes FACTCHECK_DOMAINS (fact-check motive);
-        # Cross-Ref agent passes None for broad cross-spectrum source discovery.
-        include_domains=include_domains or [],
-    )
-    return response.get("results", [])
 ```
 
 ### 8.3 AllSides Bias Lookup

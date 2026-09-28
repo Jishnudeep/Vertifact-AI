@@ -119,7 +119,7 @@ VeriFact AI solves a specific problem: **a user encounters a suspicious claim on
 |-------|-----------|-----------|
 | Frontend | Vite + React + Tailwind CSS | Fast builds, responsive-first, no SSR complexity |
 | Visualization | Recharts | SVG-based, React-native, touch-responsive |
-| Backend | FastAPI (Python 3.11+) | Native async, type hints, auto-docs |
+| Backend | FastAPI (Python 3.12+, managed with uv) | Native async, type hints, auto-docs |
 | Agent Framework | Google ADK + LiteLLM | ADK LlmAgent + LiteLLM for leaf prompts; asyncio fan-out for orchestration |
 | LLM (Dev) | `groq/openai/gpt-oss-120b` via Groq (free tier) | Fast inference, zero cost during development. Verified 2026-09-10: Groq serves no Llama chat model on our key; 120b chosen over 20b for strict-JSON adherence |
 | LLM (Prod) | Qwen3-30B-A3B or Llama 3.1 70B via vLLM | Higher quality for demo/production |
@@ -152,7 +152,7 @@ Where all weights satisfy Σwi = 1.0 and w1 ≥ 0.4 (fact-check match is always 
 - 0.0 = Direct match rating the claim as FALSE
 - 0.5 = No fact-check found (neutral, not indicative)
 - Intermediate values mapped from fact-checker labels (e.g., "Mostly True" = 0.75, "Half True" = 0.5, "Mostly False" = 0.25)
-- When multiple fact-checks exist, take the weighted average (weighted by recency)
+- When several reviews match, the one most similar to the claim is used for S_fact (averaging a True and a False review would fake a 'mixed' verdict). All matched reviews are listed as sources, so disagreement is visible.
 
 **B_ling (Linguistic Volatility Score) — Range: 0.0 to 1.0**
 - Composite of 4 sub-scores (each 0.0-1.0): Clickbait Syntax, Emotional Framing, Sensationalism, Informational Density (inverted — higher density = lower volatility)
@@ -172,8 +172,8 @@ Where all weights satisfy Σwi = 1.0 and w1 ≥ 0.4 (fact-check match is always 
 
 ### Confidence Capping Rules
 
-- If S_fact = 0.5 (no fact-check found) AND V_consensus < 0.3: Cap C_total at 0.55 and display "Low Confidence — Insufficient Sources" warning
-- If only 1 agent returns results (others timeout/fail): Cap C_total at 0.5 and display "Partial Analysis" warning
+- If no fact-check review matched (`fact_check_found = false`; a 'Half True' match does NOT count as missing) AND V_consensus < 0.3: Cap C_total at 0.55 and display "Low Confidence — Insufficient Sources" warning
+- If any agent fails or times out (fewer than 3 succeed): Cap C_total at 0.50 and display "Partial Analysis: k/3 agents succeeded". If all fail, return an error, never a score.
 - If input is detected as opinion/question (not factual claim): Return no score, display "This doesn't appear to be a verifiable factual claim"
 - If reputable coverage refutes the claim (V_refute ≥ 0.3 and V_refute > V_consensus) and no definitive fact-check verdict exists: Cap C_total at 0.33 and display "Disputed: reputable sources contradict this claim"
 
@@ -199,7 +199,7 @@ claims {
   input_type: ENUM('text', 'url', 'image')
   raw_input: TEXT
   extracted_claim: TEXT
-  embedding: VECTOR(1024)  -- BGE-M3 embedding for semantic cache
+  embedding: VECTOR(d)  -- d = EMBEDDING_DIMENSION (384 dev MiniLM, 1024 prod BGE-M3)
   created_at: TIMESTAMP
 }
 ```
@@ -218,7 +218,8 @@ results {
   weights: JSONB  -- {w1: 0.5, w2: 0.2, w3: 0.3}
   confidence_level: ENUM('high', 'medium', 'low', 'insufficient')
   agent_outputs: JSONB  -- raw outputs from each agent
-  source_citations: JSONB[]  -- array of {url, title, publisher, rating, bias_label}
+  source_citations: JSONB  -- array of {url, title, publisher, rating, bias_label, type, stance}
+  warnings: JSONB
   processing_time_ms: INT
   created_at: TIMESTAMP
 }
