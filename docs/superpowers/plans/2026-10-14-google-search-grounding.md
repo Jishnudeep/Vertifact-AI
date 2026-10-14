@@ -176,6 +176,7 @@ This is the only task that spends API quota: about 6 Gemini calls on the free ti
   async def fetch_page_text(url: str, expected_domain: Optional[str] = None) -> Optional[PageText]
   ```
   - Returns `None` on any failure: unsafe URL, non-2xx, non-`text/html`, over 2 MB, more than 3 redirects, timeout of `settings.page_fetch_timeout_s`, or a final domain that is not `expected_domain` and not a subdomain of it.
+  - Also returns `None` (review of 8521e2b) when: the extracted text is shorter than `MIN_TEXT_CHARS = 200` (a JS shell is not evidence); `expected_domain` is given and the final hop is not https; `expected_domain` has no "." after normalization; or the body uses any content-encoding other than gzip/identity. Gzip is decoded in-house with a bounded inflater; wire and decoded bytes both count against 2 MB. Over 2 MB is rejected, never truncated.
   - Never raises.
 - Pinning: request `https://<validated ip><path>` with `Host` header and `extensions={"sni_hostname": host}`, following each `Location` manually through `resolve_public_url`.
 
