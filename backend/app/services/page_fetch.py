@@ -27,6 +27,9 @@ from app.utils.text_processing import extract_domain
 from app.utils.url_safety import UnsafeURLError, resolve_public_url
 
 logger = logging.getLogger(__name__)
+# httpx logs every request URL at INFO; ours carry the pinned IP and publisher query strings.
+# Set here, not in main.py, so eval and scripts that import this module are covered too.
+logging.getLogger("httpx").setLevel(logging.WARNING)
 
 MAX_REDIRECTS = 3
 MAX_BODY_BYTES = 2 * 1024 * 1024
@@ -246,12 +249,16 @@ async def _read_capped(response: httpx.Response) -> bytes:
             decoded += len(out)
             if decoded > MAX_BODY_BYTES:
                 raise _FetchRejected("decoded body over cap")
+            # Bytes after the end of the gzip member (a second member or trailing garbage)
+            # land in unused_data; treat that the same as a corrupt body.
+            if inflater.unused_data:
+                raise _FetchRejected("data after gzip member")
             chunks.append(out)
             # unconsumed_tail is non-empty only when the call stopped at max_length, and that
             # output already tripped the cap above; the drain stays under the same bound.
             pending = inflater.unconsumed_tail
-    if inflater is not None and not inflater.eof:
-        raise _FetchRejected("truncated gzip body")
+    if inflater is not None and (not inflater.eof or inflater.unused_data):
+        raise _FetchRejected("truncated gzip body or data after gzip member")
     return b"".join(chunks)
 
 

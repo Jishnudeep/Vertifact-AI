@@ -131,7 +131,9 @@ async def test_extracts_title_and_text():
 async def test_page_without_body_text_returns_none():
     shell = (
         "<html><head><title>News App</title><script src='/app.js'></script></head>"
-        "<body><div id='root'></div><noscript><p>Enable JS</p></noscript>"
+        "<body><div id='root'></div>"
+        # Long enough to pass MIN_TEXT_CHARS on its own, so None proves noscript is dropped.
+        "<noscript><p>" + "Enable JavaScript to read this article. " * 8 + "</p></noscript>"
         "<template><p>" + "templated " * 50 + "</p></template></body></html>"
     )
     rec = Recorder({"reuters.com/app": html_response(shell)})
@@ -233,6 +235,16 @@ async def test_oversize_body_returns_none():
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize("wire_body", [
+    gzip.compress(ARTICLE.encode()) + gzip.compress(b"<p>second member</p>"),
+    gzip.compress(ARTICLE.encode()) + b"trailing garbage",
+], ids=["two_members", "trailing_garbage"])
+async def test_multi_member_gzip_returns_none(wire_body):
+    rec = Recorder({"reuters.com/gz": encoded_response("gzip", wire_body)})
+    assert await fetch("https://reuters.com/gz", "reuters.com", rec=rec) is None
+
+
+@pytest.mark.anyio
 async def test_gzip_page_is_decoded():
     rec = Recorder({"reuters.com/gz": encoded_response("gzip", gzip.compress(ARTICLE.encode()))})
     page = await fetch("https://reuters.com/gz", "reuters.com", rec=rec)
@@ -322,6 +334,13 @@ async def test_final_domain_must_match_expected():
     mapping["evil.com"] = "93.184.216.97"
     assert await fetch("https://evil.com/x", "com", rec=rec, mapping=mapping) is None
     assert await fetch("https://evil.com/x", ".com.", rec=rec, mapping=mapping) is None
+
+    # A public suffix passes the host-suffix test but not the registrable-domain equality.
+    rec.routes["www.bbc.co.uk/news"] = html_response()
+    mapping["www.bbc.co.uk"] = "93.184.216.94"
+    assert await fetch("https://www.bbc.co.uk/news", "co.uk", rec=rec, mapping=mapping) is None
+    page = await fetch("https://www.bbc.co.uk/news", "bbc.co.uk", rec=rec, mapping=mapping)
+    assert page is not None and page.domain == "bbc.co.uk"
 
     # Case and trailing dots are normalized on both sides.
     rec.routes["www.snopes.com./fact-check/x"] = html_response()

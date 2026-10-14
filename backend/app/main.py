@@ -20,10 +20,6 @@ from app.agents.orchestrator import (
 
 logger = logging.getLogger(__name__)
 
-# httpx logs every request URL at INFO; the page fetcher's URLs carry the pinned IP and
-# publisher query strings, which must not reach the logs (Plan 6 Task 2 review).
-logging.getLogger("httpx").setLevel(logging.WARNING)
-
 SHUTDOWN_DRAIN_TIMEOUT_S = 5.0
 
 @asynccontextmanager
