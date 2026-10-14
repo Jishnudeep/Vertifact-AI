@@ -19,6 +19,8 @@ from app.agents.orchestrator import (
 )
 
 logger = logging.getLogger(__name__)
+# ADK logs full LLM responses (grounded answer text included) at DEBUG; D4 keeps that text out of logs.
+logging.getLogger("google_adk").setLevel(logging.INFO)
 
 SHUTDOWN_DRAIN_TIMEOUT_S = 5.0
 

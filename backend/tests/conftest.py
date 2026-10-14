@@ -29,7 +29,9 @@ def _fresh_budgets():
 
 
 async def _live_grounded_search_blocked(*_args, **_kwargs):
-    raise RuntimeError("live Gemini search called in a unit test")
+    # pytest.fail raises a BaseException, so the agents' `except Exception` outage handling
+    # cannot turn a forgotten patch into a quietly degraded result.
+    pytest.fail("live Gemini search called in a unit test; patch grounded_search or mark live_search")
 
 
 @pytest.fixture(autouse=True)
