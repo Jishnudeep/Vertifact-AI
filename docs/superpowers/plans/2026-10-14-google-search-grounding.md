@@ -56,6 +56,19 @@
 
 This is the only task that spends API quota: about 6 Gemini calls on the free tier. **Ask the project lead before running it.**
 
+> **Outcome (2026-10-14): the project lead declined the live run.** `backend/tests/fixtures/grounded_search_sample.json` is **synthetic** (`"synthetic": true`, `latency_s: null`), built offline and validated with `types.GroundingMetadata.model_validate`. It mirrors the documented Gemini API shape and deliberately covers the edge cases:
+> - every `web.uri` is a `vertexaisearch.cloud.google.com/grounding-api-redirect/...` URL;
+> - `web.domain` is sometimes `null` with `web.title` holding the hostname, and sometimes populated;
+> - one chunk has a headline title and no domain (it must be dropped);
+> - it includes a duplicate domain (`www.snopes.com`), more than 5 distinct domains, and a claim-review domain in coverage results.
+>
+> Three facts are still **unverified until the Task 9 live check**:
+> - (a) the model id `gemini-2.5-flash-lite` (it is the `search_model_id` default and can be overridden by env);
+> - (b) the real `web.domain` population;
+> - (c) latency.
+>
+> No probe script was committed.
+
 **Files:**
 - Create: `backend/scripts/probe_grounded_search.py`
 - Create: `backend/tests/fixtures/grounded_search_sample.json`
