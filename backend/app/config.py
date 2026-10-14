@@ -69,7 +69,10 @@ class Settings(BaseSettings):
     tavily_daily_credit_budget: int = 30
     # Groq free tier for gpt-oss-120b = 1,000 requests/day; keep headroom for retries.
     llm_daily_call_budget: int = 900
-    
+
+    # Plan 6 / TDD §11: overall wall-clock budget for fetching one cited page (all hops).
+    page_fetch_timeout_s: float = 2.0
+
     # H3: number of reverse proxies in front of the API that append to X-Forwarded-For.
     # 0 = trust nothing (local dev); 1 = one platform proxy (Render/Railway/Fly).
     trusted_proxy_hops: int = 0
