@@ -2,7 +2,7 @@ import logging
 import httpx
 from typing import List, Dict, Any, Literal
 
-from app.services.errors import EvidenceAPIError
+from app.services.errors import EvidenceAPIError, EvidenceBudgetExceeded
 from app.services import budget
 # Re-exported for existing importers until Tavily is removed (Plan 6 Task 7).
 from app.services.source_domains import FACTCHECK_DOMAINS, CLAIMREVIEW_DOMAINS  # noqa: F401
@@ -48,7 +48,7 @@ async def search_web(
     credits = 2 if search_depth == "advanced" else 1
     if not budget.get_tavily_budget().try_charge(credits):
         logger.error("Daily Tavily credit budget exhausted; refusing search.")
-        raise EvidenceAPIError("Daily evidence-search budget exhausted", provider="budget")
+        raise EvidenceBudgetExceeded("Daily evidence-search budget exhausted", provider="budget")
 
     payload = {
         "api_key": api_key,

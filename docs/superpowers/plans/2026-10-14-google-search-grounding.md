@@ -17,7 +17,7 @@
 
 | # | Decision |
 |---|---|
-| D1 | Search runs on the **Gemini API with an AI Studio key** (`GEMINI_API_KEY`, already in `backend/app/.env`). Not Vertex AI. |
+| D1 | Search runs on the **Gemini API with an AI Studio key** (`GEMINI_API_KEY`, already in `backend/app/.env`). Not Vertex AI. The default is the Gemini API (`GOOGLE_GENAI_USE_ENTERPRISE` / `GOOGLE_GENAI_USE_VERTEXAI` default to `false`); an operator can still force Vertex with an explicit `GOOGLE_GENAI_USE_VERTEXAI=true`. |
 | D2 | The **workflow calls the search agents directly**: each Fact-Check / Cross-Ref run calls its search agent exactly once. No parent LLM decides whether to search. The agents are plain `LlmAgent(tools=[google_search])`. `GoogleSearchAgentTool` is not used, because no LLM holds the tool. |
 | D3 | **Stance and verdicts are read from fetched cited pages**, never from Gemini's synthesized answer. |
 | D4 | The grounded **answer text is never used** for scoring, verdicts, stance or display. Only the cited sources (uri, title, domain) and `search_entry_point.rendered_content` leave the search helper. This keeps leave-source-out valid without Vertex's `exclude_domains` (eval §2.8). |
@@ -150,7 +150,7 @@ This is the only task that spends API quota: about 6 Gemini calls on the free ti
   - `test_answer_text_is_not_exposed`: `GroundedSearch` has no attribute containing the answer, i.e. `{f.name for f in fields(GroundedSearch)} == {"sources", "queries", "search_suggestions_html"}`.
 - [ ] **Step 2: Run** `uv run pytest tests/test_grounded_search.py -v`. Expected: FAIL (module missing).
 - [ ] **Step 3: Implement** the files above.
-  - Domain rule: `extract_domain(web.domain or "")`. If that is empty, fall back to `extract_domain(web.title)` only when the title matches `^[a-z0-9.-]+\.[a-z]{2,}$`. Otherwise drop the chunk.
+  - Domain rule: `extract_domain(web.domain or "")`. If that is empty, fall back to `extract_domain(web.title)` only when the title, stripped and **lowercased**, matches `^[a-z0-9.-]+\.[a-z]{2,}$` (hostnames are case-insensitive, so a lowercased hostname is still not a guess; the real title casing is unverified because the Task 0 fixture is synthetic). Otherwise drop the chunk.
 - [ ] **Step 4: Run** the same command. Expected: PASS.
 - [ ] **Step 5: Commit** `feat(search): grounded search service on ADK google_search`.
 

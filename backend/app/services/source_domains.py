@@ -1,8 +1,13 @@
 """
 Evidence-source domain lists (TDD §8.2).
 
-Moved out of `search_api.py` unchanged (Plan 6 Task 1) so they outlive the Tavily client.
-Members are compared against `extract_domain(...)` output.
+Moved out of `search_api.py` (Plan 6 Task 1) so they outlive the Tavily client.
+
+Members are compared against `extract_domain(...)` output, which keeps only the registrable
+domain for standard TLDs: `extract_domain("factcheck.afp.com") == "afp.com"`. The
+`factcheck.afp.com` entries can therefore never match on their own; `afp.com` is the member
+that does (added to FACTCHECK_DOMAINS in the Task 1 review, matching TDD §8.2). The old
+entries are kept so the lists stay a superset of the documented members.
 """
 from typing import List
 
@@ -17,6 +22,7 @@ FACTCHECK_DOMAINS: List[str] = [
     "reuters.com",
     "usatoday.com",
     "factcheck.afp.com",
+    "afp.com",
     "leadstories.com",
     "checkyourfact.com",
     "climatefeedback.org",

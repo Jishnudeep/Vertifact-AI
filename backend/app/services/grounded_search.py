@@ -22,8 +22,8 @@ from google.genai import types
 
 from app.config import settings
 from app.services import budget
-from app.services.errors import EvidenceAPIError
-from app.utils.adk_helpers import SearchKind, run_grounded_agent
+from app.services.errors import EvidenceAPIError, EvidenceBudgetExceeded
+from app.utils.adk_helpers import GroundedSearchBlocked, SearchKind, run_grounded_agent
 from app.utils.text_processing import extract_domain
 from app.utils.validators import neutralize_for_prompt
 
@@ -62,8 +62,13 @@ _INSTRUCTIONS: Dict[str, str] = {
     "coverage": COVERAGE_INSTRUCTION,
 }
 
-# A grounding-chunk title is only trusted as a domain when it is shaped like a bare hostname.
+# A grounding-chunk title is only trusted as a domain when it is shaped like a bare hostname
+# (matched after lowercasing: hostnames are case-insensitive, so this is still not a guess).
 _HOSTNAME_TITLE_RE = re.compile(r"^[a-z0-9.-]+\.[a-z]{2,}$")
+
+# The claim is fenced in <claim> tags; angle brackets inside it are swapped for look-alikes so
+# the fence cannot be closed from inside, independent of upstream `sanitize_text`.
+_FENCE_SAFE = str.maketrans({"<": "‹", ">": "›"})  # single angle quotation marks
 
 
 @dataclass(frozen=True)
@@ -88,29 +93,52 @@ class GroundedSearch:
 
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> "GroundedSearch":
-        sources = [
-            GroundedSource(url=str(s["url"]), title=str(s.get("title") or ""), domain=str(s["domain"]))
-            for s in (d.get("sources") or [])
-            if isinstance(s, dict) and s.get("url") and s.get("domain")
-        ]
+        """
+        Rebuild from a stored row (e.g. the semantic cache). The row is treated as untrusted:
+        domains are re-normalized (empty -> dropped), sources are de-duplicated and capped at
+        MAX_SOURCES, and wrongly-typed fields fall back to empty values.
+        """
+        raw_sources = d.get("sources")
+        sources: List[GroundedSource] = []
+        seen: set[str] = set()
+        for s in raw_sources if isinstance(raw_sources, list) else []:
+            if not isinstance(s, dict):
+                continue
+            url, title, raw_domain = s.get("url"), s.get("title"), s.get("domain")
+            if not isinstance(url, str) or not url or not isinstance(raw_domain, str):
+                continue
+            domain = extract_domain(raw_domain)
+            if not domain or domain in seen:
+                continue
+            seen.add(domain)
+            sources.append(GroundedSource(url=url, title=title if isinstance(title, str) else "", domain=domain))
+            if len(sources) >= MAX_SOURCES:
+                break
+
+        raw_queries = d.get("queries")
+        queries = (
+            list(raw_queries)
+            if isinstance(raw_queries, list) and all(isinstance(q, str) for q in raw_queries)
+            else []
+        )
         html = d.get("search_suggestions_html")
         return cls(
             sources=sources,
-            queries=[str(q) for q in (d.get("queries") or [])],
-            search_suggestions_html=str(html) if html else None,
+            queries=queries,
+            search_suggestions_html=html if isinstance(html, str) and html else None,
         )
 
 
 def _chunk_domain(web: types.GroundingChunkWeb) -> str:
     """
     The plan's domain rule: `web.domain` first; only when that is empty, fall back to a title
-    that is shaped exactly like a lowercase hostname. Anything else yields "" (drop the chunk) —
-    a source is never attributed to a guessed domain.
+    that, lowercased, is shaped exactly like a hostname. Anything else yields "" (drop the
+    chunk) — a source is never attributed to a guessed domain.
     """
     domain = extract_domain(web.domain or "")
     if domain:
         return domain
-    title = web.title or ""
+    title = (web.title or "").strip().lower()
     if _HOSTNAME_TITLE_RE.fullmatch(title):
         return extract_domain(title)
     return ""
@@ -143,8 +171,9 @@ async def grounded_search(kind: SearchKind, claim: str) -> GroundedSearch:
 
     Raises:
         EvidenceAPIError(provider="gemini_search"): key missing, daily search budget exhausted
-        (checked and charged once BEFORE the model call), or the model call failed. A
-        google-genai APIError keeps its HTTP code as `status_code`.
+        (`EvidenceBudgetExceeded`; checked and charged once BEFORE the model call), the model
+        call failed, or it ended in an ADK error event with no metadata (SAFETY, RECITATION,
+        prompt block, ...). A google-genai APIError keeps its HTTP code as `status_code`.
 
     `asyncio.CancelledError` (the caller's agent timeout) propagates untouched.
     """
@@ -156,12 +185,20 @@ async def grounded_search(kind: SearchKind, claim: str) -> GroundedSearch:
 
     if not budget.get_search_budget().try_charge():
         logger.error("Daily grounded-search budget exhausted; refusing search.")
-        raise EvidenceAPIError("Daily grounded-search budget exhausted", provider=PROVIDER)
+        raise EvidenceBudgetExceeded("Daily grounded-search budget exhausted", provider=PROVIDER)
 
-    prompt = f"<claim>{neutralize_for_prompt(claim[:MAX_CLAIM_CHARS])}</claim>"
+    fenced = neutralize_for_prompt(claim[:MAX_CLAIM_CHARS]).translate(_FENCE_SAFE)
+    prompt = f"<claim>{fenced}</claim>"
 
     try:
         md = await run_grounded_agent(kind, instruction, prompt)
+    except GroundedSearchBlocked as exc:
+        # Blocked / failed generation: the search did not run to completion -> outage.
+        logger.error(f"Gemini grounded search ({kind}) returned error event {exc.code}")
+        raise EvidenceAPIError(
+            f"Gemini grounded search returned {exc.code}",
+            provider=PROVIDER,
+        ) from exc
     except genai_errors.APIError as exc:
         logger.error(f"Gemini grounded search ({kind}) failed with HTTP {exc.code}")
         raise EvidenceAPIError(

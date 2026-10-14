@@ -356,6 +356,18 @@ async def run_adk_agent(name: str, instruction: str, prompt: str, app_name: str)
             except Exception as cleanup_err:
                 logger.debug(f"Failed to delete ADK session {session_id}: {cleanup_err}")
 
+class GroundedSearchBlocked(RuntimeError):
+    """
+    A grounded-search turn ended in an ADK error event (blocked / failed generation) with no
+    grounding metadata. Carries only a sanitized code name — never the provider's
+    `error_message`, which may echo the claim.
+    """
+
+    def __init__(self, error_code: Any):
+        raw = getattr(error_code, "name", None) or str(error_code)
+        self.code = re.sub(r"[^A-Za-z0-9_]", "", raw)[:64] or "UNKNOWN"
+        super().__init__(f"Grounded search returned error event {self.code}")
+
 def get_grounded_runner(kind: SearchKind, instruction: str) -> InMemoryRunner:
     """
     Retrieve the cached InMemoryRunner for a grounded-search agent (Plan 6 D2).
@@ -391,6 +403,12 @@ async def run_grounded_agent(
     only `grounding_metadata` (cited chunks, queries, search-suggestion HTML) is returned.
     The last event carrying metadata wins; None means the model cited nothing.
 
+    ADK turns a blocked or failed generation (SAFETY, RECITATION, BLOCKLIST,
+    PROHIBITED_CONTENT, SPII, OTHER, MAX_TOKENS without text, a prompt block_reason, ...) into
+    an event with `error_code` set and the grounding metadata dropped. When no event carried
+    metadata and any event carried an `error_code`, this raises `GroundedSearchBlocked`: the
+    search could not run, which is an outage, not an absence of evidence.
+
     Does NOT charge the Groq LLM budget (the caller charges the search budget). Provider
     errors (google.genai.errors.APIError, etc.) and cancellation propagate unchanged; the
     session is always deleted.
@@ -406,11 +424,17 @@ async def run_grounded_agent(
 
     message = types.Content(role="user", parts=[types.Part(text=prompt)])
     metadata: Optional[types.GroundingMetadata] = None
+    error_code: Any = None
     try:
         async for event in runner.run_async(user_id=user_id, session_id=session_id, new_message=message):
             event_metadata = getattr(event, "grounding_metadata", None)
             if event_metadata is not None:
                 metadata = event_metadata
+            event_error = getattr(event, "error_code", None)
+            if event_error is not None:
+                error_code = event_error
+        if metadata is None and error_code is not None:
+            raise GroundedSearchBlocked(error_code)
         return metadata
     finally:
         try:

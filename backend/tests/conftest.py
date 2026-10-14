@@ -11,6 +11,9 @@ os.environ.setdefault("TAVILY_KEY", "dummy_tavily_key")
 os.environ.setdefault("TAVILY_API_KEY", "dummy_tavily_key")
 os.environ.setdefault("GOOGLE_FACT_CHECK_API_KEY", "dummy_factcheck_key")
 os.environ.setdefault("GOOGLE_FACTCHECK_API_KEY", "dummy_factcheck_key")
+# Plan 6: a dummy Gemini key wins over the real one in app/.env (env beats dotenv), so the real
+# key never reaches the unit-test process.
+os.environ.setdefault("GEMINI_API_KEY", "dummy_gemini_key")
 
 @pytest.fixture
 def anyio_backend():
@@ -22,5 +25,24 @@ def _fresh_budgets():
     budget.get_tavily_budget.cache_clear()
     budget.get_llm_budget.cache_clear()
     budget.get_search_budget.cache_clear()
+    yield
+
+
+async def _live_grounded_search_blocked(*_args, **_kwargs):
+    raise RuntimeError("live Gemini search called in a unit test")
+
+
+@pytest.fixture(autouse=True)
+def _no_live_grounded_search(request, monkeypatch):
+    """
+    Plan 6: block real Gemini grounded-search calls in unit tests. A test opts out with
+    `@pytest.mark.live_search`, or simply patches `run_grounded_agent` itself (its patch is
+    applied after this one and wins).
+    """
+    if request.node.get_closest_marker("live_search") is None:
+        from app.services import grounded_search
+        from app.utils import adk_helpers
+        monkeypatch.setattr(adk_helpers, "run_grounded_agent", _live_grounded_search_blocked)
+        monkeypatch.setattr(grounded_search, "run_grounded_agent", _live_grounded_search_blocked)
     yield
 

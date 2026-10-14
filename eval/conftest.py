@@ -23,6 +23,7 @@ os.environ.setdefault("TAVILY_KEY", "dummy_tavily_key")
 os.environ.setdefault("TAVILY_API_KEY", "dummy_tavily_key")
 os.environ.setdefault("GOOGLE_FACT_CHECK_API_KEY", "dummy_factcheck_key")
 os.environ.setdefault("GOOGLE_FACTCHECK_API_KEY", "dummy_factcheck_key")
+os.environ.setdefault("GEMINI_API_KEY", "dummy_gemini_key")
 
 def pytest_configure(config):
     # eval/tests is collected with the repo root as rootdir, so backend/pyproject.toml's marker
