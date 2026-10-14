@@ -1,17 +1,38 @@
 import asyncio
+import importlib.util
 import logging
+import sys
 import time
+import uuid
+from dataclasses import dataclass, field
 from typing import Dict, Any, List, Optional
 
-from app.config import settings
-from app.utils.validators import sanitize_text, validate_input_length, is_verifiable_claim
-from app.services.embedding import generate_embedding
-from app.services.cache import lookup_cache, insert_cache
-from app.scoring.engine import ScoringEngine
-from app.agents import factcheck_agent, crossref_agent, linguistic_agent
-from app.services.bias_lookup import get_bias_label
-from app.utils.errors import classify_provider_error
-from app.utils.text_processing import extract_domain
+# VeriFact does not use A2A. ADK's build_node() (called on EVERY ctx.run_node) tries
+# `from google.adk.agents.remote_a2a_agent import RemoteA2aAgent` inside try/except ImportError
+# (google/adk/workflow/utils/_workflow_graph_utils.py). Without the optional `a2a` package that
+# import fails, a failed import is never cached, and it is re-searched and re-executed from disk
+# on every call: synchronous work on the event loop, ~7x per request. Registering the module as
+# absent makes that import fail instantly (it only has to precede the first workflow run).
+if importlib.util.find_spec("a2a") is None:
+    sys.modules.setdefault("google.adk.agents.remote_a2a_agent", None)
+
+from google.adk.agents.context import Context  # noqa: E402  (after the A2A guard above)
+from google.adk.apps import App  # noqa: E402
+from google.adk.events.event import Event  # noqa: E402
+from google.adk.runners import InMemoryRunner  # noqa: E402
+from google.adk.workflow import FunctionNode, NodeTimeoutError, Workflow, node  # noqa: E402
+from google.genai import types  # noqa: E402
+from pydantic import BaseModel  # noqa: E402
+
+from app.config import settings  # noqa: E402
+from app.utils.validators import sanitize_text, validate_input_length, is_verifiable_claim  # noqa: E402
+from app.services.embedding import generate_embedding  # noqa: E402
+from app.services.cache import lookup_cache, insert_cache  # noqa: E402
+from app.scoring.engine import ScoringEngine, ScoringResult  # noqa: E402
+from app.agents import factcheck_agent, crossref_agent, linguistic_agent  # noqa: E402
+from app.services.bias_lookup import get_bias_label  # noqa: E402
+from app.utils.errors import classify_provider_error  # noqa: E402
+from app.utils.text_processing import extract_domain  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -52,143 +73,174 @@ async def drain_background_tasks(timeout: float) -> None:
     if still_running:
         logger.warning("%d persistence write(s) still running at shutdown; they will be lost.", len(still_running))
 
-async def verify_claim(raw_input: str, input_type: str = "text", bypass_cache: bool = False) -> Dict[str, Any]:
-    """
-    Main orchestration pipeline for claim verification:
-    1. Sanitize input (strip HTML/scripts, URL tracking parameters, whitespace).
-    2. Validate input constraints (length <= 2000 chars).
-    3. Validate claim verifiability (reject subjective opinions & questions -> 422).
-    4. Generate embedding and query semantic cache (cosine >= 0.95, then row policy and claim-equivalence checks; skipped when bypass_cache=True).
-    5. On cache miss, dispatch factcheck, crossref, and linguistic agents in parallel (8s timeouts).
-    6. Guardrail: If all agents fail, raise AllAgentsFailedError (never fabricate a score).
-    7. Compute deterministic composite trust score and apply confidence capping.
-    8. Consolidate sources (fact_check and corroborating).
-    9. Persist result and claim to Supabase cache (with confidence warnings; skip on low/insufficient confidence or degraded workers).
-    10. Return full structured verification response.
-    """
-    start_time = time.time()
-    loop = asyncio.get_running_loop()
-    deadline = loop.time() + settings.request_deadline_s
-    
-    # 1. Sanitize input
-    cleaned_text = sanitize_text(raw_input)
-    
-    # 2. Validate length
-    valid_len, len_error = validate_input_length(cleaned_text)
-    if not valid_len:
-        raise InvalidInputError(len_error)
-        
-    # 3. Validate claim verifiability
-    verifiable, ver_error = is_verifiable_claim(cleaned_text)
-    if not verifiable:
-        raise NonVerifiableClaimError(ver_error)
 
-    # 4. Generate embedding
-    embedding = await asyncio.to_thread(generate_embedding, cleaned_text)
+# ---------------------------------------------------------------------------
+# Verification workflow (ADK 2.x graph).
+#
+#   START -> cache_lookup ─┬─ "hit"  -> format_cached
+#                          └─ "miss" -> dispatch_agents -> score
+#                                          ├─ ctx.run_node(factcheck)  ┐
+#                                          ├─ ctx.run_node(crossref)   ├ concurrent, dynamic
+#                                          └─ ctx.run_node(linguistic) ┘
+#
+# Contract notes:
+# - The agents run as DYNAMIC child nodes of a supervisor (adk.dev/graphs/dynamic, "partial-failure
+#   handling"). A failed or timed-out child surfaces in the supervisor as DynamicNodeFailError,
+#   which is mapped to that agent's degraded neutral result; the healthy siblings finish and the
+#   workflow continues (CLAUDE.md §4.3). A static fan-out (edges + JoinNode) or a ParallelWorker
+#   would instead fail the whole workflow and cancel the siblings on the first error.
+# - Each agent enforces its own per-request budget (`agent_timeout`). `_call_agent` adds a
+#   per-request backstop (budget + AGENT_GRACE_S) for an agent that ignores it, and the ADK node
+#   `timeout=` is a fixed outer guard above the 8 s cap.
+# - Node outputs are our dataclasses, passed by reference. This relies on the in-memory session
+#   service; a persistent session service would need JSON-serializable outputs.
+# - Input validation (400/422) runs before the graph and persistence after it, so the typed
+#   errors and the shielded background write keep their current behaviour.
+# ---------------------------------------------------------------------------
 
-    # 5. Semantic cache lookup (skip if bypass_cache=True)
-    if not bypass_cache:
+WORKFLOW_APP_NAME = "verifact_verify"
+_WORKFLOW_USER_ID = "verifact-orchestrator"
+AGENT_GRACE_S = 0.5                             # per-request backstop beyond an agent's budget
+AGENT_NODE_TIMEOUT_S = AGENT_TIMEOUT_CAP + 1.0  # fixed outer guard; never reached in practice
+
+
+class VerifyRequest(BaseModel):
+    """Workflow input (START). `deadline` is a time.monotonic() timestamp."""
+    claim: str
+    embedding: List[float]
+    deadline: float
+    bypass_cache: bool = False
+    agent_timeout: float = AGENT_TIMEOUT_CAP
+
+
+@dataclass
+class PipelineOutcome:
+    """Terminal output of the workflow. Exactly one is emitted per run."""
+    cached: bool
+    cached_row: Optional[Dict[str, Any]] = None
+    fc_res: Optional[factcheck_agent.FactCheckResult] = None
+    cr_res: Optional[crossref_agent.CrossRefResult] = None
+    ling_res: Optional[linguistic_agent.LinguisticResult] = None
+    scoring_res: Optional[ScoringResult] = None
+    warnings: List[str] = field(default_factory=list)
+    sources: List[Dict[str, Any]] = field(default_factory=list)
+    linguistic_profile: Dict[str, float] = field(default_factory=dict)
+
+
+@node(name="cache_lookup")
+async def cache_lookup_node(node_input: VerifyRequest) -> Event:
+    """Semantic cache check. Fails closed: any error or timeout is a miss."""
+    cached = None
+    if not node_input.bypass_cache:
         try:
             cached = await asyncio.wait_for(
-                lookup_cache(embedding, claim_text=cleaned_text, similarity_threshold=0.95),
+                lookup_cache(node_input.embedding, claim_text=node_input.claim, similarity_threshold=0.95),
                 timeout=CACHE_LOOKUP_TIMEOUT_S,
             )
         except (asyncio.TimeoutError, TimeoutError):
             logger.warning("Semantic cache lookup exceeded its budget; treating as a miss.")
-            cached = None
-        if cached:
-            logger.info(f"Returning cached verification result for: {cleaned_text}")
-            elapsed_ms = int((time.time() - start_time) * 1000)
-            return {
-                "id": str(cached.get("claim_id") or cached.get("id")),
-                "claim": cached.get("extracted_claim") or cleaned_text,
-                "trust_score": {
-                    "c_total": cached.get("c_total"),
-                    "s_fact": cached.get("s_fact"),
-                    "b_ling": cached.get("b_ling"),
-                    "v_consensus": cached.get("v_consensus"),
-                    "v_refute": cached.get("v_refute") or 0.0,
-                    "weights": cached.get("weights") or {"w1": 0.50, "w2": 0.20, "w3": 0.30}
-                },
-                "confidence": {
-                    "level": cached.get("confidence_level"),
-                    "warnings": cached.get("warnings") or [],
-                    "verdict_found": cached.get("confidence_level") == "high",
-                    "evidence_status": cached.get("evidence_status"),
-                },
-                "linguistic_profile": cached.get("linguistic_profile") or {
-                    "clickbait_syntax": 0.0,
-                    "emotional_framing": 0.0,
-                    "sensationalism": 0.0,
-                    "informational_density": 0.5
-                },
-                "sources": cached.get("source_citations") or [],
-                "processing_time_ms": elapsed_ms,
-                "cached": True
-            }
+        except Exception as exc:
+            logger.warning(f"Semantic cache lookup failed; treating as a miss: {exc}")
+    if cached:
+        return Event(output=cached, route="hit")
 
-    # 6. Parallel agent dispatch
-    logger.info(f"Cache miss/bypass. Dispatching verification workers in parallel for: {cleaned_text}")
-    per_agent_timeout = agent_budget(deadline - loop.time())
-    fc_task = factcheck_agent.run(cleaned_text, timeout=per_agent_timeout)
-    cr_task = crossref_agent.run(cleaned_text, timeout=per_agent_timeout)
-    ling_task = linguistic_agent.run(cleaned_text, timeout=per_agent_timeout)
-    
+    # The agents get whatever the cache lookup left of the request budget.
+    timeout = agent_budget(node_input.deadline - time.monotonic())
+    return Event(output=node_input.model_copy(update={"agent_timeout": timeout}), route="miss")
+
+
+@node(name="format_cached")
+def format_cached_node(node_input: Dict[str, Any]) -> PipelineOutcome:
+    return PipelineOutcome(cached=True, cached_row=node_input)
+
+
+async def _call_agent(agent_module: Any, result_type: type, req: VerifyRequest) -> Any:
+    # Resolved through the module at call time so tests can patch `<agent>.run`.
+    res = await asyncio.wait_for(
+        agent_module.run(req.claim, timeout=req.agent_timeout),
+        timeout=req.agent_timeout + AGENT_GRACE_S,
+    )
+    if not isinstance(res, result_type):
+        raise TypeError(f"{agent_module.__name__} returned {type(res).__name__}, expected {result_type.__name__}")
+    return res
+
+
+async def _factcheck(node_input: VerifyRequest) -> factcheck_agent.FactCheckResult:
+    return await _call_agent(factcheck_agent, factcheck_agent.FactCheckResult, node_input)
+
+
+async def _crossref(node_input: VerifyRequest) -> crossref_agent.CrossRefResult:
+    return await _call_agent(crossref_agent, crossref_agent.CrossRefResult, node_input)
+
+
+async def _linguistic(node_input: VerifyRequest) -> linguistic_agent.LinguisticResult:
+    return await _call_agent(linguistic_agent, linguistic_agent.LinguisticResult, node_input)
+
+
+# (node, provider label for error classification, neutral-result factory), in result order.
+AGENT_NODES = (
+    (FunctionNode(func=_factcheck, name="factcheck", timeout=AGENT_NODE_TIMEOUT_S),
+     "factcheck_agent", factcheck_agent.make_neutral_factcheck),
+    (FunctionNode(func=_crossref, name="crossref", timeout=AGENT_NODE_TIMEOUT_S),
+     "crossref_agent", crossref_agent.make_neutral_crossref),
+    (FunctionNode(func=_linguistic, name="linguistic", timeout=AGENT_NODE_TIMEOUT_S),
+     "linguistic_agent", linguistic_agent.make_neutral_linguistic),
+)
+
+
+# rerun_on_resume=True is REQUIRED for a node that calls ctx.run_node (ADK raises ValueError
+# otherwise); it is not a HITL setting here.
+@node(name="dispatch_agents", rerun_on_resume=True)
+async def dispatch_agents_node(ctx: Context, node_input: VerifyRequest) -> Dict[str, Any]:
+    """Supervisor: run the three agents concurrently; a failed agent degrades, never the run."""
     results = await asyncio.gather(
-        fc_task, cr_task, ling_task, return_exceptions=True
+        *(ctx.run_node(agent_node, node_input) for agent_node, _, _ in AGENT_NODES),
+        return_exceptions=True,
     )
-    fc_res = (
-        results[0]
-        if isinstance(results[0], factcheck_agent.FactCheckResult)
-        else factcheck_agent.make_neutral_factcheck(
-            degraded=True,
-            error=str(results[0]),
-            error_details=classify_provider_error(results[0], provider="factcheck_agent")
-        )
-    )
-    cr_res = (
-        results[1]
-        if isinstance(results[1], crossref_agent.CrossRefResult)
-        else crossref_agent.make_neutral_crossref(
-            degraded=True,
-            error=str(results[1]),
-            error_details=classify_provider_error(results[1], provider="crossref_agent")
-        )
-    )
-    ling_res = (
-        results[2]
-        if isinstance(results[2], linguistic_agent.LinguisticResult)
-        else linguistic_agent.make_neutral_linguistic(
-            degraded=True,
-            error=str(results[2]),
-            error_details=classify_provider_error(results[2], provider="linguistic_agent")
-        )
-    )
+    outputs: Dict[str, Any] = {}
+    for (agent_node, provider, make_neutral), res in zip(AGENT_NODES, results):
+        if isinstance(res, BaseException):
+            if not isinstance(res, Exception):
+                raise res  # cancellation / interrupt: not an agent failure
+            # ADK's DynamicNodeFailError wraps the agent's own exception (incl. NodeTimeoutError)
+            # as `.error`. Read it duck-typed: the class lives in a private ADK module.
+            wrapped = getattr(res, "error", None)
+            cause = wrapped if isinstance(wrapped, Exception) else res
+            if isinstance(cause, NodeTimeoutError):
+                # ADK re-raises ANY TimeoutError leaving a node with `timeout=` as NodeTimeoutError,
+                # which is not a TimeoutError subclass; restore it so it classifies as TIMEOUT.
+                cause = asyncio.TimeoutError(f"{agent_node.name} agent timed out")
+            # ADK has already logged the traceback for the failed child node.
+            logger.warning(f"Agent node '{agent_node.name}' degraded: {type(cause).__name__}")
+            res = make_neutral(
+                degraded=True,
+                error=str(cause),
+                error_details=classify_provider_error(cause, provider=provider),
+            )
+        outputs[agent_node.name] = res
+    return outputs
 
-    # Compute success signal from typed dataclasses
-    agents_succeeded = sum([
-        1 if not fc_res.degraded else 0,
-        1 if not cr_res.degraded else 0,
-        1 if not ling_res.degraded else 0,
-    ])
-    
-    # 7. CRITICAL GUARDRAIL: All agents fail -> return an error, NEVER fabricate a score!
+
+@node(name="score")
+def score_node(node_input: Dict[str, Any]) -> PipelineOutcome:
+    """Deterministic scoring, capping, warnings and source consolidation."""
+    fc_res: factcheck_agent.FactCheckResult = node_input["factcheck"]
+    cr_res: crossref_agent.CrossRefResult = node_input["crossref"]
+    ling_res: linguistic_agent.LinguisticResult = node_input["linguistic"]
+
+    agents_succeeded = sum(1 for res in (fc_res, cr_res, ling_res) if not res.degraded)
     if agents_succeeded == 0:
-        logger.error(f"All 3 verification agents failed or degraded on claim: {cleaned_text}")
-        raise AllAgentsFailedError("All verification agents failed to complete analysis. Unable to verify claim.")
+        # Guardrail: never score. verify_claim raises AllAgentsFailedError outside the graph.
+        return PipelineOutcome(cached=False, fc_res=fc_res, cr_res=cr_res, ling_res=ling_res)
 
-    # 8. Compute scoring
-    fact_check_found = fc_res.matched_review
-    verdict_found = fc_res.verdict_found
-    engine = ScoringEngine()
-    scoring_res = engine.compute(
+    scoring_res = ScoringEngine().compute(
         s_fact=fc_res.s_fact_score,
         b_ling=ling_res.b_ling_score,
         v_consensus=cr_res.v_consensus_score,
         agents_succeeded=agents_succeeded,
         total_agents=3,
-        fact_check_found=fact_check_found,
-        verdict_found=verdict_found,
+        fact_check_found=fc_res.matched_review,
+        verdict_found=fc_res.verdict_found,
         v_refute=cr_res.v_refute_score,
     )
 
@@ -202,9 +254,105 @@ async def verify_claim(raw_input: str, input_type: str = "text", bypass_cache: b
             elif res.error:
                 enriched_warnings.append(f"{agent_label} agent degraded: {res.error}")
 
-    # 9. Consolidate sources
+    return PipelineOutcome(
+        cached=False,
+        fc_res=fc_res,
+        cr_res=cr_res,
+        ling_res=ling_res,
+        scoring_res=scoring_res,
+        warnings=enriched_warnings,
+        sources=_consolidate_sources(fc_res, cr_res),
+        linguistic_profile={
+            "clickbait_syntax": ling_res.clickbait_syntax,
+            "emotional_framing": ling_res.emotional_framing,
+            "sensationalism": ling_res.sensationalism,
+            "informational_density": ling_res.informational_density,
+        },
+    )
+
+
+def build_verification_workflow() -> Workflow:
+    return Workflow(
+        name="verify_claim",
+        description="Cache check, parallel fact-check / cross-reference / linguistic agents, scoring.",
+        input_schema=VerifyRequest,
+        edges=[
+            ("START", cache_lookup_node, {"hit": format_cached_node, "miss": dispatch_agents_node}),
+            (dispatch_agents_node, score_node),
+        ],
+    )
+
+
+_runner: Optional[InMemoryRunner] = None
+
+
+def get_verification_runner() -> InMemoryRunner:
+    """One Runner per process; each request gets its own session."""
+    global _runner
+    if _runner is None:
+        _runner = InMemoryRunner(app=App(name=WORKFLOW_APP_NAME, root_agent=build_verification_workflow()))
+    return _runner
+
+
+async def run_verification_workflow(request: VerifyRequest) -> PipelineOutcome:
+    """Drive one workflow run and return its terminal PipelineOutcome."""
+    runner = get_verification_runner()
+    session_id = f"verify-{uuid.uuid4()}"
+    await runner.session_service.create_session(
+        app_name=WORKFLOW_APP_NAME, user_id=_WORKFLOW_USER_ID, session_id=session_id
+    )
+    message = types.Content(role="user", parts=[types.Part.from_text(text=request.model_dump_json())])
+    outcome: Optional[PipelineOutcome] = None
+    try:
+        async for event in runner.run_async(user_id=_WORKFLOW_USER_ID, session_id=session_id, new_message=message):
+            if isinstance(event.output, PipelineOutcome):
+                outcome = event.output
+    finally:
+        try:
+            await runner.session_service.delete_session(
+                app_name=WORKFLOW_APP_NAME, user_id=_WORKFLOW_USER_ID, session_id=session_id
+            )
+        except Exception as cleanup_err:
+            logger.debug(f"Failed to delete workflow session {session_id}: {cleanup_err}")
+    if outcome is None:
+        raise RuntimeError("Verification workflow finished without an outcome")
+    return outcome
+
+
+def _format_cached_response(cached: Dict[str, Any], cleaned_text: str) -> Dict[str, Any]:
+    return {
+        "id": str(cached.get("claim_id") or cached.get("id")),
+        "claim": cached.get("extracted_claim") or cleaned_text,
+        "trust_score": {
+            "c_total": cached.get("c_total"),
+            "s_fact": cached.get("s_fact"),
+            "b_ling": cached.get("b_ling"),
+            "v_consensus": cached.get("v_consensus"),
+            "v_refute": cached.get("v_refute") or 0.0,
+            "weights": cached.get("weights") or {"w1": 0.50, "w2": 0.20, "w3": 0.30}
+        },
+        "confidence": {
+            "level": cached.get("confidence_level"),
+            "warnings": cached.get("warnings") or [],
+            "verdict_found": cached.get("confidence_level") == "high",
+            "evidence_status": cached.get("evidence_status"),
+        },
+        "linguistic_profile": cached.get("linguistic_profile") or {
+            "clickbait_syntax": 0.0,
+            "emotional_framing": 0.0,
+            "sensationalism": 0.0,
+            "informational_density": 0.5
+        },
+        "sources": cached.get("source_citations") or [],
+        "cached": True
+    }
+
+
+def _consolidate_sources(
+    fc_res: factcheck_agent.FactCheckResult, cr_res: crossref_agent.CrossRefResult
+) -> List[Dict[str, Any]]:
     sources: List[Dict[str, Any]] = []
-    
+
     # Add fact-check sources
     for m in fc_res.all_matches:
         url_val = m.get("url") or ""
@@ -233,17 +381,71 @@ async def verify_claim(raw_input: str, input_type: str = "text", bypass_cache: b
             "stance": s.get("stance")
         })
 
-    # Linguistic profile
-    linguistic_profile = {
-        "clickbait_syntax": ling_res.clickbait_syntax,
-        "emotional_framing": ling_res.emotional_framing,
-        "sensationalism": ling_res.sensationalism,
-        "informational_density": ling_res.informational_density
-    }
+    return sources
+
+
+async def verify_claim(raw_input: str, input_type: str = "text", bypass_cache: bool = False) -> Dict[str, Any]:
+    """
+    Main orchestration pipeline for claim verification:
+    1. Sanitize input (strip HTML/scripts, URL tracking parameters, whitespace).
+    2. Validate input constraints (length <= 2000 chars).
+    3. Validate claim verifiability (reject subjective opinions & questions -> 422).
+    4. Generate the claim embedding.
+    5. Run the ADK verification workflow: semantic cache check (cosine >= 0.95, then row policy
+       and claim-equivalence checks; skipped when bypass_cache=True); on a miss, the factcheck,
+       crossref and linguistic agents in parallel, joined into deterministic scoring + capping.
+    6. Guardrail: If all agents fail, raise AllAgentsFailedError (never fabricate a score).
+    7. Persist result and claim to Supabase in the background (skipped on bypass_cache).
+    8. Return full structured verification response.
+    """
+    start_time = time.time()
+    deadline = time.monotonic() + settings.request_deadline_s
+
+    # 1. Sanitize input
+    cleaned_text = sanitize_text(raw_input)
+
+    # 2. Validate length
+    valid_len, len_error = validate_input_length(cleaned_text)
+    if not valid_len:
+        raise InvalidInputError(len_error)
+
+    # 3. Validate claim verifiability
+    verifiable, ver_error = is_verifiable_claim(cleaned_text)
+    if not verifiable:
+        raise NonVerifiableClaimError(ver_error)
+
+    # 4. Generate embedding
+    embedding = await asyncio.to_thread(generate_embedding, cleaned_text)
+
+    # 5. Verification workflow
+    outcome = await run_verification_workflow(VerifyRequest(
+        claim=cleaned_text,
+        embedding=embedding,
+        deadline=deadline,
+        bypass_cache=bypass_cache,
+    ))
+
+    if outcome.cached:
+        logger.info(f"Returning cached verification result for: {cleaned_text}")
+        response = _format_cached_response(outcome.cached_row or {}, cleaned_text)
+        response["processing_time_ms"] = int((time.time() - start_time) * 1000)
+        return response
+
+    # 6. CRITICAL GUARDRAIL: All agents fail -> return an error, NEVER fabricate a score!
+    if outcome.scoring_res is None:
+        logger.error(f"All 3 verification agents failed or degraded on claim: {cleaned_text}")
+        raise AllAgentsFailedError("All verification agents failed to complete analysis. Unable to verify claim.")
+
+    fc_res, cr_res, ling_res = outcome.fc_res, outcome.cr_res, outcome.ling_res
+    scoring_res = outcome.scoring_res
+    enriched_warnings = outcome.warnings
+    sources = outcome.sources
+    linguistic_profile = outcome.linguistic_profile
+    verdict_found = fc_res.verdict_found
 
     elapsed_ms = int((time.time() - start_time) * 1000)
 
-    # 10. Persist result and claim to Supabase (skip on bypass_cache; always persist otherwise so GET /api/results/{id} works; lookup_cache skips low/insufficient)
+    # 7. Persist result and claim to Supabase (skip on bypass_cache; always persist otherwise so GET /api/results/{id} works; lookup_cache skips low/insufficient)
     claim_id: Optional[str] = None
     if not bypass_cache:
         try:
@@ -296,7 +498,7 @@ async def verify_claim(raw_input: str, input_type: str = "text", bypass_cache: b
             try:
                 claim_id = await asyncio.wait_for(
                     asyncio.shield(persist_task),
-                    timeout=max(PERSIST_MIN_WAIT_S, deadline - loop.time()),
+                    timeout=max(PERSIST_MIN_WAIT_S, deadline - time.monotonic()),
                 )
             except (asyncio.TimeoutError, TimeoutError):
                 logger.warning("Persistence exceeded the request deadline; returning without an id (write continues).")
