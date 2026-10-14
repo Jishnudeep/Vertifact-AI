@@ -4,40 +4,12 @@ from typing import List, Dict, Any, Literal
 
 from app.services.errors import EvidenceAPIError
 from app.services import budget
+# Re-exported for existing importers until Tavily is removed (Plan 6 Task 7).
+from app.services.source_domains import FACTCHECK_DOMAINS, CLAIMREVIEW_DOMAINS  # noqa: F401
 
 logger = logging.getLogger(__name__)
 
 TAVILY_SEARCH_URL = "https://api.tavily.com/search"
-
-# Broad domain scope for web evidence retrieval via Tavily
-FACTCHECK_DOMAINS = [
-    "snopes.com",
-    "politifact.com",
-    "factcheck.org",
-    "fullfact.org",
-    "healthfeedback.org",
-    "apnews.com",
-    "reuters.com",
-    "usatoday.com",
-    "factcheck.afp.com",
-    "leadstories.com",
-    "checkyourfact.com",
-    "climatefeedback.org",
-]
-
-# Strict fact-checking authorities for Layer-2 verdict authority (excluding general news)
-CLAIMREVIEW_DOMAINS = [
-    "snopes.com",
-    "politifact.com",
-    "factcheck.org",
-    "fullfact.org",
-    "healthfeedback.org",
-    "factcheck.afp.com",
-    "afp.com",
-    "leadstories.com",
-    "checkyourfact.com",
-    "climatefeedback.org",
-]
 
 async def search_web(
     query: str,

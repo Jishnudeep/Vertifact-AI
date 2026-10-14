@@ -11,6 +11,11 @@ try:
 except ImportError:
     litellm = None
 
+try:
+    from google.genai import errors as genai_errors
+except ImportError:
+    genai_errors = None
+
 class ProviderErrorCode(str, Enum):
     RATE_LIMIT = "RATE_LIMIT"
     QUOTA_EXHAUSTED = "QUOTA_EXHAUSTED"
@@ -32,6 +37,50 @@ class AgentErrorDetails:
         d = asdict(self)
         d["code"] = self.code.value
         return d
+
+def _classify_genai_api_error(exc: BaseException, provider: str) -> Optional[AgentErrorDetails]:
+    """Map a google-genai APIError (or an exception caused by one) by `.code`; None otherwise."""
+    if genai_errors is None:
+        return None
+    api_err = exc if isinstance(exc, genai_errors.APIError) else exc.__cause__
+    if not isinstance(api_err, genai_errors.APIError):
+        return None
+
+    code = api_err.code
+    if code == 429:
+        retry_after = None
+        response = getattr(api_err, "response", None)
+        headers = getattr(response, "headers", None)
+        if headers is not None:
+            try:
+                retry_after = float(headers.get("retry-after"))
+            except (TypeError, ValueError):
+                retry_after = None
+        return AgentErrorDetails(
+            code=ProviderErrorCode.RATE_LIMIT,
+            provider=provider,
+            message="API rate limit exceeded",
+            retry_after=retry_after,
+        )
+    if code in {401, 403}:
+        return AgentErrorDetails(
+            code=ProviderErrorCode.AUTH_ERROR,
+            provider=provider,
+            message="API authentication failure (invalid or forbidden API key)",
+        )
+    if code == 404:
+        return AgentErrorDetails(
+            code=ProviderErrorCode.MODEL_NOT_FOUND,
+            provider=provider,
+            message="Configured model was not found or has been deprecated by provider",
+        )
+    if isinstance(code, int) and code >= 500:
+        return AgentErrorDetails(
+            code=ProviderErrorCode.SERVICE_UNAVAILABLE,
+            provider=provider,
+            message=f"Provider server error (HTTP {code})",
+        )
+    return None
 
 def classify_provider_error(exc: Exception, provider: str = "unknown") -> AgentErrorDetails:
     """
@@ -56,6 +105,12 @@ def classify_provider_error(exc: Exception, provider: str = "unknown") -> AgentE
             provider=prov,
             message=f"{prov.capitalize()} API key is not configured"
         )
+
+    # google-genai APIError (Gemini grounded search, Plan 6), raised directly or wrapped as
+    # the cause of an EvidenceAPIError. Classified by its HTTP `.code`.
+    genai_details = _classify_genai_api_error(exc, prov)
+    if genai_details is not None:
+        return genai_details
 
     # LiteLLM / LLM Provider Exceptions
     if litellm is not None:

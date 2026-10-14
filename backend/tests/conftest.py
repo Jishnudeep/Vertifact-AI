@@ -21,5 +21,6 @@ def _fresh_budgets():
     from app.services import budget
     budget.get_tavily_budget.cache_clear()
     budget.get_llm_budget.cache_clear()
+    budget.get_search_budget.cache_clear()
     yield
 
