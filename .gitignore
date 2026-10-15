@@ -112,3 +112,8 @@ AGENTS.md
 review-fixes-handoff.md
 *-handoff.md
 *-review-handoff.md
+
+# impeccable design tooling: local working files (sketches, quality-bar refs, decision state).
+# DESIGN.md (repo root) and .impeccable/design.json are the tracked design-system outputs.
+.impeccable/*
+!.impeccable/design.json

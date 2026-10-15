@@ -65,6 +65,15 @@ VeriFact AI solves a specific problem: **a user encounters a suspicious claim on
 
 ## 4. Phased Delivery
 
+> **Realigned 2026-10-15** (`docs/superpowers/specs/2026-10-15-realigned-roadmap-design.md`). The order is now:
+> 1. Finish the core pipeline (Plan 6).
+> 2. The frontend MVP, text input end to end (Plan 7).
+> 3. Evaluation. P3-02 now covers DeepEval guardrails **and** ADK eval (`agents-cli eval`) over the pipeline's traces.
+> 4. A new phase for agent governance, observability (OpenTelemetry tracing, structured logs) and deployment.
+> 5. URL + screenshot input (Plan 8, P2-01/P2-02) last.
+>
+> The tables below keep their IDs; only the sequencing changed.
+
 ### Phase 1: Core Pipeline (Weeks 1-3)
 **Goal:** Text input → multi-agent verification → scored JSON response via API.
 

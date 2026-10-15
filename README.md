@@ -115,10 +115,21 @@ Run tests with `uv run pytest`.
 
 Active development, built in phases (see [`documents/VeriFact_AI_Build_Order.md`](documents/VeriFact_AI_Build_Order.md)):
 
-- ✅ **Phase 0 — Foundation:** scaffolding, FastAPI skeleton, Supabase connection, config, AllSides bias lookup
-- 🚧 **Phase 1 — Core pipeline:** fact-check agent + services done; cross-ref / linguistic agents, scoring engine, semantic cache, orchestrator, and API routes still to come
-- 🔜 **Phase 2 — Multi-modal + frontend:** OCR, URL scraper, React dashboard
-- 🔜 **Phase 3 — Evaluation & polish:** curated eval set, guardrails, calibration, deployment
+Realigned on 2026-10-15 ([roadmap](docs/superpowers/specs/2026-10-15-realigned-roadmap-design.md)):
+
+- ✅ **Phase 0 — Foundation:** scaffolding, FastAPI skeleton, Supabase connection, config, AllSides bias lookup.
+- ✅ **Phase 1 — Core pipeline:**
+  - Fact-Check, Cross-Ref and Linguistic agents;
+  - the scoring engine with confidence caps;
+  - the semantic cache;
+  - an ADK `Workflow` orchestrator;
+  - the API routes and hardening.
+
+  🚧 Plan 6 (Google Search grounding replaces Tavily) is in progress.
+- 🔜 **Frontend MVP (Plan 7):** text input end to end, responsive React dashboard, "Midnight Transit Diagram" design.
+- 🔜 **Evaluation:** curated set, DeepEval guardrails, ADK eval over pipeline traces, calibration.
+- 🔜 **Governance, observability & deployment:** tracing, structured logs, agent registry, deploy.
+- 🔜 **URL + screenshot input (Plan 8, last):** scraper and Surya OCR.
 
 ## Design principles
 

@@ -18,6 +18,40 @@ column (1 → 2 → 4 → 3 → 5). Each plan's Task 0 checks its prerequisites.
 | 3rd+ | Review follow-ups | (no plan file; see below) | Fixes from the 2026-09-27 review of Plans 1, 2, 4 | Plans 1, 2, 4 | completed 2026-09-28 (Claude Code) |
 | 4th | Plan 3 | [eval-integrity](2026-09-23-eval-integrity.md) | C3, C4: replay, leave-source-out, segments, LIAR/FEVER, NLI calibration | Plans 1, 2, 4 | completed 2026-09-28 (Antigravity) |
 | 5th | Plan 5 | [doc-sync](2026-09-23-doc-sync.md) | Medium drift, H5, H6: error codes, rating map, docs, skills | Plans 1–4 | completed 2026-09-28 (Antigravity) |
+| 6th | Plan 6 | [google-search-grounding](2026-10-14-google-search-grounding.md) | Google Search grounding replaces Tavily | Plans 1–5 | in progress: Tasks 0–4 committed (3–4 not yet through the review gate), 5–9 open; draft PR open |
+| 7th | Plan 7 | [frontend-mvp](2026-10-15-frontend-mvp.md) | Frontend MVP, text input end to end (Midnight Transit Diagram), plus API additions: per-agent status, cap fields, `found_by`, stored-result parity, `Retry-After`, featured recent results | Plan 6 | not started |
+| 8th | Plan 9 | (not written yet) | Evals: valid baseline, DeepEval guardrail, ADK eval over traces, latency and cache metrics | Plan 7 | to be designed in its own brainstorm |
+| 9th | Plan 10 | (not written yet) | Governance, observability, deployment | Plan 9 | to be designed in its own brainstorm |
+| 10th (last) | Plan 8 | [url-and-screenshot-input](2026-10-15-url-and-screenshot-input.md) | URL scraper, Surya OCR, `/api/verify/image`, frontend input | Plans 7, 9, 10 | not started; runs last by decision (2026-10-15) |
+
+**Realignment (2026-10-15):** Plans 7–10 follow `../specs/2026-10-15-realigned-roadmap-design.md`. Plan 7's spec is `../specs/2026-10-15-frontend-mvp-design.md`. Plans 9 and 10 are written only after their own design sessions. Plan 8 keeps its number but runs last.
+
+## Branching and pull requests
+
+- **`main` is the integration branch.** Nothing is committed to it directly; every change lands through a pull request.
+- **One branch per plan, cut from an up-to-date `main` after the previous plan's PR has merged.** Plans depend on each other's interfaces, so do not stack plan branches. The exception is the project lead explicitly asking to start a plan early: then branch from the previous plan's branch and rebase onto `main` once that PR merges.
+- **Branch names:**
+
+  | Kind | Branch |
+  |---|---|
+  | Plan 6 | `feat/google-search-grounding` |
+  | Plan 7 | `feat/frontend-mvp` |
+  | Plan 9 | `feat/evals` |
+  | Plan 10 | `feat/agent-ops` |
+  | Plan 8 | `feat/url-and-screenshot-input` |
+  | Design or doc-only work | `docs/<topic>` |
+  | Fixes from a review of an open plan PR | commits on that plan's branch |
+  | Fixes after a plan has merged | `fix/<topic>` from `main` |
+
+  Each plan's Task 0 creates its branch.
+- **Commits:** one commit per plan task, using the message the plan gives (`feat:`, `fix:`, `test:`, `docs:`, `refactor:`, `chore:`). Don't squash locally; the per-task history is the review trail.
+- **Pull requests:** one per plan into `main`.
+  - Open it as a **draft** once the branch has its first task commit, and push after every task.
+  - Mark it ready only after the plan's Gate task passes: all suites green plus the `code-reviewer` / `/review` and `eval-guardian` gates.
+  - The PR body links the plan and its spec, lists migrations the project lead must run, and lists any quota-spending steps that ran.
+- **Merging:** use a merge commit, not squash, so `git bisect` and the review trail keep per-task commits. Delete the branch after merging. Apply any migration by hand right after the merge, then record it under "Before starting (user)".
+- **Local-only files are never committed:** `.claude/`, `.agents/`, `CLAUDE.md`, `AGENTS.md`, `*-handoff.md`, and impeccable's working files in `.impeccable/` (sketches, quality-bar images, decision-page state). Only `.impeccable/design.json` is tracked, once Plan 7 creates it.
+- **One-off exception:** the 2026-10-15 realignment docs and this section ride on the Plan 6 PR, because they were written while that branch was checked out.
 
 Plan 4 runs before Plan 3 because it switches Cross-Ref to basic search depth, and that
 changes the replay cache keys Plan 3 records.
@@ -42,7 +76,7 @@ Plans 3 and 5 were amended to match. In particular, from the repo root use `uv r
 ## Before starting (user)
 
 1. **Commit or stash the current working tree.** Every plan's Task 0 stops on a dirty tree.
-2. **Supabase migrations run by hand**, in the SQL editor, in order: `03_stance_aware_consensus.sql` (Plan 1), `04_cache_topk_and_ttl.sql` (Plan 2), `05_retention.sql` (Plan 4), `06_warnings_and_lockdown.sql` (review follow-ups). 03–06 were applied. Never re-run 01–03 after 04: they recreate an old `match_claims` overload.
+2. **Supabase migrations run by hand**, in the SQL editor, in order: `03_stance_aware_consensus.sql` (Plan 1), `04_cache_topk_and_ttl.sql` (Plan 2), `05_retention.sql` (Plan 4), `06_warnings_and_lockdown.sql` (review follow-ups). 03–06 were applied. Never re-run 01–03 after 04: they recreate an old `match_claims` overload. `07_featured_results.sql` (Plan 7, Task 4) must be applied by hand after Plan 7 merges. Then feature rows by setting `results.featured = true` in Supabase.
 3. **Quota spend needs your OK.** The first eval `--replay record` run (Plan 3) spends Tavily and Groq quota. The LIAR/FEVER raw files are downloaded by you (Plan 3, Task 5).
 4. **The dev model decision** (Plan 5, Task 0) is yours: `gpt-oss-120b` in config vs `gpt-oss-20b` in docs.
 
