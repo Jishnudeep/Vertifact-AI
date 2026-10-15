@@ -303,4 +303,86 @@ def test_rate_limit_sets_retry_after():
     limiter.reset()
 
 
+def test_recent_route_not_shadowed():
+    mock_supabase = MagicMock()
+    mock_supabase.table.return_value.select.return_value.eq.return_value.order.return_value.limit.return_value.execute.return_value = MagicMock(data=[])
+    with patch("app.api.routes.get_supabase", return_value=mock_supabase):
+        response = client.get("/api/results/recent")
+        assert response.status_code == 200
+        assert response.json() == []
+
+
+def test_recent_only_featured_newest_first():
+    mock_supabase = MagicMock()
+    mock_table = mock_supabase.table.return_value
+    mock_select = mock_table.select.return_value
+    mock_eq = mock_select.eq.return_value
+    mock_order = mock_eq.order.return_value
+    mock_order.limit.return_value.execute.return_value = MagicMock(data=[])
+
+    with patch("app.api.routes.get_supabase", return_value=mock_supabase):
+        response = client.get("/api/results/recent")
+        assert response.status_code == 200
+        mock_select.eq.assert_called_once_with("featured", True)
+        mock_eq.order.assert_called_once_with("created_at", desc=True)
+
+
+def test_recent_limit_clamped():
+    mock_supabase = MagicMock()
+    mock_table = mock_supabase.table.return_value
+    mock_select = mock_table.select.return_value
+    mock_eq = mock_select.eq.return_value
+    mock_order = mock_eq.order.return_value
+    mock_order.limit.return_value.execute.return_value = MagicMock(data=[])
+
+    with patch("app.api.routes.get_supabase", return_value=mock_supabase):
+        # limit=500 clamped to 20
+        response = client.get("/api/results/recent?limit=500")
+        assert response.status_code == 200
+        mock_order.limit.assert_called_with(20)
+
+        # limit=0 clamped to 1
+        response = client.get("/api/results/recent?limit=0")
+        assert response.status_code == 200
+        mock_order.limit.assert_called_with(1)
+
+
+def test_recent_field_allow_list():
+    sample_row = {
+        "id": "11111111-1111-1111-1111-111111111111",
+        "c_total": 0.85,
+        "evidence_status": "fact_checked",
+        "confidence_level": "high",
+        "created_at": "2026-10-15T12:00:00Z",
+        "claims": {"extracted_claim": "Moon landing was real"},
+    }
+    mock_supabase = MagicMock()
+    mock_supabase.table.return_value.select.return_value.eq.return_value.order.return_value.limit.return_value.execute.return_value = MagicMock(data=[sample_row])
+
+    with patch("app.api.routes.get_supabase", return_value=mock_supabase):
+        response = client.get("/api/results/recent")
+        assert response.status_code == 200
+        data = response.json()
+        assert len(data) == 1
+        item = data[0]
+        assert set(item.keys()) == {"id", "claim", "c_total", "evidence_status", "confidence_level", "created_at"}
+        assert item["id"] == "11111111-1111-1111-1111-111111111111"
+        assert item["claim"] == "Moon landing was real"
+        assert item["c_total"] == 0.85
+        assert item["evidence_status"] == "fact_checked"
+        assert item["confidence_level"] == "high"
+        assert item["created_at"] == "2026-10-15T12:00:00Z"
+
+
+def test_recent_empty_list():
+    mock_supabase = MagicMock()
+    mock_supabase.table.return_value.select.return_value.eq.return_value.order.return_value.limit.return_value.execute.return_value = MagicMock(data=[])
+
+    with patch("app.api.routes.get_supabase", return_value=mock_supabase):
+        response = client.get("/api/results/recent")
+        assert response.status_code == 200
+        assert response.json() == []
+
+
+
 

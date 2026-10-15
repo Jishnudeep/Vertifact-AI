@@ -61,3 +61,12 @@ class ErrorResponse(BaseModel):
     code: Literal["invalid_input", "non_verifiable_claim", "request_validation", "rate_limited", "all_agents_failed"]
     detail: Optional[str] = None
 
+class RecentResultModel(BaseModel):
+    id: str
+    claim: str
+    c_total: float
+    evidence_status: Literal["fact_checked", "disputed", "corroborated", "unverified"] = "unverified"
+    confidence_level: Literal["high", "medium", "low", "insufficient"]
+    created_at: str
+
+

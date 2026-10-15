@@ -1,11 +1,12 @@
 import asyncio
 import logging
 import uuid
+from typing import List
 from fastapi import APIRouter, Request, HTTPException, status
 from slowapi import Limiter
 from app.api.client_ip import client_ip
 
-from app.api.schemas import VerifyRequest, VerifyResponse, ErrorResponse
+from app.api.schemas import VerifyRequest, VerifyResponse, ErrorResponse, RecentResultModel
 from app.api.result_format import format_stored_result
 from app.agents.orchestrator import verify_claim
 from app.db.connection import get_supabase
@@ -34,6 +35,54 @@ async def verify_endpoint(request: Request, body: VerifyRequest):
     """
     result = await verify_claim(body.input, body.input_type)
     return result
+
+@router.get(
+    "/results/recent",
+    response_model=List[RecentResultModel],
+)
+@limiter.limit("60/minute")
+async def get_recent_results_endpoint(request: Request, limit: int = 10):
+    """
+    Retrieve recent featured verification results for the landing feed.
+    """
+    clamped_limit = max(1, min(20, limit))
+    try:
+        supabase = get_supabase()
+
+        def _fetch_recent(lim: int):
+            return (
+                supabase.table("results")
+                .select("id, c_total, evidence_status, confidence_level, created_at, claims(extracted_claim)")
+                .eq("featured", True)
+                .order("created_at", desc=True)
+                .limit(lim)
+                .execute()
+            ).data
+
+        data = await asyncio.to_thread(_fetch_recent, clamped_limit)
+        if not data:
+            return []
+
+        items = []
+        for r in data:
+            claims_data = r.get("claims") or {}
+            claim_text = claims_data.get("extracted_claim") or ""
+            items.append(RecentResultModel(
+                id=str(r.get("id")),
+                claim=claim_text,
+                c_total=r.get("c_total"),
+                evidence_status=r.get("evidence_status") or "unverified",
+                confidence_level=r.get("confidence_level"),
+                created_at=str(r.get("created_at")),
+            ))
+        return items
+    except Exception as exc:
+        logger.error(f"Error retrieving recent results: {exc}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to retrieve recent results."
+        )
+
 
 @router.get(
     "/results/{result_id}",
