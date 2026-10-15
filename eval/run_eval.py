@@ -21,7 +21,7 @@ if str(BACKEND_DIR) not in sys.path:
 # not the pipeline. 0 = unlimited. Must be set before app.config is imported; an explicit
 # environment value still wins. Quota is protected by replay mode (Plan 3), not by these.
 import os
-os.environ.setdefault("TAVILY_DAILY_CREDIT_BUDGET", "0")
+os.environ.setdefault("SEARCH_DAILY_CALL_BUDGET", "0")
 os.environ.setdefault("LLM_DAILY_CALL_BUDGET", "0")
 
 import argparse
@@ -421,6 +421,7 @@ async def run_evaluation(
             "calibration_bins": calib["bins"],
             "segments": compute_segment_metrics(segment_records),
             "replay": {"mode": replay_mode, "misses": replay.misses, "recorded": replay.recorded},
+            "leave_source_out": "sources filtered; grounded answer text unused (D4)",
             "opinion_rejection_rate": (opinion_rejections / total_opinions) if total_opinions > 0 else 1.0,
             "adversarial_handling_rate": (adversarial_handled / total_adversarial) if total_adversarial > 0 else 1.0,
             "adversarial_errors": adversarial_errors,

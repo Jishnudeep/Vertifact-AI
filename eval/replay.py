@@ -1,5 +1,5 @@
 """
-Eval-only record/replay for external calls, plus leave-source-out filtering (C3).
+Eval-only record/replay for external calls, plus leave-source-out filtering (C3, Plan 6).
 
 Never imported by the backend. run_eval.py installs it around a run:
   record: call live, store successful responses under cache_dir
@@ -10,16 +10,19 @@ serves runs with and without leave-source-out.
 """
 import contextlib
 import contextvars
+from dataclasses import asdict
 import hashlib
 import json
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, List, Literal, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Literal, Optional, Tuple
 
 import app.agents.crossref_agent as crossref_agent
 import app.agents.factcheck_agent as factcheck_agent
 import app.agents.linguistic_agent as linguistic_agent
 from app.config import settings
 from app.services.errors import EvidenceAPIError
+from app.services.grounded_search import GroundedSearch, GroundedSource, SearchKind
+from app.services.page_fetch import PageText
 from app.utils.text_processing import extract_domain
 
 ReplayMode = Literal["record", "replay", "live"]
@@ -81,24 +84,49 @@ class EvidenceReplay:
         result = await live_call()  # errors propagate and are never recorded
         if self.mode == "record":
             self.cache_dir.mkdir(parents=True, exist_ok=True)
-            path.write_text(json.dumps(result, ensure_ascii=False), encoding="utf-8")
+            if hasattr(result, "to_dict"):
+                serializable = result.to_dict()
+            elif result is not None and hasattr(result, "__dataclass_fields__"):
+                serializable = asdict(result)
+            else:
+                serializable = result
+            path.write_text(json.dumps(serializable, ensure_ascii=False), encoding="utf-8")
             self.recorded += 1
         return result
 
     # --- wrappers ---------------------------------------------------------
-    def _wrap_search_web(self, original):
-        # **kwargs passes through any newer search_web options (e.g. Plan 4's search_depth)
-        # and makes them part of the cache key.
-        async def search_web(query, api_key, max_results=5, include_domains=None, **kwargs):
-            payload = {"query": query, "max_results": max_results,
-                       "include_domains": sorted(include_domains or []), **kwargs}
-            results = await self._through_cache(
-                "tavily", payload,
-                lambda: original(query=query, api_key=api_key, max_results=max_results,
-                                 include_domains=include_domains, **kwargs),
+    def _wrap_grounded_search(self, original):
+        async def grounded_search(kind: SearchKind, claim: str):
+            payload = {"kind": kind, "claim": claim, "model": settings.search_model_id}
+            cached = await self._through_cache(
+                "gemini_search", payload,
+                lambda: original(kind=kind, claim=claim),
             )
-            return filter_web_results(results, _excluded.get())
-        return search_web
+            gs = cached if isinstance(cached, GroundedSearch) else GroundedSearch.from_dict(cached)
+            excluded = _excluded.get()
+            if excluded:
+                filtered_sources = [s for s in gs.sources if s.domain.lower() not in excluded]
+                return GroundedSearch(
+                    sources=filtered_sources,
+                    queries=gs.queries,
+                    search_suggestions_html=gs.search_suggestions_html,
+                )
+            return gs
+        return grounded_search
+
+    def _wrap_fetch_page_text(self, original):
+        async def fetch_page_text(url: str, expected_domain: Optional[str] = None):
+            payload = {"url": url, "expected_domain": expected_domain}
+            cached = await self._through_cache(
+                "page_fetch", payload,
+                lambda: original(url=url, expected_domain=expected_domain),
+            )
+            if cached is None:
+                return None
+            if isinstance(cached, PageText):
+                return cached
+            return PageText(**cached)
+        return fetch_page_text
 
     def _wrap_search_factchecks(self, original):
         async def search_factchecks(query, api_key):
@@ -126,8 +154,10 @@ class EvidenceReplay:
     def install(self) -> None:
         if self.mode == "live":
             return
-        self._patch(crossref_agent, "search_web", self._wrap_search_web)
-        self._patch(factcheck_agent, "search_web", self._wrap_search_web)
+        self._patch(crossref_agent, "grounded_search", self._wrap_grounded_search)
+        self._patch(factcheck_agent, "grounded_search", self._wrap_grounded_search)
+        self._patch(crossref_agent, "fetch_page_text", self._wrap_fetch_page_text)
+        self._patch(factcheck_agent, "fetch_page_text", self._wrap_fetch_page_text)
         self._patch(factcheck_agent, "search_factchecks", self._wrap_search_factchecks)
         self._patch(factcheck_agent, "run_adk_agent", self._wrap_run_adk_agent)
         self._patch(linguistic_agent, "run_adk_agent", self._wrap_run_adk_agent)
