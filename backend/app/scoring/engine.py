@@ -6,6 +6,7 @@ from app.scoring.confidence import (
     determine_confidence_level,
     apply_confidence_capping,
     determine_evidence_status,
+    binding_cap_rule,
 )
 
 @dataclass
@@ -23,6 +24,8 @@ class ScoringResult:
     confidence_level: str
     warnings: List[str]
     evidence_status: str = "unverified"
+    raw_c_total: Optional[float] = None
+    cap_rule: Optional[str] = None
 
 class ScoringEngine:
     """
@@ -68,6 +71,17 @@ class ScoringEngine:
             self.w1 * s_fact_clamped
             + self.w2 * (1.0 - b_ling_clamped)
             + self.w3 * v_consensus_clamped
+        )
+        raw_c_total = round(max(0.0, min(1.0, c_total_raw)), 3)
+        cap_rule = binding_cap_rule(
+            c_total_raw=raw_c_total,
+            s_fact=s_fact_clamped,
+            v_consensus=v_consensus_clamped,
+            agents_succeeded=agents_succeeded,
+            total_agents=total_agents,
+            fact_check_found=fact_check_found,
+            verdict_found=verdict_found,
+            v_refute=v_refute_clamped,
         )
         
         # Apply confidence capping rules
@@ -115,4 +129,6 @@ class ScoringEngine:
             confidence_level=confidence,
             warnings=warnings,
             evidence_status=evidence_status,
+            raw_c_total=raw_c_total,
+            cap_rule=cap_rule,
         )
