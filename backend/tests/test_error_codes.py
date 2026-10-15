@@ -47,3 +47,20 @@ def test_all_agents_failed_code():
     with patch("app.api.routes.verify_claim", side_effect=AllAgentsFailedError("down")):
         r = _post({"input": "a claim"})
     assert r.status_code == 500 and r.json()["code"] == "all_agents_failed"
+
+
+def test_degradation_message_mapping():
+    from app.utils.errors import degradation_message, ProviderErrorCode
+
+    assert degradation_message("Fact-check", "TIMEOUT") == "Fact-check check timed out"
+    assert degradation_message("Fact-check", ProviderErrorCode.TIMEOUT.value) == "Fact-check check timed out"
+    assert degradation_message("Cross-reference", "RATE_LIMIT") == "Cross-reference check rate limited"
+    assert degradation_message("Cross-reference", "QUOTA_EXHAUSTED") == "Cross-reference check quota exhausted"
+    assert degradation_message("Cross-reference", "AUTH_ERROR") == "Cross-reference authentication failed"
+    assert degradation_message("Fact-check", "MODEL_NOT_FOUND") == "Fact-check model unavailable"
+    assert degradation_message("Cross-reference", "SERVICE_UNAVAILABLE") == "Cross-reference service unavailable"
+    assert degradation_message("Linguistic", "PARSE_ERROR") == "Linguistic response could not be parsed"
+    assert degradation_message("Linguistic", "UNKNOWN") == "Linguistic check failed"
+    assert degradation_message("Linguistic", None) == "Linguistic check failed"
+    assert degradation_message("Fact-check", "SOME_OTHER_ERROR") == "Fact-check check failed"
+

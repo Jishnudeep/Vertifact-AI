@@ -166,4 +166,4 @@ async def test_orchestrator_enriches_warnings_with_provider_error():
         # Must have standard partial analysis warning
         assert any("Partial analysis" in w for w in warnings)
         # Must have specific provider degradation warning
-        assert any("Cross-reference agent degraded: Provider monthly search quota exhausted (gemini_search)" in w for w in warnings)
+        assert any("Cross-reference check quota exhausted" in w for w in warnings)

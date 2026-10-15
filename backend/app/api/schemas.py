@@ -12,6 +12,8 @@ class TrustScoreModel(BaseModel):
     v_consensus: float = Field(..., ge=0.0, le=1.0)
     v_refute: float = Field(default=0.0, ge=0.0, le=1.0)
     weights: Dict[str, float]
+    raw_c_total: Optional[float] = None
+    cap_rule: Optional[Literal["false_verdict", "disputed", "partial_analysis", "low_evidence"]] = None
 
 class ConfidenceModel(BaseModel):
     level: Literal["high", "medium", "low", "insufficient"]
@@ -33,6 +35,13 @@ class SourceCitationModel(BaseModel):
     bias_label: str
     type: Literal["fact_check", "corroborating"]
     stance: Optional[Literal["supports", "refutes", "neutral"]] = None
+    found_by: Optional[Literal["factcheck", "crossref"]] = None
+
+class AgentStatusModel(BaseModel):
+    name: Literal["factcheck", "crossref", "linguistic"]
+    status: Literal["ok", "degraded"]
+    duration_ms: Optional[int] = None
+    error_code: Optional[str] = None
 
 class VerifyResponse(BaseModel):
     id: Optional[str] = None
@@ -44,6 +53,8 @@ class VerifyResponse(BaseModel):
     processing_time_ms: int
     cached: bool = False
     search_suggestions_html: Optional[str] = None
+    agents: List[AgentStatusModel] = Field(default_factory=list)
+    created_at: Optional[str] = None
 
 class ErrorResponse(BaseModel):
     error: str
