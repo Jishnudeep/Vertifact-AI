@@ -232,11 +232,11 @@ async def test_provider_error_classification_survives_the_node_wrapper():
     """The agent's own exception (not ADK's wrapper) is what gets classified."""
     from app.services.errors import EvidenceAPIError
     fc, cr, ling = _ok_results()
-    quota = EvidenceAPIError("Tavily search returned HTTP 432", status_code=432, provider="tavily")
+    quota = EvidenceAPIError("Gemini search returned HTTP 432", status_code=432, provider="gemini_search")
     with ExitStack() as stack:
         _patches(stack, AsyncMock(return_value=fc), AsyncMock(side_effect=quota), AsyncMock(return_value=ling))
         result = await verify_claim(CLAIM)
-    assert any("Cross-reference agent degraded" in w and "(tavily)" in w
+    assert any("Cross-reference agent degraded" in w and "(gemini_search)" in w
                for w in result["confidence"]["warnings"])
 
 
@@ -251,3 +251,44 @@ async def test_concurrent_requests_use_isolated_sessions():
     sessions = await runner.session_service.list_sessions(
         app_name=orchestrator.WORKFLOW_APP_NAME, user_id=orchestrator._WORKFLOW_USER_ID)
     assert sessions.sessions == []   # every per-request session was deleted
+
+
+@pytest.mark.anyio
+async def test_search_suggestions_in_response():
+    fc, cr, ling = _ok_results()
+    fc.search_suggestions_html = "<div>Google Search Suggestions</div>"
+    with ExitStack() as stack:
+        _patches(stack, AsyncMock(return_value=fc), AsyncMock(return_value=cr), AsyncMock(return_value=ling))
+        insert_mock = AsyncMock(return_value="id-sugg")
+        stack.enter_context(patch("app.agents.orchestrator.insert_cache", new=insert_mock))
+        result = await verify_claim(CLAIM)
+    assert result["search_suggestions_html"] == "<div>Google Search Suggestions</div>"
+    assert insert_mock.called
+    kwargs = insert_mock.call_args.kwargs
+    assert kwargs["agent_outputs"]["search_suggestions_html"] == "<div>Google Search Suggestions</div>"
+
+
+@pytest.mark.anyio
+async def test_search_suggestions_survive_cache_hit():
+    cached_row = {
+        "claim_id": "cached-sugg-1",
+        "extracted_claim": CLAIM,
+        "c_total": 0.8,
+        "s_fact": 1.0,
+        "b_ling": 0.1,
+        "v_consensus": 0.6,
+        "v_refute": 0.0,
+        "confidence_level": "high",
+        "evidence_status": "fact_checked",
+        "warnings": [],
+        "source_citations": [],
+        "agent_outputs": {
+            "search_suggestions_html": "<div>Cached Suggestions</div>"
+        },
+    }
+    with ExitStack() as stack:
+        _patches(stack, AsyncMock(), AsyncMock(), AsyncMock(), cached=cached_row)
+        result = await verify_claim(CLAIM)
+    assert result["cached"] is True
+    assert result["search_suggestions_html"] == "<div>Cached Suggestions</div>"
+

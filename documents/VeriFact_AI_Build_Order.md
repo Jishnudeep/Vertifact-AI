@@ -49,7 +49,7 @@ Create `.gitignore`, `.env.example`, `README.md` stub.
 
 ### Step 0.4 — API Keys
 - Get Google Fact Check Tools API key (Google Cloud Console → enable Fact Check Tools API)
-- Get Tavily API key (tavily.com, free signup)
+- Get Gemini API key (Google AI Studio, free signup; Plan 6 replaces Tavily)
 - Get Groq API key (console.groq.com, free signup)
 - Add all to `.env`, load via `backend/app/config.py` with Pydantic Settings
 
@@ -74,13 +74,13 @@ Build each agent independently, test it independently, then wire them together. 
 **Depends on:** Step 0.4 (API keys)
 
 1. Write `services/factcheck_api.py` — async wrapper for Google Fact Check Tools API
-2. Write `services/search_api.py` — async wrapper for Tavily search
+2. Write `services/grounded_search.py` — Google Search grounding via Gemini API
 3. Implement fact-check agent logic (fact-checking is the motive at every step — see TDD §4.2):
    - Layer 1: Query the free Google FC API with claim text (highest-precision structured verdicts)
-   - Layer 2 (on miss): query Tavily with fact-check-oriented queries ("[claim] fact check" / "[claim] debunked"), scoped to FACTCHECK_DOMAINS (snopes, politifact, factcheck.org, fullfact, AP, Reuters) via `include_domains` — not a general web search
-   - LLM verdict extraction (Layer 2) must use ONLY retrieved snippet text (faithfulness guardrail, Step 3.5)
+   - Layer 2 (on miss): query Google Search Grounding with fact-check prompt, scoped to CLAIMREVIEW_DOMAINS (snopes, politifact, factcheck.org, fullfact, AP, Reuters) — not a general web search
+   - LLM verdict extraction (Layer 2) must use ONLY retrieved ClaimReview sources (faithfulness guardrail, Step 3.5)
    - Map textual ratings to numeric scores using RATING_MAP
-   - Note: do NOT use ADK's built-in `google_search` (Gemini-only, can't run in a sub-agent, one-built-in-tool limit — breaks the multi-agent design). Tavily is the model-agnostic search layer.
+   - Note: Plan 6 adopts Google Search Grounding via Gemini API (5,000 free queries/month).
 4. Write unit tests with known claims:
    - "The Earth is flat" → should find fact-check, s_fact near 0.0
    - "The Earth orbits the Sun" → should return s_fact near 1.0 or 0.5 (if no fact-check indexed)
@@ -106,11 +106,11 @@ Build each agent independently, test it independently, then wire them together. 
 
 ### Step 1.3 — Cross-Reference Agent (standalone)
 **File:** `backend/app/agents/crossref_agent.py`
-**Depends on:** Step 0.4 (Tavily API key), Step 0.5 (bias data)
+**Depends on:** Step 0.4 (Gemini API key), Step 0.5 (bias data)
 
 1. Install spaCy (already done in 1.2)
 2. Implement NER extraction → search query construction
-3. Call Tavily search with constructed queries
+3. Call Google Search Grounding with claim and fetch source page contents concurrently
 4. Deduplicate by domain, look up bias labels
 5. Compute v_consensus score
 6. Test with a well-known news event — verify it finds multiple reputable sources
@@ -210,7 +210,7 @@ Run a quick sanity check before moving on:
 2. Implement article text extraction (try `<article>` tag, then `<p>` tags, then `<meta description>`)
 3. Extract headline from `<title>` or `<h1>`
 4. Handle common failures: 403 forbidden, paywalls, JavaScript-only pages
-5. Fallback: use Tavily's `extract` feature to get page content
+5. Fallback: extract page content via page_fetch (SSRF-safe) or title/meta description
 
 **Gate:** Successfully extracts article text from 10 test URLs (mix of news sites).
 

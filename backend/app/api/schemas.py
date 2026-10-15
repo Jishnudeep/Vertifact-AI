@@ -43,6 +43,7 @@ class VerifyResponse(BaseModel):
     sources: List[SourceCitationModel]
     processing_time_ms: int
     cached: bool = False
+    search_suggestions_html: Optional[str] = None
 
 class ErrorResponse(BaseModel):
     error: str

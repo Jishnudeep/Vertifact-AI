@@ -29,70 +29,113 @@ def test_replay_miss_is_an_evidence_outage():
 
 
 @pytest.mark.anyio
-async def test_record_then_replay_round_trip(tmp_path, monkeypatch):
-    calls = {"n": 0}
-
-    async def fake_search_web(query, api_key, max_results=5, include_domains=None, **kwargs):
-        calls["n"] += 1
-        return [{"url": "https://www.reuters.com/x", "title": query}]
-
-    monkeypatch.setattr(crossref_agent, "search_web", fake_search_web)
-    monkeypatch.setattr(factcheck_agent, "search_web", fake_search_web)
-
-    recorder = EvidenceReplay(tmp_path, "record")
-    recorder.install()
-    try:
-        first = await crossref_agent.search_web(query="q1", api_key="k", max_results=5)
-    finally:
-        recorder.uninstall()
-    assert recorder.recorded == 1 and calls["n"] == 1
-
-    player = EvidenceReplay(tmp_path, "replay")
-    player.install()
-    try:
-        again = await crossref_agent.search_web(query="q1", api_key="DIFFERENT-KEY", max_results=5)
-        with pytest.raises(ReplayMissError):
-            await crossref_agent.search_web(query="never-recorded", api_key="k", max_results=5)
-    finally:
-        player.uninstall()
-    assert again == first
-    assert calls["n"] == 1          # replay never touched the live function
-    assert player.misses == 1
-    assert crossref_agent.search_web is fake_search_web  # uninstall restored the original
-
-
-@pytest.mark.anyio
-async def test_exclusion_applies_on_replayed_results(tmp_path, monkeypatch):
-    async def fake_search_web(query, api_key, max_results=5, include_domains=None, **kwargs):
-        return [{"url": "https://www.politifact.com/x"}, {"url": "https://www.reuters.com/y"}]
-
-    monkeypatch.setattr(crossref_agent, "search_web", fake_search_web)
-    monkeypatch.setattr(factcheck_agent, "search_web", fake_search_web)
-    replay = EvidenceReplay(tmp_path, "record")
-    replay.install()
-    try:
-        with excluding_domains(["politifact.com"]):
-            inside = await crossref_agent.search_web(query="q", api_key="k")
-        outside = await crossref_agent.search_web(query="q", api_key="k")
-    finally:
-        replay.uninstall()
-    assert [r["url"] for r in inside] == ["https://www.reuters.com/y"]
-    assert len(outside) == 2        # the cache stores raw results; exclusion is only a view
-
-
-@pytest.mark.anyio
 async def test_live_errors_are_not_recorded(tmp_path, monkeypatch):
-    async def failing(query, api_key, max_results=5, include_domains=None, **kwargs):
-        raise EvidenceAPIError("HTTP 432", provider="tavily")
+    async def failing(kind, claim):
+        raise EvidenceAPIError("Gemini search failed", provider="gemini_search")
 
-    monkeypatch.setattr(crossref_agent, "search_web", failing)
-    monkeypatch.setattr(factcheck_agent, "search_web", failing)
+    monkeypatch.setattr(crossref_agent, "grounded_search", failing)
+    monkeypatch.setattr(factcheck_agent, "grounded_search", failing)
     replay = EvidenceReplay(tmp_path, "record")
     replay.install()
     try:
         with pytest.raises(EvidenceAPIError):
-            await crossref_agent.search_web(query="q", api_key="k")
+            await crossref_agent.grounded_search("coverage", "claim")
     finally:
         replay.uninstall()
     assert replay.recorded == 0
     assert list(tmp_path.iterdir()) == []
+
+
+
+@pytest.mark.anyio
+async def test_grounded_search_replayed_and_filtered(tmp_path, monkeypatch):
+    from app.services.grounded_search import GroundedSearch, GroundedSource
+    calls = {"n": 0}
+    sample_gs = GroundedSearch(
+        sources=[
+            GroundedSource(url="https://www.politifact.com/x", title="PolitiFact X", domain="politifact.com"),
+            GroundedSource(url="https://www.reuters.com/y", title="Reuters Y", domain="reuters.com"),
+        ],
+        queries=["q1"],
+        search_suggestions_html="<div>sugg</div>",
+    )
+
+    async def fake_grounded_search(kind, claim):
+        calls["n"] += 1
+        return sample_gs
+
+    monkeypatch.setattr(crossref_agent, "grounded_search", fake_grounded_search)
+    monkeypatch.setattr(factcheck_agent, "grounded_search", fake_grounded_search)
+
+    recorder = EvidenceReplay(tmp_path, "record")
+    recorder.install()
+    try:
+        first = await crossref_agent.grounded_search("coverage", "claim 1")
+    finally:
+        recorder.uninstall()
+    assert recorder.recorded == 1 and calls["n"] == 1
+    assert first == sample_gs
+
+    player = EvidenceReplay(tmp_path, "replay")
+    player.install()
+    try:
+        with excluding_domains(["politifact.com"]):
+            filtered = await crossref_agent.grounded_search("coverage", "claim 1")
+        unfiltered = await crossref_agent.grounded_search("coverage", "claim 1")
+    finally:
+        player.uninstall()
+
+    assert calls["n"] == 1  # replay did not call live
+    assert len(filtered.sources) == 1
+    assert filtered.sources[0].domain == "reuters.com"
+    assert len(unfiltered.sources) == 2
+
+
+@pytest.mark.anyio
+async def test_page_fetch_replay_roundtrip_none(tmp_path, monkeypatch):
+    from app.services.page_fetch import PageText
+    calls = {"n": 0}
+
+    async def fake_fetch(url, expected_domain=None):
+        calls["n"] += 1
+        if "reuters" in url:
+            return PageText(final_url=url, domain="reuters.com", title="Title", text="Text " * 50)
+        return None
+
+    monkeypatch.setattr(crossref_agent, "fetch_page_text", fake_fetch)
+    monkeypatch.setattr(factcheck_agent, "fetch_page_text", fake_fetch)
+
+    recorder = EvidenceReplay(tmp_path, "record")
+    recorder.install()
+    try:
+        res_ok = await crossref_agent.fetch_page_text("https://reuters.com/news", "reuters.com")
+        res_none = await crossref_agent.fetch_page_text("https://broken.com", "broken.com")
+    finally:
+        recorder.uninstall()
+    assert recorder.recorded == 2 and calls["n"] == 2
+    assert res_ok is not None and res_none is None
+
+    player = EvidenceReplay(tmp_path, "replay")
+    player.install()
+    try:
+        rep_ok = await crossref_agent.fetch_page_text("https://reuters.com/news", "reuters.com")
+        rep_none = await crossref_agent.fetch_page_text("https://broken.com", "broken.com")
+    finally:
+        player.uninstall()
+
+    assert calls["n"] == 2
+    assert rep_ok == res_ok
+    assert rep_none is None
+
+
+@pytest.mark.anyio
+async def test_replay_miss_raises_for_grounded_search(tmp_path, monkeypatch):
+    player = EvidenceReplay(tmp_path, "replay")
+    player.install()
+    try:
+        with pytest.raises(ReplayMissError) as exc_info:
+            await factcheck_agent.grounded_search("factcheck", "unrecorded claim")
+        assert exc_info.value.provider == "gemini_search"
+    finally:
+        player.uninstall()
+

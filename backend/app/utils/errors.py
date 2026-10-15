@@ -42,7 +42,7 @@ class AgentErrorDetails:
         return d
 
 def _display_name(provider: str) -> str:
-    """'gemini_search' -> 'Gemini search', 'tavily' -> 'Tavily'."""
+    """'gemini_search' -> 'Gemini search', 'google_factcheck' -> 'Google factcheck'."""
     return provider.replace("_", " ").strip().capitalize() or "Provider"
 
 def _classify_genai_api_error(exc: BaseException, provider: str) -> Optional[AgentErrorDetails]:
@@ -92,7 +92,7 @@ def _classify_genai_api_error(exc: BaseException, provider: str) -> Optional[Age
 
 def classify_provider_error(exc: Exception, provider: str = "unknown") -> AgentErrorDetails:
     """
-    Classify third-party provider exceptions (Groq, LiteLLM, Tavily, Google, asyncio)
+    Classify third-party provider exceptions (Groq, LiteLLM, Gemini, Google, asyncio)
     into standard structured AgentErrorDetails with clean actionable messages.
     """
     if isinstance(exc, (asyncio.TimeoutError, TimeoutError)):
@@ -225,7 +225,7 @@ def classify_provider_error(exc: Exception, provider: str = "unknown") -> AgentE
                 message="API authentication failure (invalid or forbidden API key)"
             )
 
-    # HTTP Client Exceptions (Tavily, Google APIs, Supabase)
+    # HTTP Client Exceptions (Google APIs, Supabase)
     if isinstance(exc, httpx.HTTPStatusError):
         status = exc.response.status_code
         if status == 432:

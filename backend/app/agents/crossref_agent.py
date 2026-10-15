@@ -12,10 +12,6 @@ from app.services.bias_lookup import get_bias_label, get_outlet_name
 from app.services.nli import NLIScores, classify_pairs
 from app.utils.errors import AgentErrorDetails, classify_provider_error
 
-# Plan 6 Task 4: Cross-Ref no longer calls Tavily. The name stays importable here only because
-# eval/replay.py (and its tests) patch `crossref_agent.search_web` by name; Task 6 replaces
-# those wrappers and Task 7 deletes search_api.py together with this line. Never call it.
-from app.services.search_api import search_web  # noqa: F401  (eval/replay.py compatibility)
 
 logger = logging.getLogger(__name__)
 TIMEOUT = 8.0

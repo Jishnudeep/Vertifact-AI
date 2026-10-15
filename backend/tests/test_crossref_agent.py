@@ -286,7 +286,7 @@ async def test_fetched_source_uses_publisher_url_and_title():
     assert src["title"] == "Mars landing confirmed"
 
 
-# --- carried over from the Tavily-era suite ----------------------------------------------
+# --- carried over from the original suite ----------------------------------------------
 
 @pytest.mark.anyio
 async def test_agent_degrades_on_timeout():

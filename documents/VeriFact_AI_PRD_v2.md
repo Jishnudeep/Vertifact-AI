@@ -81,7 +81,7 @@ VeriFact AI solves a specific problem: **a user encounters a suspicious claim on
 |----|---------|----------|
 | P1-01 | FastAPI backend with health check and input validation | P0 |
 | P1-02 | Deterministic orchestrator as an ADK 2.x graph workflow + ADK leaf prompts (ADK leaf LLM prompts via LiteLLM (`groq/openai/gpt-oss-120b`; Groq serves no Llama chat model on our key, verified 2026-09-10)) | P0 |
-| P1-03 | Fact-Check Lookup Agent (Google Fact Check Tools API + Tavily web search) | P0 |
+| P1-03 | Fact-Check Lookup Agent (Google Fact Check Tools API + Google Search grounding via Gemini API) | P0 |
 | P1-04 | Cross-Reference Agent (entity extraction via spaCy, source corroboration via search) | P0 |
 | P1-05 | Linguistic Analysis Agent (VADER sentiment + HuggingFace sensationalism classifier) | P1 |
 | P1-06 | Scoring engine (C_total composite with configurable weights) | P0 |
@@ -137,7 +137,7 @@ VeriFact AI solves a specific problem: **a user encounters a suspicious claim on
 | Database | Supabase (PostgreSQL) | Free tier, auth, JSONB storage, real-time |
 | Vector Search | pgvector (via Supabase) | Co-located with relational data, HNSW indexing |
 | Fact-Check API | Google Fact Check Tools API | Free, ClaimReview standard, 100+ orgs |
-| Web Search | Tavily | AI-agent-optimized results, 1K req/month free |
+| Web Search | Google Search grounding via ADK / Gemini API | 5,000 free searches/month, fresh index grounding |
 | Bias Data | AllSides CSV (static, pre-loaded) | No runtime API dependency |
 | NLP | spaCy (NER) + VADER (sentiment) | Lightweight, no GPU needed |
 | Eval Framework | DeepEval + custom harness | Hallucination detection, faithfulness, calibration |
@@ -250,8 +250,8 @@ bias_ratings {
 
 | Failure | Behavior |
 |---------|----------|
-| Fact-Check API outage or timeout | Layer 2 (Tavily) is tried; if the agent still cannot reach evidence it degrades (S_fact = 0.5, "Partial Analysis") |
-| Tavily search returns 0 results | V_consensus = 0.0, confidence capped |
+| Fact-Check API outage or timeout | Layer 2 (Google Search grounding) is tried; if the agent still cannot reach evidence it degrades (S_fact = 0.5, "Partial Analysis") |
+| Grounded search returns 0 results | V_consensus = 0.0, confidence capped |
 | OCR extracts no text from image | Return error: "Could not extract text. Try typing the claim instead." |
 | URL scraping blocked (403/paywall) | Fall back to using the URL's title + meta description as claim text |
 | LLM rate limited / daily LLM or search budget exhausted | Retry with backoff inside the agent's time budget; if it still fails, degrade that agent and show "Partial Analysis" |
@@ -265,7 +265,7 @@ bias_ratings {
 |---------|-----------|-------------------|
 | Groq (gpt-oss-120b, free) | 30 req/min · 1,000 req/day · 8K tokens/min | $0 |
 | Google Fact Check API | Unlimited (API key) | $0 |
-| Tavily (web search) | 1,000 credits/month; advanced = 2 credits, basic = 1 | $0 (≈ 100–150 verifications/month) |
+| Google Search Grounding (Gemini) | 5,000 free search queries/month, then $14/1,000 (Gemini 3+) | $0 |
 | Supabase (DB + auth) | 500MB DB, 50K rows | $0 |
 | BGE-M3 embeddings | Local CPU inference | $0 |
 | Surya OCR | Local CPU inference | $0 |
@@ -321,10 +321,11 @@ Cache hits are served only for equivalent claims (TDD §6). A lower hit rate is 
 
 | Risk | Likelihood | Impact | Mitigation |
 |------|-----------|--------|------------|
-| Google Fact Check API decline (alpha v1alpha1 API, no SLA; Google removed ClaimReview snippets from Search in June 2025, weakening publisher markup incentives) | Medium | High | Layer 2 (Tavily, fact-check domains) already covers misses; track the Layer-1 hit rate per eval run; abstract behind factcheck_api.py |
+| Google Fact Check API decline (alpha v1alpha1 API, no SLA; Google removed ClaimReview snippets from Search in June 2025, weakening publisher markup incentives) | Medium | High | Layer 2 (Google Search grounding, fact-check domains) already covers misses; track the Layer-1 hit rate per eval run; abstract behind factcheck_api.py |
 | Groq free tier rate limits during demo | Medium | Medium | Cache aggressively; Together.ai as backup provider |
 | Eval set too small for meaningful metrics | Medium | High | Commit to 200+ labeled claims before Phase 3 |
 | Linguistic volatility model poorly calibrated | High | Medium | Start with VADER baseline; iterate with human-rated calibration set |
 | Claims about very recent events (no fact-checks exist) | High | Medium | Confidence capping; transparent "no verified sources" messaging |
 | Free-tier hosting cannot hold the ML backend | High | Medium | See TDD §10 open decision |
-| Free-tier API quotas (Tavily 1K credits/mo, Groq 1K req/day) | High | Medium | Daily budgets (TDD §11), cache, eval replay |
+| Free-tier API quotas (Google Search grounding 5K queries/mo, Groq 1K req/day) | High | Medium | Daily budgets (TDD §11), cache, eval replay |
+| Search grounding ToS / pricing change | Low | Medium | Render Google search suggestions in sandboxed iframe when returned; track billing |

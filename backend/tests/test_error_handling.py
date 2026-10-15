@@ -24,21 +24,21 @@ def test_classify_timeout():
     assert details.provider == "factcheck_agent"
     assert "timed out" in details.message
 
-def test_classify_tavily_quota_exhausted():
+def test_classify_quota_exhausted():
     # 1. Direct EvidenceAPIError with status 432
-    ev_exc = EvidenceAPIError("Tavily search returned HTTP 432", status_code=432, provider="tavily")
+    ev_exc = EvidenceAPIError("Search provider returned HTTP 432", status_code=432, provider="search_provider")
     details = classify_provider_error(ev_exc)
     assert details.code == ProviderErrorCode.QUOTA_EXHAUSTED
-    assert details.provider == "tavily"
+    assert details.provider == "search_provider"
     assert "quota exhausted" in details.message
 
     # 2. HTTPStatusError 432
-    request = httpx.Request("POST", "https://api.tavily.com/search")
+    request = httpx.Request("POST", "https://api.example.com/search")
     response = httpx.Response(432, request=request)
     http_exc = httpx.HTTPStatusError("Client error '432'", request=request, response=response)
-    details2 = classify_provider_error(http_exc, provider="tavily")
+    details2 = classify_provider_error(http_exc, provider="search_provider")
     assert details2.code == ProviderErrorCode.QUOTA_EXHAUSTED
-    assert details2.provider == "tavily"
+    assert details2.provider == "search_provider"
 
 def test_classify_rate_limit_with_header():
     request = httpx.Request("GET", "https://api.example.com")
@@ -133,13 +133,13 @@ async def test_orchestrator_enriches_warnings_with_provider_error():
         verdict_found=True,
         degraded=False
     )
-    # Mock crossref to degrade with Tavily quota exhausted
+    # Mock crossref to degrade with search provider quota exhausted
     cr_degraded = crossref_agent.make_neutral_crossref(
         degraded=True,
-        error="Evidence retrieval API unavailable: Tavily search returned HTTP 432",
+        error="Evidence retrieval API unavailable: Search provider returned HTTP 432",
         error_details=AgentErrorDetails(
             code=ProviderErrorCode.QUOTA_EXHAUSTED,
-            provider="tavily",
+            provider="gemini_search",
             message="Provider monthly search quota exhausted"
         )
     )
@@ -166,4 +166,4 @@ async def test_orchestrator_enriches_warnings_with_provider_error():
         # Must have standard partial analysis warning
         assert any("Partial analysis" in w for w in warnings)
         # Must have specific provider degradation warning
-        assert any("Cross-reference agent degraded: Provider monthly search quota exhausted (tavily)" in w for w in warnings)
+        assert any("Cross-reference agent degraded: Provider monthly search quota exhausted (gemini_search)" in w for w in warnings)

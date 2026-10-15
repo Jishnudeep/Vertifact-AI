@@ -84,7 +84,7 @@ This is where the PRD has its biggest practical gap. Here's what actually works:
 | **Ad Fontes Media Bias Chart** | Static dataset | Limited free access | Reliability + bias 2D ratings per outlet. More granular than AllSides. |
 
 **Architecture recommendation:**
-- **Runtime fact-checking:** Google Fact Check Tools API (reliable, maintained, free) + a general web search API (SerpAPI, Brave Search API, or Tavily) for finding corroborating/contradicting sources.
+- **Runtime fact-checking:** Google Fact Check Tools API (reliable, maintained, free) + Google Search grounding via Gemini API for finding corroborating/contradicting sources.
 - **Bias rating:** Static CSV lookup from AllSides dataset (Kaggle). No API calls needed. Pre-load into your PostgreSQL DB.
 - **Evaluation ground truth:** LIAR + FEVER + FACT5 datasets. These never hit production — they're for measuring your system's accuracy.
 
@@ -94,12 +94,13 @@ This is where the PRD has its biggest practical gap. Here's what actually works:
 
 | Option | Free Tier | Why Consider |
 |--------|-----------|-------------|
-| **Tavily** | 1,000 req/month free | Built specifically for AI agent search. Returns clean, structured results optimized for LLM consumption. Direct LangChain/ADK integration. |
+| **Google Search Grounding (Gemini)** | 5,000 req/month free | Native Google search grounding via ADK / Gemini API. Direct fresh index coverage and source citations. |
+| **Tavily** | Previously used | Retired in Plan 6 in favor of Google Search grounding. |
 | **Brave Search API** | 2,000 req/month free | Independent index (not Google/Bing reskin). Good result quality. |
 | **SerpAPI** | 100 req/month free | Google results via API. Most accurate but expensive beyond free tier. |
 | **Serper.dev** | 2,500 req/month free | Google results, cheaper than SerpAPI. |
 
-**Verdict:** **Tavily** is the best fit. It's designed for agentic AI workflows, returns LLM-optimized responses, and the free tier is sufficient for a side project + demo.
+**Verdict:** **Google Search Grounding (Gemini)** is the best fit (replaces Tavily in Plan 6). It provides 5,000 free searches/month, fresh Google search index grounding, and native ADK integration.
 
 ---
 
@@ -126,7 +127,7 @@ Embeddings:     BGE-M3 (via sentence-transformers)
 Vector Search:  pgvector (via Supabase)
 Database:       Supabase (PostgreSQL + auth + storage)
 Fact-Check API: Google Fact Check Tools API
-Web Search:     Tavily
+Web Search:     Google Search grounding (Gemini)
 Bias Data:      AllSides CSV (static, pre-loaded)
 NLP:            spaCy + VADER + HuggingFace Transformers
 Eval Framework: DeepEval + custom harness (see Part 2)
@@ -343,7 +344,7 @@ When evaluating claims derived from a fact-checking benchmark (such as LIAR, who
 - During evaluation, evidence retrieval calls filter out all results originating from `origin_domain` across both web search and fact-check endpoints.
 
 #### Replay and Reproducibility
-To prevent burning API quotas (Tavily, Groq) during repeated eval iterations and to guarantee deterministic test execution:
+To prevent burning API quotas (Gemini, Groq) during repeated eval iterations and to guarantee deterministic test execution:
 - `--replay record`: Calls live evidence and LLM APIs, saving raw responses to `eval/results/evidence_cache/`.
 - `--replay replay`: Serves responses strictly from the cache. Any cache miss raises `ReplayMissError` and invalidates the run (`STATUS_INVALID_RUN`).
 - `--replay live`: Calls external APIs live without caching. Refused when any claim in the dataset has `origin_domain` set (leave-source-out requires record or replay mode).
