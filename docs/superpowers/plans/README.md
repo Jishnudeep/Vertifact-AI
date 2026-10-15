@@ -18,7 +18,7 @@ column (1 → 2 → 4 → 3 → 5). Each plan's Task 0 checks its prerequisites.
 | 3rd+ | Review follow-ups | (no plan file; see below) | Fixes from the 2026-09-27 review of Plans 1, 2, 4 | Plans 1, 2, 4 | completed 2026-09-28 (Claude Code) |
 | 4th | Plan 3 | [eval-integrity](2026-09-23-eval-integrity.md) | C3, C4: replay, leave-source-out, segments, LIAR/FEVER, NLI calibration | Plans 1, 2, 4 | completed 2026-09-28 (Antigravity) |
 | 5th | Plan 5 | [doc-sync](2026-09-23-doc-sync.md) | Medium drift, H5, H6: error codes, rating map, docs, skills | Plans 1–4 | completed 2026-09-28 (Antigravity) |
-| 6th | Plan 6 | [google-search-grounding](2026-10-14-google-search-grounding.md) | Google Search grounding replaces Tavily | Plans 1–5 | in progress: Tasks 0–4 committed (3–4 not yet through the review gate), 5–9 open; draft PR open |
+| 6th | Plan 6 | [google-search-grounding](2026-10-14-google-search-grounding.md) | Google Search grounding replaces Tavily | Plans 1–5 | in progress: Tasks 0–4 done (3–4 fixed and reviewed 2026-10-15), 5–9 open; draft PR #1 |
 | 7th | Plan 7 | [frontend-mvp](2026-10-15-frontend-mvp.md) | Frontend MVP, text input end to end (Midnight Transit Diagram), plus API additions: per-agent status, cap fields, `found_by`, stored-result parity, `Retry-After`, featured recent results | Plan 6 | not started |
 | 8th | Plan 9 | (not written yet) | Evals: valid baseline, DeepEval guardrail, ADK eval over traces, latency and cache metrics | Plan 7 | to be designed in its own brainstorm |
 | 9th | Plan 10 | (not written yet) | Governance, observability, deployment | Plan 9 | to be designed in its own brainstorm |

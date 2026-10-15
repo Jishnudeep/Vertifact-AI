@@ -140,12 +140,12 @@ async def test_evidence_api_outage_surfaces_partial_analysis_warning():
     agents must report degraded=True so Rule 1 fires and the user sees the
     'Partial analysis' flag instead of a confident-looking score.
     """
-    outage = EvidenceAPIError("Tavily search returned HTTP 432")
+    outage = EvidenceAPIError("Gemini search returned HTTP 503")
 
     with patch("app.agents.orchestrator.generate_embedding", return_value=[0.1] * 384), \
          patch("app.agents.orchestrator.lookup_cache", return_value=None), \
          patch("app.agents.factcheck_agent.search_factchecks", side_effect=EvidenceAPIError("Google Fact Check returned HTTP 503")), \
-         patch("app.agents.factcheck_agent.search_web", side_effect=outage), \
+         patch("app.agents.factcheck_agent.grounded_search", side_effect=outage), \
          patch("app.agents.crossref_agent.grounded_search", side_effect=outage), \
          patch("app.agents.orchestrator.insert_cache", return_value=None):
 

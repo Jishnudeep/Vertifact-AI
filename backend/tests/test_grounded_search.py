@@ -528,10 +528,12 @@ async def test_clean_run_without_metadata_is_no_evidence(monkeypatch, gemini_key
 
 
 @pytest.mark.anyio
-async def test_autouse_guard_blocks_unpatched_live_search():
+async def test_autouse_guard_blocks_unpatched_live_search(_no_live_grounded_search):
     assert settings.gemini_api_key == "dummy_gemini_key"         # the real key never loads
     with pytest.raises(pytest.fail.Exception, match="live Gemini search called in a unit test"):
         await adk_helpers.run_grounded_agent("factcheck", FACTCHECK_INSTRUCTION, "p")
     # Loud even through the service: it must not be swallowed into a quiet EvidenceAPIError outage.
     with pytest.raises(pytest.fail.Exception, match="live Gemini search called in a unit test"):
         await grounded_search("factcheck", "The Earth is flat")
+    assert len(_no_live_grounded_search) == 2   # both calls reached the guard
+    _no_live_grounded_search.clear()            # deliberate here; teardown checks for stray calls

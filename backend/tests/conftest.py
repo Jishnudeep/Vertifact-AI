@@ -19,6 +19,17 @@ os.environ.setdefault("GEMINI_API_KEY", "dummy_gemini_key")
 def anyio_backend():
     return "asyncio"
 
+
+@pytest.fixture(scope="session", autouse=True)
+def _warm_spacy():
+    """
+    Mirror app startup (`main.lifespan` preloads spaCy). Without this, whichever agent test runs
+    first pays the cold model load inside the agent's 8 s budget and times out, so results would
+    depend on test order.
+    """
+    from app.agents.linguistic_agent import get_spacy_nlp
+    get_spacy_nlp()
+
 @pytest.fixture(autouse=True)
 def _fresh_budgets():
     from app.services import budget
@@ -41,6 +52,9 @@ def _no_live_grounded_search(request, monkeypatch):
     The stub raises pytest.fail (a BaseException) so `except Exception` outage handling can't
     absorb it, and teardown fails the test as well, because `gather(return_exceptions=True)`
     would otherwise hand the exception back as a value and let the test pass.
+
+    Yields the list of blocked calls, so the guard's own self-test can clear the calls it makes
+    on purpose; any other test that leaves a call recorded fails at teardown.
     """
     calls = []
 
@@ -53,7 +67,7 @@ def _no_live_grounded_search(request, monkeypatch):
         from app.utils import adk_helpers
         monkeypatch.setattr(adk_helpers, "run_grounded_agent", _blocked)
         monkeypatch.setattr(grounded_search, "run_grounded_agent", _blocked)
-    yield
+    yield calls
     if calls:
         pytest.fail(_LIVE_SEARCH_MSG)
 

@@ -37,7 +37,9 @@ PROMPT_JSON_KEYS = (
 )
 
 _JSON_KEY_COLON_RE = re.compile(
-    r"\b(" + "|".join(PROMPT_JSON_KEYS) + r")\s*:",
+    # Up to two closing quote characters (ASCII, smart, backtick or an escaping backslash) and a
+    # ASCII or fullwidth colon, so `"rating":`, `“rating”:`, `\"rating\":` and `rating：` all match.
+    r"\b(" + "|".join(PROMPT_JSON_KEYS) + r")\s*[\"'‘’“”`\\]{0,2}\s*[:：]",
     flags=re.IGNORECASE,
 )
 
@@ -52,7 +54,7 @@ def neutralize_for_prompt(text: str) -> str:
     model's own object. Removing the syntax at the source is the only reliable cut:
 
       - `{` / `}` become `(` / `)`  — an echoed claim can no longer form a JSON object.
-      - `rating:` / `relevant:` / ... become `rating -` / `relevant -` — an echoed claim can
+      - `rating:` / `"rating":` / ... become `rating -` / `"rating -` — an echoed claim can
         no longer form a JSON (or bare) key/value pair for any key the agents read.
 
     Factual claims do not meaningfully need literal braces or `key:` JSON syntax, so this is
