@@ -12,7 +12,9 @@ class Settings(BaseSettings):
     groq_api_key: str = Field(default="", validation_alias=AliasChoices("GROQ_API_KEY"))
     tavily_api_key: str = Field(default="", validation_alias=AliasChoices("TAVILY_API_KEY", "TAVILY_KEY"))
     google_fact_check_api_key: str = Field(default="", validation_alias=AliasChoices("GOOGLE_FACTCHECK_API_KEY", "GOOGLE_FACT_CHECK_API_KEY"))
-    
+    # Plan 6 D1: Gemini API (AI Studio) key for the grounded-search agents. Not Vertex AI.
+    gemini_api_key: str = Field(default="", validation_alias=AliasChoices("GEMINI_API_KEY", "GOOGLE_API_KEY"))
+
     # Allowed CORS origins for frontend integration (Vite dev server default 5173)
     cors_origins: List[str] = ["http://localhost:5173", "http://localhost:3000"]
     
@@ -41,7 +43,13 @@ class Settings(BaseSettings):
     # body and forced the (injection-prone) regex fallback (R7.B1/R7.P4).
     # Revisit when prod moves to vLLM (PRD §5).
     model_id: str = "groq/openai/gpt-oss-120b"
-    
+
+    # Plan 6: Gemini model for the `google_search` grounded-search agents (ADK's google_search
+    # tool only runs on Gemini models). UNVERIFIED: the Task 0 live probe was declined, so this
+    # id has not been confirmed against the project key — it is checked in the Task 9 live gate.
+    # Override with SEARCH_MODEL_ID.
+    search_model_id: str = "gemini-3.1-flash-lite"
+
     # Model name for generating embeddings
     embedding_model_name: str = "all-MiniLM-L6-v2"
     
@@ -69,7 +77,12 @@ class Settings(BaseSettings):
     tavily_daily_credit_budget: int = 30
     # Groq free tier for gpt-oss-120b = 1,000 requests/day; keep headroom for retries.
     llm_daily_call_budget: int = 900
-    
+    # Plan 6: Gemini grounded-search calls per UTC day (one per Fact-Check / Cross-Ref run).
+    search_daily_call_budget: int = 50
+
+    # Plan 6 / TDD §11: overall wall-clock budget for fetching one cited page (all hops).
+    page_fetch_timeout_s: float = 2.0
+
     # H3: number of reverse proxies in front of the API that append to X-Forwarded-For.
     # 0 = trust nothing (local dev); 1 = one platform proxy (Render/Railway/Fly).
     trusted_proxy_hops: int = 0
@@ -90,9 +103,35 @@ class Settings(BaseSettings):
         extra="ignore"
     )
 
+def _export_provider_env(s: Settings) -> None:
+    """
+    Export keys that SDKs read from os.environ rather than from our Settings.
+
+    google-genai (used by ADK's Gemini model for the grounded-search agents) reads
+    GOOGLE_API_KEY. It is assigned, not setdefault, so the SDK uses exactly the key Settings
+    resolved. Key values are never logged.
+
+    The backend selector defaults to "false" so the Gemini API is used, not Vertex AI
+    (Plan 6 D1); an explicit operator setting is left alone. google-genai 2.x / ADK 2.12 read
+    GOOGLE_GENAI_USE_ENTERPRISE first and warn that GOOGLE_GENAI_USE_VERTEXAI is deprecated
+    when only the old name is present, so both are set, to the same value.
+    """
+    if s.gemini_api_key:
+        os.environ["GOOGLE_API_KEY"] = s.gemini_api_key
+    backend_selector = (
+        os.environ.get("GOOGLE_GENAI_USE_ENTERPRISE")
+        or os.environ.get("GOOGLE_GENAI_USE_VERTEXAI")
+        or "false"
+    )
+    os.environ.setdefault("GOOGLE_GENAI_USE_ENTERPRISE", backend_selector)
+    os.environ.setdefault("GOOGLE_GENAI_USE_VERTEXAI", backend_selector)
+
+
 @lru_cache()
 def get_settings() -> Settings:
-    return Settings()
+    s = Settings()
+    _export_provider_env(s)
+    return s
 
 def __getattr__(name: str):
     """

@@ -11,6 +11,14 @@ try:
 except ImportError:
     litellm = None
 
+try:
+    from google.genai import errors as genai_errors
+except ImportError:
+    genai_errors = None
+
+from app.services.budget import LLMBudgetExceeded
+from app.services.errors import EvidenceBudgetExceeded
+
 class ProviderErrorCode(str, Enum):
     RATE_LIMIT = "RATE_LIMIT"
     QUOTA_EXHAUSTED = "QUOTA_EXHAUSTED"
@@ -33,6 +41,55 @@ class AgentErrorDetails:
         d["code"] = self.code.value
         return d
 
+def _display_name(provider: str) -> str:
+    """'gemini_search' -> 'Gemini search', 'tavily' -> 'Tavily'."""
+    return provider.replace("_", " ").strip().capitalize() or "Provider"
+
+def _classify_genai_api_error(exc: BaseException, provider: str) -> Optional[AgentErrorDetails]:
+    """Map a google-genai APIError (or an exception caused by one) by `.code`; None otherwise."""
+    if genai_errors is None:
+        return None
+    api_err = exc if isinstance(exc, genai_errors.APIError) else exc.__cause__
+    if not isinstance(api_err, genai_errors.APIError):
+        return None
+
+    code = api_err.code
+    if code == 429:
+        retry_after = None
+        response = getattr(api_err, "response", None)
+        headers = getattr(response, "headers", None)
+        if headers is not None:
+            try:
+                retry_after = float(headers.get("retry-after"))
+            except (TypeError, ValueError):
+                retry_after = None
+        return AgentErrorDetails(
+            code=ProviderErrorCode.RATE_LIMIT,
+            provider=provider,
+            message="API rate limit exceeded",
+            retry_after=retry_after,
+        )
+    # The Gemini API answers an invalid key with 400 INVALID_ARGUMENT / reason API_KEY_INVALID.
+    if code in {401, 403} or (code == 400 and "API_KEY_INVALID" in str(api_err)):
+        return AgentErrorDetails(
+            code=ProviderErrorCode.AUTH_ERROR,
+            provider=provider,
+            message="API authentication failure (invalid or forbidden API key)",
+        )
+    if code == 404:
+        return AgentErrorDetails(
+            code=ProviderErrorCode.MODEL_NOT_FOUND,
+            provider=provider,
+            message="Configured model was not found or has been deprecated by provider",
+        )
+    if isinstance(code, int) and code >= 500:
+        return AgentErrorDetails(
+            code=ProviderErrorCode.SERVICE_UNAVAILABLE,
+            provider=provider,
+            message=f"Provider server error (HTTP {code})",
+        )
+    return None
+
 def classify_provider_error(exc: Exception, provider: str = "unknown") -> AgentErrorDetails:
     """
     Classify third-party provider exceptions (Groq, LiteLLM, Tavily, Google, asyncio)
@@ -49,13 +106,27 @@ def classify_provider_error(exc: Exception, provider: str = "unknown") -> AgentE
     prov = getattr(exc, "provider", None) or provider
     status_code = getattr(exc, "status_code", None)
 
+    # Our own daily spend guards (TDD §11): refused before calling the provider.
+    if isinstance(exc, (EvidenceBudgetExceeded, LLMBudgetExceeded)):
+        return AgentErrorDetails(
+            code=ProviderErrorCode.QUOTA_EXHAUSTED,
+            provider=prov,
+            message=str(exc) or "Daily call budget exhausted"
+        )
+
     # Check for unconfigured service errors
     if "not configured" in str(exc).lower():
         return AgentErrorDetails(
             code=ProviderErrorCode.AUTH_ERROR,
             provider=prov,
-            message=f"{prov.capitalize()} API key is not configured"
+            message=f"{_display_name(prov)} API key is not configured"
         )
+
+    # google-genai APIError (Gemini grounded search, Plan 6), raised directly or wrapped as
+    # the cause of an EvidenceAPIError. Classified by its HTTP `.code`.
+    genai_details = _classify_genai_api_error(exc, prov)
+    if genai_details is not None:
+        return genai_details
 
     # LiteLLM / LLM Provider Exceptions
     if litellm is not None:

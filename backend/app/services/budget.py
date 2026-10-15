@@ -53,3 +53,9 @@ def get_tavily_budget() -> DailyBudget:
 @lru_cache()
 def get_llm_budget() -> DailyBudget:
     return DailyBudget("llm_calls", settings.llm_daily_call_budget)
+
+
+@lru_cache()
+def get_search_budget() -> DailyBudget:
+    """Gemini grounded-search calls per UTC day (Plan 6). Exhaustion is an evidence outage."""
+    return DailyBudget("search_calls", settings.search_daily_call_budget)

@@ -1,0 +1,248 @@
+[
+  {
+    "kind": "factcheck",
+    "claim": "The Earth is flat",
+    "grounding_metadata": {
+      "web_search_queries": [
+        "earth is flat fact check"
+      ],
+      "grounding_chunks": [
+        {
+          "web": {
+            "uri": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQ-flat-1",
+            "title": "snopes.com",
+            "domain": null
+          }
+        },
+        {
+          "web": {
+            "uri": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQ-flat-2",
+            "title": "politifact.com",
+            "domain": "politifact.com"
+          }
+        },
+        {
+          "web": {
+            "uri": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQ-flat-3",
+            "title": "Is the Earth Flat? Here's the Science",
+            "domain": null
+          }
+        },
+        {
+          "web": {
+            "uri": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQ-flat-4",
+            "title": "www.snopes.com",
+            "domain": null
+          }
+        },
+        {
+          "web": {
+            "uri": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQ-flat-5",
+            "title": "nasa.gov",
+            "domain": "nasa.gov"
+          }
+        }
+      ],
+      "grounding_supports": [
+        {
+          "segment": {
+            "start_index": 0,
+            "end_index": 40,
+            "text": "synthetic answer text"
+          },
+          "grounding_chunk_indices": [
+            0,
+            1
+          ],
+          "confidence_scores": [
+            0.9,
+            0.9
+          ]
+        },
+        {
+          "segment": {
+            "start_index": 41,
+            "end_index": 90,
+            "text": "synthetic answer text"
+          },
+          "grounding_chunk_indices": [
+            2,
+            4
+          ],
+          "confidence_scores": [
+            0.9,
+            0.9
+          ]
+        }
+      ],
+      "search_entry_point": {
+        "rendered_content": "<style>.container{display:flex}</style><div class=\"container\"><a class=\"chip\" href=\"https://www.google.com/search?q=earth is flat fact check\">earth is flat fact check</a></div>"
+      }
+    },
+    "model": "gemini-3.1-flash-lite",
+    "latency_s": null,
+    "synthetic": true
+  },
+  {
+    "kind": "coverage",
+    "claim": "NASA confirmed water ice on the Moon",
+    "grounding_metadata": {
+      "web_search_queries": [
+        "NASA water ice moon confirmed",
+        "SOFIA moon water 2020"
+      ],
+      "grounding_chunks": [
+        {
+          "web": {
+            "uri": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQ-moon-1",
+            "title": "nasa.gov",
+            "domain": null
+          }
+        },
+        {
+          "web": {
+            "uri": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQ-moon-2",
+            "title": "reuters.com",
+            "domain": "reuters.com"
+          }
+        },
+        {
+          "web": {
+            "uri": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQ-moon-3",
+            "title": "bbc.com",
+            "domain": null
+          }
+        },
+        {
+          "web": {
+            "uri": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQ-moon-4",
+            "title": "foxnews.com",
+            "domain": "foxnews.com"
+          }
+        },
+        {
+          "web": {
+            "uri": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQ-moon-5",
+            "title": "theguardian.com",
+            "domain": null
+          }
+        },
+        {
+          "web": {
+            "uri": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQ-moon-6",
+            "title": "apnews.com",
+            "domain": null
+          }
+        },
+        {
+          "web": {
+            "uri": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQ-moon-7",
+            "title": "factcheck.org",
+            "domain": null
+          }
+        }
+      ],
+      "grounding_supports": [
+        {
+          "segment": {
+            "start_index": 0,
+            "end_index": 60,
+            "text": "synthetic answer text"
+          },
+          "grounding_chunk_indices": [
+            0,
+            1,
+            2
+          ],
+          "confidence_scores": [
+            0.9,
+            0.9,
+            0.9
+          ]
+        },
+        {
+          "segment": {
+            "start_index": 61,
+            "end_index": 120,
+            "text": "synthetic answer text"
+          },
+          "grounding_chunk_indices": [
+            3,
+            4,
+            5,
+            6
+          ],
+          "confidence_scores": [
+            0.9,
+            0.9,
+            0.9,
+            0.9
+          ]
+        }
+      ],
+      "search_entry_point": {
+        "rendered_content": "<style>.container{display:flex}</style><div class=\"container\"><a class=\"chip\" href=\"https://www.google.com/search?q=NASA water ice moon confirmed\">NASA water ice moon confirmed</a></div>"
+      }
+    },
+    "model": "gemini-3.1-flash-lite",
+    "latency_s": null,
+    "synthetic": true
+  },
+  {
+    "kind": "factcheck",
+    "claim": "5G towers spread COVID-19",
+    "grounding_metadata": {
+      "web_search_queries": [
+        "5G COVID-19 fact check"
+      ],
+      "grounding_chunks": [
+        {
+          "web": {
+            "uri": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQ-5g-1",
+            "title": "fullfact.org",
+            "domain": null
+          }
+        },
+        {
+          "web": {
+            "uri": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQ-5g-2",
+            "title": "factcheck.afp.com",
+            "domain": "factcheck.afp.com"
+          }
+        },
+        {
+          "web": {
+            "uri": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQ-5g-3",
+            "title": "who.int",
+            "domain": null
+          }
+        }
+      ],
+      "grounding_supports": [
+        {
+          "segment": {
+            "start_index": 0,
+            "end_index": 50,
+            "text": "synthetic answer text"
+          },
+          "grounding_chunk_indices": [
+            0,
+            1,
+            2
+          ],
+          "confidence_scores": [
+            0.9,
+            0.9,
+            0.9
+          ]
+        }
+      ],
+      "search_entry_point": {
+        "rendered_content": "<style>.container{display:flex}</style><div class=\"container\"><a class=\"chip\" href=\"https://www.google.com/search?q=5G COVID-19 fact check\">5G COVID-19 fact check</a></div>"
+      }
+    },
+    "model": "gemini-3.1-flash-lite",
+    "latency_s": null,
+    "synthetic": true
+  }
+]

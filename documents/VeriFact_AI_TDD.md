@@ -40,7 +40,7 @@
 │  ┌──────────────────────▼────────────────────────────────────┐   │
 │  │           ORCHESTRATOR AGENT (ADK Hub Node)                │   │
 │  │  - Parses input (text/URL/image)                          │   │
-│  │  - Dispatches parallel worker agents via asyncio.gather    │   │
+│  │  - ADK Workflow: dynamic supervisor runs workers in parallel│   │
 │  │  - Collects results, computes C_total                     │   │
 │  │  - Handles agent failures with graceful degradation        │   │
 │  └────┬──────────────┬───────────────┬───────────────────────┘   │
@@ -305,20 +305,55 @@ WebSocket endpoint for real-time agent pipeline status during verification.
 
 **Role:** Single entry point. Parses input, manages parallel dispatch, aggregates results.
 
-**Orchestration model.** The orchestrator is a deterministic Python coroutine
-(`app/agents/orchestrator.py::verify_claim`), **not** an LLM agent. It fans out to the three
-workers with `asyncio.gather` and gives each a per-agent timeout that fits the request
-deadline (TDD §3.1). It then aggregates in code. Nothing is delegated by an LLM.
+**Orchestration model (ADK 2.x graph workflow, `google-adk >= 2.12`).** The orchestrator is a
+deterministic ADK `Workflow` (`app/agents/orchestrator.py::build_verification_workflow`), **not**
+an LLM agent: every node is plain code and nothing is delegated by an LLM. `verify_claim`
+sanitizes, validates (400/422) and embeds the claim, runs the workflow once, then persists in
+the background. The graph:
 
-Google ADK is used at the **leaves** only. `app/utils/adk_helpers.py::run_adk_agent` wraps one
+```
+START ─► cache_lookup ─┬─ "hit"  ─► format_cached
+                       └─ "miss" ─► dispatch_agents ─► score
+                                      ├─ ctx.run_node(factcheck)  ┐
+                                      ├─ ctx.run_node(crossref)   ├ concurrent (asyncio.gather)
+                                      └─ ctx.run_node(linguistic) ┘
+```
+
+- `cache_lookup` fails closed (timeout or error → `"miss"`) and computes the per-agent budget
+  from what is left of the request deadline (§3.1).
+- `dispatch_agents` is a **dynamic supervisor** (adk.dev/graphs/dynamic). It runs the three
+  agents as dynamic child nodes. A child that raises or exceeds its ADK node `timeout` surfaces
+  as a catchable `DynamicNodeFailError` and becomes that agent's degraded neutral result; the
+  healthy siblings finish and the run is scored with "Partial Analysis" (§4.1 timeout handling).
+- `score` runs the scoring engine (§7). If no agent succeeded it emits no score and
+  `verify_claim` raises `AllAgentsFailedError` (500).
+- The graph runs on one process-wide `InMemoryRunner`, with a fresh session per request that is
+  deleted afterwards. Node outputs are the agents' dataclasses passed by reference, which
+  relies on the in-memory session service.
+
+Why a supervisor and not static fan-out: in ADK a static node that raises (including
+`NodeTimeoutError`) fails the whole workflow and cancels its siblings. That is true of a
+fan-out edge into `JoinNode` and of `@node(parallel_worker=True)`, both of which are fail-fast.
+The docs point to the manual supervisor for partial-failure handling, which is the contract we
+need. `LlmAgent(sub_agents=[...])` is not used either: it configures LLM-driven *transfer*.
+
+Each agent still enforces its own per-request budget (`run(claim, timeout=...)`). For an agent
+that ignores it, the agent node cuts it off at budget + 0.5 s (`AGENT_GRACE_S`), which still fits
+the request deadline; the ADK node `timeout` (8 s cap + 1 s) is only a fixed outer guard. ADK
+re-raises any timeout leaving a node as `NodeTimeoutError` (not a `TimeoutError` subclass), so the
+supervisor maps it back before error classification to keep the `TIMEOUT` code.
+
+The project does not use A2A. ADK's `build_node`, run on every `ctx.run_node`, retries the optional
+`remote_a2a_agent` import, and a failed import is not cached, which put ~50-500 ms of synchronous
+work on the event loop per request. `orchestrator.py` registers that module as absent when the
+`a2a` package is not installed, so the import fails instantly (guarded by an overhead test). The
+workflow Runner is built in the FastAPI lifespan, so a graph-configuration error fails at boot.
+`google-adk` is pinned `<2.13` because the supervisor relies on ADK 2.12 behaviour.
+
+Google ADK is also used at the **leaves**. `app/utils/adk_helpers.py::run_adk_agent` wraps one
 `LlmAgent` per prompt type (`rating_classifier`, `claim_aligner`, `verdict_extractor`,
 `sensationalism_analyzer`), using `LiteLlm(model=settings.model_id, temperature=0, max_tokens=1024)`.
 Runners are cached per prompt, and there is a fresh session per call.
-
-Why not `LlmAgent(sub_agents=[...])`: in ADK that configures LLM-driven *transfer* to one
-sub-agent, not parallel execution. `ParallelAgent` (`google.adk.agents`) runs branches
-concurrently but has no per-branch timeout or typed-result contract. Explicit `asyncio` gives
-both, plus deterministic degradation.
 
 Model: `settings.model_id` (dev: `groq/openai/gpt-oss-120b`; see `app/config.py` for the
 verified 404s on Groq's Llama models). It is never hardcoded in agent logic.

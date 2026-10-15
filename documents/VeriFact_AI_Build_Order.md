@@ -4,6 +4,15 @@
 **Estimated Total Duration:** 7-8 weeks (evenings/weekends pace)
 **Prerequisites:** Python 3.11+, Node.js 18+, Git, VS Code, Supabase account, Groq API key
 
+> **Realigned 2026-10-15** (`docs/superpowers/specs/2026-10-15-realigned-roadmap-design.md`). The step details below still apply; the order is now:
+> **A.** Finish Plan 6 (Google Search grounding).
+> **B.** Frontend MVP (text input): Plan 7, Steps 2.4–2.7, Midnight Transit Diagram design.
+> **D.** Evals: Phase 3 Steps 3.1–3.6, with DeepEval **and** ADK eval (`agents-cli eval`). Designed separately before it starts.
+> **E.** Governance, observability (tracing, logging), and deployment. Designed separately.
+> **C (last).** URL + screenshot input: Plan 8, Steps 2.1–2.3.
+>
+> The WebSocket status feed (Step 2.8) and a GDELT coverage panel are stretch items after E.
+
 ---
 
 ## Phase 0: Environment & Foundation (Day 1-2)

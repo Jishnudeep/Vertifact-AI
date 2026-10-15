@@ -14,10 +14,13 @@ from app.services.embedding import generate_embedding
 from app.services.nli import get_nli_model
 from app.api.routes import router as api_router, limiter
 from app.agents.orchestrator import (
-    InvalidInputError, NonVerifiableClaimError, AllAgentsFailedError, drain_background_tasks
+    InvalidInputError, NonVerifiableClaimError, AllAgentsFailedError, drain_background_tasks,
+    get_verification_runner,
 )
 
 logger = logging.getLogger(__name__)
+# ADK logs full LLM responses (grounded answer text included) at DEBUG; D4 keeps that text out of logs.
+logging.getLogger("google_adk").setLevel(logging.INFO)
 
 SHUTDOWN_DRAIN_TIMEOUT_S = 5.0
 
@@ -68,7 +71,12 @@ async def lifespan(app: FastAPI):
         get_nli_model()
     except Exception as exc:
         logger.warning(f"NLI model preload warning: {exc}")
-        
+
+    # 5. Build the ADK verification workflow + Runner. Not wrapped: a graph-configuration
+    # error must fail at boot, not on the first request.
+    logger.info("Building ADK verification workflow...")
+    get_verification_runner()
+
     logger.info("Startup complete. Pipeline is ready.")
     yield
     logger.info("Shutting down VeriFact AI application...")

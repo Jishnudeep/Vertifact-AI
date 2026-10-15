@@ -5,9 +5,10 @@ description = "VeriFact AI Backend Pipeline"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "beautifulsoup4>=4.15.0",
     "en-core-web-sm",
     "fastapi>=0.136.3",
-    "google-adk>=2.1.0",
+    "google-adk>=2.12.0,<2.13",
     "httpx>=0.28.1",
     "litellm>=1.87.0",
     "pydantic>=2.13.4",
@@ -27,6 +28,7 @@ pythonpath = ["."]
 cache_dir = ".venv/.pytest_cache"
 markers = [
     "live: integration tests that hit live external APIs (deselected by default)",
+    "live_search: opt out of the autouse guard that blocks run_grounded_agent (tests that mock the ADK runner themselves)",
 ]
 addopts = "-m 'not live'"
 

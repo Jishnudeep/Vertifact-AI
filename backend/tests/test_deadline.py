@@ -11,6 +11,7 @@ from app.agents.crossref_agent import CrossRefResult, run as crossref_run
 from app.agents.factcheck_agent import make_neutral_factcheck
 from app.agents.linguistic_agent import LinguisticResult
 from app.config import settings
+from app.services.grounded_search import GroundedSearch
 
 
 @pytest.fixture(autouse=True)
@@ -107,8 +108,8 @@ async def test_raw_input_is_persisted_sanitized():
 async def test_agent_honours_explicit_timeout():
     async def slow_search(*args, **kwargs):
         await asyncio.sleep(1.0)
-        return []
-    with patch("app.agents.crossref_agent.search_web", side_effect=slow_search):
+        return GroundedSearch(sources=[], queries=[], search_suggestions_html=None)
+    with patch("app.agents.crossref_agent.grounded_search", side_effect=slow_search):
         result = await crossref_run("NASA announces Mars landing", timeout=0.01)
     assert result.degraded is True and "Timeout" in result.error
 
