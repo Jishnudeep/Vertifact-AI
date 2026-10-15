@@ -10,7 +10,6 @@ class Settings(BaseSettings):
     supabase_publish_key: str = Field(default="", validation_alias=AliasChoices("SUPABASE_PUBLISH_KEY"))
     supabase_secret_key: str = Field(default="", validation_alias=AliasChoices("SUPABASE_SECRET_KEY"))
     groq_api_key: str = Field(default="", validation_alias=AliasChoices("GROQ_API_KEY"))
-    tavily_api_key: str = Field(default="", validation_alias=AliasChoices("TAVILY_API_KEY", "TAVILY_KEY"))
     google_fact_check_api_key: str = Field(default="", validation_alias=AliasChoices("GOOGLE_FACTCHECK_API_KEY", "GOOGLE_FACT_CHECK_API_KEY"))
     # Plan 6 D1: Gemini API (AI Studio) key for the grounded-search agents. Not Vertex AI.
     gemini_api_key: str = Field(default="", validation_alias=AliasChoices("GEMINI_API_KEY", "GOOGLE_API_KEY"))
@@ -72,9 +71,6 @@ class Settings(BaseSettings):
     # H1: total wall-clock budget per /api/verify request (PRD §10: < 10 s end-to-end).
     request_deadline_s: float = 9.5
     
-    # H2/H3: daily spend ceilings (UTC day, per process). 0 disables a guard.
-    # Tavily free tier = 1,000 credits/month (~33/day); advanced search = 2 credits, basic = 1.
-    tavily_daily_credit_budget: int = 30
     # Groq free tier for gpt-oss-120b = 1,000 requests/day; keep headroom for retries.
     llm_daily_call_budget: int = 900
     # Plan 6: Gemini grounded-search calls per UTC day (one per Fact-Check / Cross-Ref run).
@@ -145,7 +141,7 @@ def __getattr__(name: str):
         "SUPABASE_URL": s.supabase_url,
         "SUPABASE_KEY": s.supabase_secret_key,
         "GROQ_API_KEY": s.groq_api_key,
-        "TAVILY_API_KEY": s.tavily_api_key,
+        "GEMINI_API_KEY": s.gemini_api_key,
         "GOOGLE_FACT_CHECK_API_KEY": s.google_fact_check_api_key,
     }
     if name in mapping:

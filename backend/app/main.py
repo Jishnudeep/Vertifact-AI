@@ -34,7 +34,7 @@ async def lifespan(app: FastAPI):
     # instead of showing up as every claim degrading to "Partial Analysis". Non-fatal.
     missing_keys = [
         name for name, value in (
-            ("TAVILY_API_KEY", settings.tavily_api_key),
+            ("GEMINI_API_KEY", settings.gemini_api_key),
             ("GOOGLE_FACTCHECK_API_KEY", settings.google_fact_check_api_key),
             ("GROQ_API_KEY", settings.groq_api_key),
         )

@@ -1,5 +1,5 @@
 """
-Grounded web search on ADK's built-in `google_search` tool (Plan 6, replaces Tavily).
+Grounded web search on ADK's built-in `google_search` tool (Plan 6).
 
 Plan 6 decisions honoured here:
   D1  Gemini API with an AI Studio key (`settings.gemini_api_key`), never Vertex AI.

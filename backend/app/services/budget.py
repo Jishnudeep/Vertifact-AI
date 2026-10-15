@@ -45,10 +45,6 @@ class DailyBudget:
             return self._used
 
 
-@lru_cache()
-def get_tavily_budget() -> DailyBudget:
-    return DailyBudget("tavily_credits", settings.tavily_daily_credit_budget)
-
 
 @lru_cache()
 def get_llm_budget() -> DailyBudget:

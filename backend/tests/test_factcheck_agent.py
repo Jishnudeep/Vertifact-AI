@@ -643,7 +643,7 @@ async def test_live_factchecks():
         assert bleach_res.matches_found > 0
         assert bleach_res.s_fact_score <= 0.25
 
-    # 3. Test a generally true claim (should either hit fact-check or Tavily fallback) with retry
+    # 3. Test a generally true claim (should either hit fact-check or web search fallback) with retry
     for attempt in range(3):
         sun_res = await run("The Earth orbits the Sun")
         if sun_res.s_fact_score in [1.0, 0.5]:

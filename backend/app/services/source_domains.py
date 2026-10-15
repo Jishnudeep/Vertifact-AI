@@ -1,7 +1,7 @@
 """
 Evidence-source domain lists (TDD §8.2).
 
-Moved out of `search_api.py` (Plan 6 Task 1) so they outlive the Tavily client.
+Moved out of `search_api.py` (Plan 6 Task 1) to decouple domain lists from the search client.
 
 Members are compared against `extract_domain(...)` output, which keeps only the registrable
 domain for standard TLDs: `extract_domain("factcheck.afp.com") == "afp.com"`. The

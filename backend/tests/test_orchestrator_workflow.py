@@ -232,11 +232,11 @@ async def test_provider_error_classification_survives_the_node_wrapper():
     """The agent's own exception (not ADK's wrapper) is what gets classified."""
     from app.services.errors import EvidenceAPIError
     fc, cr, ling = _ok_results()
-    quota = EvidenceAPIError("Tavily search returned HTTP 432", status_code=432, provider="tavily")
+    quota = EvidenceAPIError("Gemini search returned HTTP 432", status_code=432, provider="gemini_search")
     with ExitStack() as stack:
         _patches(stack, AsyncMock(return_value=fc), AsyncMock(side_effect=quota), AsyncMock(return_value=ling))
         result = await verify_claim(CLAIM)
-    assert any("Cross-reference agent degraded" in w and "(tavily)" in w
+    assert any("Cross-reference agent degraded" in w and "(gemini_search)" in w
                for w in result["confidence"]["warnings"])
 
 

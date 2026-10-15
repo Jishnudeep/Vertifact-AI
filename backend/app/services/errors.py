@@ -1,6 +1,6 @@
 class EvidenceAPIError(RuntimeError):
     """
-    Raised when an external evidence-retrieval service (Gemini grounded search, Tavily,
+    Raised when an external evidence-retrieval service (Gemini grounded search,
     Google Fact Check Tools) could not be reached, returned a non-success status, is not
     configured, or its daily budget is spent.
 

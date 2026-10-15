@@ -12,9 +12,6 @@ from app.services.errors import EvidenceAPIError
 from app.services.grounded_search import GroundedSource, grounded_search
 from app.services.page_fetch import PageText, fetch_page_text
 from app.services.source_domains import FACTCHECK_DOMAINS, CLAIMREVIEW_DOMAINS
-# Not used here since Plan 6 Task 3 (Layer 2 is grounded search). eval/replay.py still patches
-# `factcheck_agent.search_web` by name; Task 6 rewires replay and Task 7 removes this import.
-from app.services.search_api import search_web  # noqa: F401
 from app.services.budget import LLMBudgetExceeded
 from app.utils.adk_helpers import run_adk_agent, parse_adk_response
 from app.utils.errors import AgentErrorDetails, classify_provider_error
