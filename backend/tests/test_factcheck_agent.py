@@ -669,3 +669,47 @@ from app.agents.factcheck_agent import map_rating_to_score
 def test_real_world_textual_ratings(rating, expected):
     assert map_rating_to_score(rating) == expected
 
+
+
+# --- spaCy stays off the event loop (salient-topic retry) -------------------------------
+
+def _on_event_loop() -> bool:
+    try:
+        asyncio.get_running_loop()
+        return True
+    except RuntimeError:
+        return False
+
+
+@pytest.mark.anyio
+async def test_salient_topic_spacy_runs_off_the_event_loop():
+    """A Layer 1 miss retries with a spaCy topic query; the load and parse must not block the loop."""
+    from app.agents.linguistic_agent import get_spacy_nlp
+    real_nlp = get_spacy_nlp()
+    calls = []
+
+    def fake_loader():
+        calls.append(("load", _on_event_loop()))
+
+        def parse(text):
+            calls.append(("parse", _on_event_loop()))
+            return real_nlp(text)
+        return parse
+
+    stack, _, _ = _layer2(_search(), _fetcher({}))
+    with stack, patch("app.agents.linguistic_agent.get_spacy_nlp", side_effect=fake_loader):
+        result = await run("NASA announces Mars landing")
+
+    assert calls == [("load", False), ("parse", False)]
+    assert result.search_queries_used[1].startswith("NASA")  # entity-based topic query
+
+
+@pytest.mark.anyio
+async def test_salient_topic_falls_back_to_keywords_when_spacy_fails():
+    """A spaCy failure in the worker thread still falls back to the keyword topic query."""
+    stack, _, _ = _layer2(_search(), _fetcher({}))
+    with stack, patch("app.agents.linguistic_agent.get_spacy_nlp", side_effect=RuntimeError("no model")):
+        result = await run("The Earth is flat")
+
+    assert result.degraded is False
+    assert result.search_queries_used[:2] == ["The Earth is flat", "earth flat"]

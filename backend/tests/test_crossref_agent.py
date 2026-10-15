@@ -445,3 +445,51 @@ async def test_live_cross_reference():
     first_src = result.sources_found[0]
     assert first_src["url"].startswith("https://")
     assert first_src["relevance_score"] == 1.0
+
+
+# --- spaCy stays off the event loop -----------------------------------------------------
+
+def _on_event_loop() -> bool:
+    try:
+        asyncio.get_running_loop()
+        return True
+    except RuntimeError:
+        return False
+
+
+@pytest.mark.anyio
+async def test_spacy_load_and_parse_run_off_the_event_loop():
+    """
+    A cold `spacy.load` blocks for seconds; on the loop it would stall every in-flight request
+    and stop `wait_for` from enforcing the agent budget. Both the load and the parse must run
+    in a worker thread.
+    """
+    from app.agents.linguistic_agent import get_spacy_nlp
+    real_nlp = get_spacy_nlp()
+    calls = []
+
+    def fake_loader():
+        calls.append(("load", _on_event_loop()))
+
+        def parse(text):
+            calls.append(("parse", _on_event_loop()))
+            return real_nlp(text)
+        return parse
+
+    with patch("app.agents.crossref_agent.get_spacy_nlp", side_effect=fake_loader):
+        result, _, _ = await _run_with("NASA announces Mars landing", _search([_src("reuters.com")]))
+
+    assert calls == [("load", False), ("parse", False)]
+    assert result.degraded is False
+    assert "NASA" in result.entities_extracted
+
+
+@pytest.mark.anyio
+async def test_spacy_failure_in_worker_thread_degrades():
+    """An error raised in the worker thread still reaches run() and degrades, as it did on the loop."""
+    with patch("app.agents.crossref_agent.get_spacy_nlp", side_effect=RuntimeError("no model")):
+        result, gs, _ = await _run_with("NASA announces Mars landing", _search([_src("reuters.com")]))
+
+    assert result.degraded is True
+    assert result.v_consensus_score == 0.0
+    gs.assert_not_awaited()

@@ -609,7 +609,7 @@ def generate_embedding(text: str) -> list[float]:
     return model.encode(text, normalize_embeddings=True).tolist()
 ```
 
-**Important:** Load the model once at startup via the FastAPI `lifespan` handler in `app/main.py` (embeddings, spaCy, NLI, AllSides are preloaded there), not per-request. BGE-M3 takes ~2GB RAM when loaded. On 8GB RAM, this is not feasible alongside the rest of the stack. **Development config:** Use `all-MiniLM-L6-v2` (384-dim, ~100MB) and set `vector(384)` in the schema. **Production config:** Use `BAAI/bge-m3` (1024-dim) and set `vector(1024)`. Make the dimension a config variable so swapping requires no code changes, only a schema migration and re-embedding of cached claims.
+**Important:** Load the model once at startup via the FastAPI `lifespan` handler in `app/main.py` (embeddings, spaCy, NLI, AllSides are preloaded there), not per-request. A spaCy preload failure fails startup, because `en_core_web_sm` is a pinned wheel and a failure means a broken install. Embedding and NLI preload failures only log a warning, because those models may download from the Hugging Face hub and fail transiently. Agents run spaCy load and parse in a worker thread (`asyncio.to_thread`), never on the event loop. BGE-M3 takes ~2GB RAM when loaded. On 8GB RAM, this is not feasible alongside the rest of the stack. **Development config:** Use `all-MiniLM-L6-v2` (384-dim, ~100MB) and set `vector(384)` in the schema. **Production config:** Use `BAAI/bge-m3` (1024-dim) and set `vector(1024)`. Make the dimension a config variable so swapping requires no code changes, only a schema migration and re-embedding of cached claims.
 
 ### Cache Lookup Query
 

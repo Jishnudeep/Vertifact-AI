@@ -278,8 +278,8 @@ async def _analyze(claim: str) -> FactCheckResult:
         stop_words = {"the", "a", "an", "is", "was", "were", "are", "been", "that", "this", "on", "in", "at", "to", "for", "with", "of", "and", "or", "new", "study", "shows", "scientists", "have", "proven", "claims", "claim", "people", "confirm", "confirmed", "confirming", "reported", "reports", "say", "says", "said", "research", "indicates"}
         try:
             from app.agents.linguistic_agent import get_spacy_nlp
-            nlp = get_spacy_nlp()
-            doc = nlp(claim)
+            # Off the loop: a cold load or slow parse must not block `wait_for` or other requests.
+            doc = await asyncio.to_thread(lambda: get_spacy_nlp()(claim))
             ents = [e.text.strip() for e in doc.ents if e.label_ in {"PERSON", "ORG", "GPE", "LOC", "EVENT", "PRODUCT"}]
             if ents:
                 topic_query = " ".join(ents[:2])

@@ -97,3 +97,35 @@ async def test_live_linguistic_analysis():
         sensational_res = await run("SHOCKING: Aliens INVADE Washington! Scientists in TOTAL PANIC!")
         assert sensational_res.sensationalism > 0.6
         assert sensational_res.b_ling_score > factual_res.b_ling_score
+
+
+def test_concurrent_cold_spacy_loads_happen_once(monkeypatch):
+    """
+    The agents load spaCy from worker threads, so two cold requests can race. The loader must
+    load the model once, not once per thread.
+    """
+    import threading
+    import time
+    from app.agents import linguistic_agent
+
+    monkeypatch.setattr(linguistic_agent, "nlp", None)
+    loads = []
+
+    def slow_load(name):
+        loads.append(name)
+        time.sleep(0.05)
+        return object()
+
+    monkeypatch.setattr(linguistic_agent.spacy, "load", slow_load)
+    results = []
+    threads = [
+        threading.Thread(target=lambda: results.append(linguistic_agent.get_spacy_nlp()))
+        for _ in range(4)
+    ]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert loads == ["en_core_web_sm"]
+    assert len(results) == 4 and all(r is results[0] for r in results)
