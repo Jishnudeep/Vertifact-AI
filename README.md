@@ -33,8 +33,8 @@ flowchart TD
     B --> C{Semantic cache<br/>pgvector cosine ≥ 0.95}
     C -- hit --> R[Cached result]
     C -- miss --> O[Orchestrator agent<br/>ADK + LiteLLM]
-    O --> F[Fact-Check agent<br/>Google FC API → Tavily]
-    O --> X[Cross-Ref agent<br/>spaCy NER + Tavily + AllSides]
+    O --> F[Fact-Check agent<br/>Google FC API → Google Search Grounding]
+    O --> X[Cross-Ref agent<br/>spaCy NER + Google Search Grounding + AllSides]
     O --> L[Linguistic agent<br/>VADER + heuristics]
     F --> S[Scoring engine]
     X --> S
@@ -53,9 +53,9 @@ C_total = w1·S_fact + w2·(1 − B_ling) + w3·V_consensus
 
 | Signal | Meaning | Source |
 |--------|---------|--------|
-| **S_fact** | Fact-check match score | Google Fact Check Tools API (free) → Tavily, scoped to fact-check domains |
+| **S_fact** | Fact-check match score | Google Fact Check Tools API (free) → Google Search Grounding, scoped to fact-check domains |
 | **B_ling** | Linguistic volatility (clickbait, emotion, sensationalism, density) | VADER + heuristics |
-| **V_consensus** | Source corroboration across the bias spectrum | spaCy NER + Tavily + AllSides |
+| **V_consensus** | Source corroboration across the bias spectrum | spaCy NER + Google Search Grounding + AllSides |
 
 The scoring engine is **pure and deterministic** (`Σw = 1.0`, `w1 ≥ 0.4`, output clamped to `[0,1]`) with confidence-capping rules — e.g. no fact-check found **and** weak corroboration → score is capped and a low-confidence warning is shown.
 
@@ -86,7 +86,7 @@ documents/                                           # PRD, TDD, build order (so
 
 - Python 3.12+ and [`uv`](https://docs.astral.sh/uv/getting-started/installation/)
 - A Supabase project (Postgres + pgvector enabled)
-- API keys: [Groq](https://console.groq.com), [Tavily](https://tavily.com), [Google Fact Check Tools](https://developers.google.com/fact-check/tools/api) (all have free tiers)
+- API keys: [Groq](https://console.groq.com), [Google AI Studio (Gemini)](https://aistudio.google.com/), [Google Fact Check Tools](https://developers.google.com/fact-check/tools/api) (all have free tiers)
 
 ### Backend
 
@@ -125,7 +125,7 @@ Realigned on 2026-10-15 ([roadmap](docs/superpowers/specs/2026-10-15-realigned-r
   - an ADK `Workflow` orchestrator;
   - the API routes and hardening.
 
-  🚧 Plan 6 (Google Search grounding replaces Tavily) is in progress.
+  ✅ Plan 6 (Google Search grounding replaces Tavily) completed.
 - 🔜 **Frontend MVP (Plan 7):** text input end to end, responsive React dashboard, "Midnight Transit Diagram" design.
 - 🔜 **Evaluation:** curated set, DeepEval guardrails, ADK eval over pipeline traces, calibration.
 - 🔜 **Governance, observability & deployment:** tracing, structured logs, agent registry, deploy.

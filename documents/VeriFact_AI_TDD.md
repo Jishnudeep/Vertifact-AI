@@ -54,9 +54,9 @@
 │       │             │                │                           │
 │       ▼             ▼                ▼                           │
 │  ┌─────────┐  ┌────────────┐  ┌──────────────┐                  │
-│  │ Google  │  │ Tavily     │  │ VADER +      │                  │
-│  │ FC API  │  │ Search +   │  │ HuggingFace  │                  │
-│  │ + Tavily│  │ spaCy NER  │  │ Classifiers  │                  │
+│  │ Google  │  │ Google     │  │ VADER +      │                  │
+│  │ FC API  │  │ Search     │  │ HuggingFace  │                  │
+│  │ + Gemini│  │ Grounding  │  │ Classifiers  │                  │
 │  └─────────┘  └────────────┘  └──────────────┘                  │
 │                                                                  │
 │  ┌──────────────────────────────────────────────────────────┐   │
@@ -105,7 +105,9 @@ verifact-ai/
 │   │   │   └── weights.py           # Weight configuration and tuning
 │   │   ├── services/
 │   │   │   ├── factcheck_api.py     # Google Fact Check Tools API client
-│   │   │   ├── search_api.py        # Tavily search client
+│   │   │   ├── grounded_search.py   # Google Search grounding via Gemini API
+│   │   │   ├── page_fetch.py        # SSRF-safe page fetcher for cited sources
+│   │   │   ├── source_domains.py    # Source domain extraction & allowlists
 │   │   │   ├── embedding.py         # BGE-M3 embedding generation
 │   │   │   ├── cache.py             # Semantic cache (pgvector queries)
 │   │   │   ├── cache_policy.py      # Cache policy and TTL enforcement
@@ -394,13 +396,17 @@ class FactCheckResult:
 
 **Logic (two layers, fact-checking is the motive at every step):**
 1. **Layer 1 — Google Fact Check Tools API** (free; highest precision). Call `claims:search` with the claim text. If results returned: parse ClaimReview objects, map `textualRating` through RATING_MAP to a numeric score. This is the preferred signal whenever it hits.
-2. **Layer 2 — Tavily, scoped to fact-checking** (used only on a Layer-1 miss). Tavily is the model-agnostic search layer; we use it *with a fact-checking motive*, not as a general web search:
-   - Construct fact-check-oriented queries: `"[claim text] fact check"`, `"[claim text] debunked"`, `"is [claim text] true"`.
-   - Bias retrieval toward fact-check / reputable domains via Tavily's `include_domains` (e.g. snopes.com, politifact.com, factcheck.org, fullfact.org, apnews.com, reuters.com). Do not fall back to arbitrary blogs/SEO content.
-3. If Layer 2 returns fact-check articles: use the LLM to extract the verdict **only from the retrieved snippet/article text** — the LLM may not introduce facts outside the sources (faithfulness guardrail, see eval §3.5). Map the extracted verdict through RATING_MAP.
+2. **Layer 2 — Google Search Grounding via Gemini API** (used only on a Layer-1 miss). Run `run_grounded_agent` with Google Search grounding enabled (`gemini-2.5-flash`), targeted with a fact-checking prompt:
+   - Search query targets fact-checking and debunking sources.
+   - Restrict verdict extraction strictly to cited fact-checking sources (`CLAIMREVIEW_DOMAINS`).
+3. If Layer 2 returns fact-check articles: extract the verdict **only from the retrieved ClaimReview/fact-checking sources** — the model may not introduce facts outside the cited sources (faithfulness guardrail, see eval §3.5). Map the extracted verdict through RATING_MAP.
 4. If nothing is found in either layer: `s_fact = 0.5` (neutral/unknown). **Do not fabricate a verdict.** This neutral value triggers confidence capping downstream (scoring §7).
 
-> **Rationale:** The Fact Check API stays as Layer 1 because it is free and returns structured fact-checker verdicts (PolitiFact/Snopes/etc.) — far higher precision than interpreting search snippets. We deliberately do **not** use ADK's built-in `google_search` tool: it is Gemini-only (incompatible with our LiteLLM→Groq dev model), cannot run inside a worker sub-agent, and is limited to one built-in tool per agent — all three break the parallel multi-agent design. Tavily provides free, model-agnostic, fact-check-scoped search instead.
+> **Rationale (Plan 6: D1–D4):**
+> - **D1:** Google Fact Check Tools API stays as Layer 1 because it is free, fast, and returns structured fact-checker verdicts directly. Layer 2 uses Google Search Grounding via Gemini API (`gemini-2.5-flash`) which provides fresh Google Search index grounding with 5,000 free searches/month.
+> - **D2:** Pricing & quota: 5,000 free searches/month per project ($0 cost); then $14 per 1,000 queries.
+> - **D3:** Grounding ToS compliance: when Google Search Grounding returns `search_suggestions_html`, it is preserved and exposed through the API for display in a sandboxed iframe.
+> - **D4:** Direct source extraction: we consume cited sources and URLs rather than trusting raw generative text without citations.
 
 **Rating mapping table:**
 ```python
@@ -433,24 +439,24 @@ class CrossRefResult:
 
 **Logic:**
 1. Run spaCy NER on claim text → extract named entities
-2. Construct search queries: [claim text], [entity1 + key phrase], [entity2 + key phrase]
-3. Call Tavily with each query (parallel async calls)
+2. Grounded search via `run_grounded_agent` (Google Search Grounding via Gemini API)
+3. Fetch source page contents concurrently using `fetch_page_text` (SSRF-safe, 5s timeout, 100KB cap)
 4. Deduplicate results by domain
-5. For each source URL, look up domain in `bias_ratings` table
-6. Classify stance for every source with the local NLI cross-encoder
+5. For each source URL, look up domain in `bias_ratings` table (AllSides static data)
+6. Classify stance for every fetched source with the local NLI cross-encoder
    (`app/services/nli.py`, `cross-encoder/nli-deberta-v3-small`, loaded once at startup):
-   premise = title + snippet (≤1000 chars), hypothesis = claim. `supports` / `refutes` when
-   that probability ≥ 0.6 and exceeds the other; otherwise `neutral`. Claim-review domains
-   (`CLAIMREVIEW_DOMAINS`) get `stance: null`: their snippets restate the claim they debunk,
-   which NLI misreads as support, so they are shown without a chip and never counted.
+   premise = title + page text (≤1000 chars), hypothesis = claim. `supports` / `refutes` when
+   that probability ≥ 0.6 and exceeds the other; otherwise `neutral`. Unfetched sources have `stance: null`
+   and are not counted. Claim-review domains (`CLAIMREVIEW_DOMAINS`) get `stance: null`: their pages restate
+   the claim they debunk, which NLI misreads as support, so they are shown without a stance chip and never counted.
 7. Compute V_consensus / V_refute over reputable sources, excluding claim-review domains:
    - Reputable = AllSides-rated, or the institutional/primary allowlist (`.gov`, `.edu`, `who.int`).
-   - `v_consensus = min(Σ relevance of supporting sources / 5, 1.0)`
-   - `v_refute = min(Σ relevance of refuting sources / 5, 1.0)`
+   - `v_consensus = min(supporting reputable sources / 5, 1.0)`
+   - `v_refute = min(refuting reputable sources / 5, 1.0)`
 
 **Degradation (CLAUDE.md §4.3):** a search returning zero results means "no corroboration found"
-(`degraded=False`). A search that could **not run** — every Tavily query raising `EvidenceAPIError`
-(non-200/HTTP failure) — is an outage: the agent returns the neutral result with `degraded=True`, so
+(`degraded=False`). A search that could **not run** — grounded search raising `EvidenceAPIError`
+(API failure/network outage) — is an outage: the agent returns the neutral result with `degraded=True`, so
 Rule 1 caps the score and the response carries the "Partial analysis" warning. The same split applies
 to the Fact-Check agent across both of its evidence layers. If the NLI model fails, the agent returns the neutral
 result with `degraded=True`. It never falls back to counting coverage.
@@ -902,18 +908,13 @@ async def search_factchecks(query: str, api_key: str) -> list[dict]:
 
 **Response parsing:** Each claim object contains `claimReview` array with `textualRating` and `url`. Map `textualRating` through the RATING_MAP in section 4.2.
 
-### 8.2 Tavily Search
+### 8.2 Google Search Grounding
 
-`app/services/search_api.py::search_web` posts to `https://api.tavily.com/search` with `httpx.AsyncClient` (5 s timeout). Non-200, network error or budget exhaustion raise `EvidenceAPIError` (an outage), while `[]` means 'no results'. `search_depth` is `advanced` for the Fact-Check agent and `basic` for Cross-Ref.
+`app/services/grounded_search.py::run_grounded_agent` invokes the Gemini API with the Google Search grounding tool enabled (`gemini-2.5-flash`). Non-200, network error, or budget exhaustion raises `EvidenceAPIError` (an outage), while no grounding sources returned means 'no results'.
+
+Cited URLs are fetched concurrently via `app/services/page_fetch.py::fetch_page_text` (SSRF-safe with strict public IP validation, 5 s timeout, 100 KB text cap).
 
 ```python
-# Broad Tavily retrieval domains for fact checking & news evidence
-FACTCHECK_DOMAINS = [
-    "snopes.com", "politifact.com", "factcheck.org", "fullfact.org",
-    "leadstories.com", "checkyourfact.com", "healthfeedback.org",
-    "climatefeedback.org", "afp.com", "factcheck.afp.com",
-    "reuters.com", "apnews.com", "usatoday.com"
-]
 
 # Strict ClaimReview verdict-authority domains (Layer-2 verdict gating)
 CLAIMREVIEW_DOMAINS = {
@@ -968,6 +969,8 @@ When `confidence.evidence_status == "unverified"`, render 'Not enough evidence' 
 
 Vertical list of source cards, each showing: publisher name, article title (linked), AllSides bias label (colored chip: blue=Left, light blue=Lean Left, gray=Center, light red=Lean Right, red=Right), and type badge (Fact-Check or Corroborating). Below the source list, render 'Media bias ratings: AllSides.com (CC BY-NC 4.0)' as a link. This is required by the license.
 
+If `search_suggestions_html` is returned in the API response (required by Google Search Grounding ToS when present), render it below the source list inside `<iframe sandbox srcdoc={search_suggestions_html} />`.
+
 ---
 
 ## 10. Deployment Architecture
@@ -982,7 +985,7 @@ services:
     ports: ["8000:8000"]
     environment:
       - GROQ_API_KEY=${GROQ_API_KEY}
-      - TAVILY_API_KEY=${TAVILY_API_KEY}
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
       - GOOGLE_FACTCHECK_API_KEY=${GOOGLE_FACTCHECK_API_KEY}
       - SUPABASE_URL=${SUPABASE_URL}
       - SUPABASE_KEY=${SUPABASE_KEY}
@@ -1023,9 +1026,10 @@ queries the DB), or accept a resume delay before demos.
 
 - **Input sanitization:** strip `<script>`/HTML, tracking parameters (utm_*, fbclid, …) and JSON-answer syntax; limit input to 2000 characters. Only the sanitized text is persisted.
 - **Rate limiting:** 10 requests/minute per client IP (slowapi). The key is `app/api/client_ip.py`: behind `TRUSTED_PROXY_HOPS` proxies it takes the N-th `X-Forwarded-For` entry from the right; with 0 hops it uses the socket peer. Set `TRUSTED_PROXY_HOPS=1` on Render/Railway/Fly.
-- **Spend budgets:** per-UTC-day ceilings on Tavily credits (`TAVILY_DAILY_CREDIT_BUDGET`, default 30) and LLM calls (`LLM_DAILY_CALL_BUDGET`, default 900). When a budget is exhausted, the call raises an outage error, the agent degrades and the response carries "Partial analysis". It never returns a confident score. The counters are in-process (single instance). Two deliberate exceptions:
+- **Spend budgets:** per-UTC-day ceilings on Google search grounding calls (`SEARCH_DAILY_CALL_BUDGET`, default 1500; Plan 6 replaces Tavily) and LLM calls (`LLM_DAILY_CALL_BUDGET`, default 900). When a budget is exhausted, the call raises an outage error, the agent degrades and the response carries "Partial analysis". It never returns a confident score. The counters are in-process (single instance). Two deliberate exceptions:
   - The optional LLM sensationalism rating (`ENABLE_LLM_SENSATIONALISM`, off by default) falls back to the heuristic score instead of degrading the Linguistic agent. Known issue: that path still reports `sensationalism_source="llm"`.
-  - When Google Fact Check answers (even with no match) and only Tavily is refused, the Fact-Check agent reports "no fact-checks found" rather than degrading (R7.B4: degrade only when both layers are down). The Cross-Ref agent is refused by the same Tavily budget and degrades, so the response still carries "Partial analysis" and is not served from cache.
+  - When Google Fact Check answers (even with no match) and only search grounding is refused, the Fact-Check agent reports "no fact-checks found" rather than degrading (R7.B4: degrade only when both layers are down). The Cross-Ref agent is refused by the search budget and degrades, so the response still carries "Partial analysis" and is not served from cache.
+- **SSRF protection on cited page fetching (D4):** `app/services/page_fetch.py` applies the same strict IP and host validation as URL inputs before fetching any cited page discovered through search grounding.
 - **Prompt injection:** every LLM prompt fences untrusted text in XML tags, states an instruction hierarchy, strips JSON-answer syntax (`neutralize_for_prompt`), length-caps inputs, and enum-validates outputs. Adversarial claims in the eval set must never yield `verdict_found=true` or `high` confidence.
 - **SSRF (URL inputs, P2-02):** the scraper must call `resolve_public_url` (`app/utils/url_safety.py`, via `asyncio.to_thread` because DNS resolution blocks) on the initial URL and on every redirect hop (at most 3, `follow_redirects=False`). It must connect to one of the IPs it returns rather than re-resolving the host (DNS rebinding), cap the response at 2 MB and 5 s, and accept only `text/html`. Every resolved IP must be globally routable and not multicast; IPv4-mapped and NAT64 (`64:ff9b::/96`) addresses are checked as the IPv4 address they carry. IPv4-compatible (`::/96`), SIIT (`::ffff:0:0:0/96`), local-use NAT64, Teredo, 6to4 and site-local addresses are rejected outright.
 - **API keys:** never exposed to the frontend. All external calls happen server-side.
