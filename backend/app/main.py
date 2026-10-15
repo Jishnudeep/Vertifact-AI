@@ -53,7 +53,8 @@ async def lifespan(app: FastAPI):
     
     # 2. Preload spaCy NLP pipeline. Not wrapped: en_core_web_sm is a pinned dependency, so a
     # failure is a broken install, not a transient error. Booting anyway would degrade
-    # Cross-Ref and Linguistic on every request; fail at boot instead.
+    # Cross-Ref and Linguistic on every request; fail at boot instead. (The embedding and NLI
+    # preloads below only warn: they may download from the HF hub, which can fail transiently.)
     logger.info("Preloading spaCy 'en_core_web_sm'...")
     get_spacy_nlp()
         

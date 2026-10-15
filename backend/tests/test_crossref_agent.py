@@ -482,3 +482,14 @@ async def test_spacy_load_and_parse_run_off_the_event_loop():
     assert calls == [("load", False), ("parse", False)]
     assert result.degraded is False
     assert "NASA" in result.entities_extracted
+
+
+@pytest.mark.anyio
+async def test_spacy_failure_in_worker_thread_degrades():
+    """An error raised in the worker thread still reaches run() and degrades, as it did on the loop."""
+    with patch("app.agents.crossref_agent.get_spacy_nlp", side_effect=RuntimeError("no model")):
+        result, gs, _ = await _run_with("NASA announces Mars landing", _search([_src("reuters.com")]))
+
+    assert result.degraded is True
+    assert result.v_consensus_score == 0.0
+    gs.assert_not_awaited()
