@@ -174,9 +174,9 @@ async def _analyze(claim: str) -> CrossRefResult:
         return make_neutral_crossref(degraded=False)
 
     # 1. spaCy NER extraction. It feeds `entities_extracted` only; since Plan 6 the search
-    # agent builds its own queries.
-    nlp = get_spacy_nlp()
-    doc = await asyncio.to_thread(nlp, claim)
+    # agent builds its own queries. Load and parse both run in a worker thread: a cold
+    # `spacy.load` takes seconds and, on the loop, would stall every request and `wait_for`.
+    doc = await asyncio.to_thread(lambda: get_spacy_nlp()(claim))
     
     # We want entities of types: PERSON (people), ORG (organizations), GPE (locations), NORP (nationalities/religious/political groups)
     # also FAC (facilities), LOC (geographic features), PRODUCT, EVENT

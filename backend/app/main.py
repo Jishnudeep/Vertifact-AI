@@ -51,12 +51,11 @@ async def lifespan(app: FastAPI):
     logger.info("Loading AllSides bias ratings...")
     load_bias_ratings()
     
-    # 2. Preload spaCy NLP pipeline
+    # 2. Preload spaCy NLP pipeline. Not wrapped: en_core_web_sm is a pinned dependency, so a
+    # failure is a broken install, not a transient error. Booting anyway would degrade
+    # Cross-Ref and Linguistic on every request; fail at boot instead.
     logger.info("Preloading spaCy 'en_core_web_sm'...")
-    try:
-        get_spacy_nlp()
-    except Exception as exc:
-        logger.warning(f"spaCy preload warning: {exc}")
+    get_spacy_nlp()
         
     # 3. Preload SentenceTransformer embedding model
     logger.info("Preloading embedding model...")

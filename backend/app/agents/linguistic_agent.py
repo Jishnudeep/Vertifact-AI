@@ -3,6 +3,7 @@ import logging
 import os
 import json
 import re
+import threading
 from dataclasses import dataclass, field
 from typing import Optional, List, Dict, Any
 
@@ -25,18 +26,23 @@ if settings.groq_api_key:
 # The model must be installed as a dependency (`uv add en-core-web-sm`); never
 # download it at request time — a synchronous download here would block the event
 # loop and defeat the per-agent timeout.
+# Agents call this from worker threads, so two cold requests can race; the lock keeps it to
+# one load.
 nlp = None
+_nlp_lock = threading.Lock()
 def get_spacy_nlp():
     global nlp
     if nlp is None:
-        try:
-            nlp = spacy.load("en_core_web_sm")
-        except OSError as exc:
-            raise RuntimeError(
-                "spaCy model 'en_core_web_sm' is not installed. "
-                "Run `uv add en-core-web-sm` (or `uv run python -m spacy download en_core_web_sm`) "
-                "before starting the app."
-            ) from exc
+        with _nlp_lock:
+            if nlp is None:
+                try:
+                    nlp = spacy.load("en_core_web_sm")
+                except OSError as exc:
+                    raise RuntimeError(
+                        "spaCy model 'en_core_web_sm' is not installed. "
+                        "Run `uv add en-core-web-sm` (or `uv run python -m spacy download en_core_web_sm`) "
+                        "before starting the app."
+                    ) from exc
     return nlp
 
 # Initialize VADER
