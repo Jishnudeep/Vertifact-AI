@@ -128,6 +128,7 @@ async def rate_limited_handler(request: Request, exc: RateLimitExceeded):
     return JSONResponse(
         status_code=429,
         content={"error": "Rate Limited", "code": "rate_limited", "detail": str(exc.detail)},
+        headers={"Retry-After": "60"},
     )
 
 @app.exception_handler(InvalidInputError)

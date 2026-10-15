@@ -362,38 +362,8 @@ async def run_verification_workflow(request: VerifyRequest) -> PipelineOutcome:
 
 
 def _format_cached_response(cached: Dict[str, Any], cleaned_text: str) -> Dict[str, Any]:
-    agent_outputs = cached.get("agent_outputs") or {}
-    search_suggestions_html = (
-        cached.get("search_suggestions_html")
-        or agent_outputs.get("search_suggestions_html")
-    )
-    return {
-        "id": str(cached.get("claim_id") or cached.get("id")),
-        "claim": cached.get("extracted_claim") or cleaned_text,
-        "trust_score": {
-            "c_total": cached.get("c_total"),
-            "s_fact": cached.get("s_fact"),
-            "b_ling": cached.get("b_ling"),
-            "v_consensus": cached.get("v_consensus"),
-            "v_refute": cached.get("v_refute") or 0.0,
-            "weights": cached.get("weights") or {"w1": 0.50, "w2": 0.20, "w3": 0.30}
-        },
-        "confidence": {
-            "level": cached.get("confidence_level"),
-            "warnings": cached.get("warnings") or [],
-            "verdict_found": cached.get("confidence_level") == "high",
-            "evidence_status": cached.get("evidence_status"),
-        },
-        "linguistic_profile": cached.get("linguistic_profile") or {
-            "clickbait_syntax": 0.0,
-            "emotional_framing": 0.0,
-            "sensationalism": 0.0,
-            "informational_density": 0.5
-        },
-        "sources": cached.get("source_citations") or [],
-        "cached": True,
-        "search_suggestions_html": search_suggestions_html,
-    }
+    from app.api.result_format import format_stored_result
+    return format_stored_result(cached, cleaned_text, cached=True)
 
 
 def _consolidate_sources(

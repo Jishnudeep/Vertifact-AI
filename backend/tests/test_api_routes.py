@@ -180,3 +180,127 @@ def test_schema_accepts_null_suggestions():
     assert resp_html.search_suggestions_html == "<div>Suggestions</div>"
 
 
+def test_get_result_not_marked_cached():
+    valid_uuid = "22222222-2222-2222-2222-222222222222"
+    mock_row = {
+        "id": valid_uuid,
+        "claim_id": valid_uuid,
+        "c_total": 0.88,
+        "s_fact": 0.9,
+        "b_ling": 0.1,
+        "v_consensus": 0.8,
+        "weights": {"w1": 0.5, "w2": 0.2, "w3": 0.3},
+        "confidence_level": "high",
+        "evidence_status": "fact_checked",
+        "warnings": [],
+        "source_citations": [],
+        "linguistic_profile": None,
+        "processing_time_ms": 1200,
+        "created_at": "2026-10-15T12:00:00Z",
+        "claims": {"extracted_claim": "Historical claim"}
+    }
+    mock_supabase = MagicMock()
+    mock_supabase.table.return_value.select.return_value.eq.return_value.execute.return_value = MagicMock(data=[mock_row])
+
+    with patch("app.api.routes.get_supabase", return_value=mock_supabase):
+        response = client.get(f"/api/results/{valid_uuid}")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["cached"] is False
+        assert data["created_at"] == "2026-10-15T12:00:00Z"
+
+
+def test_get_result_has_agents_and_suggestions():
+    valid_uuid = "33333333-3333-3333-3333-333333333333"
+    mock_row = {
+        "id": valid_uuid,
+        "c_total": 0.85,
+        "s_fact": 0.9,
+        "b_ling": 0.1,
+        "v_consensus": 0.8,
+        "weights": {"w1": 0.5, "w2": 0.2, "w3": 0.3},
+        "confidence_level": "high",
+        "evidence_status": "fact_checked",
+        "warnings": [],
+        "source_citations": [],
+        "search_suggestions_html": "<div>Suggestions</div>",
+        "agent_outputs": {
+            "factcheck": {"degraded": False, "duration_ms": 150},
+            "crossref": {"degraded": True, "duration_ms": 300, "error_details": {"code": "TIMEOUT"}},
+            "linguistic": {"degraded": False, "duration_ms": 50},
+            "scoring": {"raw_c_total": 0.92, "cap_rule": None},
+        },
+        "created_at": "2026-10-15T12:00:00Z",
+        "claims": {"extracted_claim": "Agent test claim"}
+    }
+    mock_supabase = MagicMock()
+    mock_supabase.table.return_value.select.return_value.eq.return_value.execute.return_value = MagicMock(data=[mock_row])
+
+    with patch("app.api.routes.get_supabase", return_value=mock_supabase):
+        response = client.get(f"/api/results/{valid_uuid}")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["search_suggestions_html"] == "<div>Suggestions</div>"
+        assert len(data["agents"]) == 3
+        fc_agent = next(a for a in data["agents"] if a["name"] == "factcheck")
+        assert fc_agent["status"] == "ok"
+        assert fc_agent["duration_ms"] == 150
+        cr_agent = next(a for a in data["agents"] if a["name"] == "crossref")
+        assert cr_agent["status"] == "degraded"
+        assert cr_agent["error_code"] == "TIMEOUT"
+        assert cr_agent["duration_ms"] == 300
+        assert data["trust_score"]["raw_c_total"] == 0.92
+        assert data["trust_score"]["cap_rule"] is None
+
+
+def test_stored_legacy_row_formats():
+    valid_uuid = "44444444-4444-4444-4444-444444444444"
+    legacy_row = {
+        "id": valid_uuid,
+        "c_total": 0.70,
+        "s_fact": 0.5,
+        "b_ling": 0.2,
+        "v_consensus": 0.6,
+        "weights": {"w1": 0.5, "w2": 0.2, "w3": 0.3},
+        "confidence_level": "medium",
+        "evidence_status": None,
+        "agent_outputs": None,
+        "warnings": [],
+        "source_citations": [],
+        "created_at": "2026-09-01T12:00:00Z",
+        "claims": {"extracted_claim": "Legacy claim"}
+    }
+    mock_supabase = MagicMock()
+    mock_supabase.table.return_value.select.return_value.eq.return_value.execute.return_value = MagicMock(data=[legacy_row])
+
+    with patch("app.api.routes.get_supabase", return_value=mock_supabase):
+        response = client.get(f"/api/results/{valid_uuid}")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["agents"] == []
+        assert data["trust_score"]["cap_rule"] is None
+        assert data["confidence"]["evidence_status"] == "unverified"
+        assert any("Legacy result" in w for w in data["confidence"]["warnings"])
+
+
+def test_rate_limit_sets_retry_after():
+    from app.api.routes import limiter
+    limiter.reset()
+    mock_result = {
+        "id": "result-1", "claim": "claim",
+        "trust_score": {"c_total": 0.8, "s_fact": 1.0, "b_ling": 0.1, "v_consensus": 0.8, "weights": {"w1": 0.5, "w2": 0.2, "w3": 0.3}},
+        "confidence": {"level": "high", "warnings": []},
+        "linguistic_profile": {"clickbait_syntax": 0.0, "emotional_framing": 0.0, "sensationalism": 0.0, "informational_density": 0.9},
+        "sources": [], "processing_time_ms": 100, "cached": False, "agents": []
+    }
+    with patch("app.api.routes.verify_claim", return_value=mock_result):
+        for _ in range(10):
+            res = client.post("/api/verify", json={"input": "test claim"})
+            assert res.status_code == 200
+        res_limit = client.post("/api/verify", json={"input": "test claim"})
+        assert res_limit.status_code == 429
+        assert res_limit.headers.get("Retry-After") == "60"
+    limiter.reset()
+
+
+

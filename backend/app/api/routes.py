@@ -6,6 +6,7 @@ from slowapi import Limiter
 from app.api.client_ip import client_ip
 
 from app.api.schemas import VerifyRequest, VerifyResponse, ErrorResponse
+from app.api.result_format import format_stored_result
 from app.agents.orchestrator import verify_claim
 from app.db.connection import get_supabase
 
@@ -76,36 +77,7 @@ async def get_result_endpoint(request: Request, result_id: str):
         claims_data = row.get("claims") or {}
         claim_text = claims_data.get("extracted_claim") or "Historical Claim"
         
-        return {
-            "id": row.get("id"),
-            "claim": claim_text,
-            "trust_score": {
-                "c_total": row.get("c_total"),
-                "s_fact": row.get("s_fact"),
-                "b_ling": row.get("b_ling"),
-                "v_consensus": row.get("v_consensus"),
-                "v_refute": row.get("v_refute") or 0.0,
-                "weights": row.get("weights") or {"w1": 0.5, "w2": 0.2, "w3": 0.3}
-            },
-            "confidence": {
-                "level": row.get("confidence_level"),
-                "warnings": (row.get("warnings") or []) + (
-                    [] if row.get("evidence_status")
-                    else ["Legacy result: scored before stance-aware consensus; treat corroboration as unverified"]
-                ),
-                "verdict_found": row.get("confidence_level") == "high",
-                "evidence_status": row.get("evidence_status") or "unverified",
-            },
-            "linguistic_profile": row.get("linguistic_profile") or {
-                "clickbait_syntax": 0.0,
-                "emotional_framing": 0.0,
-                "sensationalism": 0.0,
-                "informational_density": 0.5
-            },
-            "sources": row.get("source_citations") or [],
-            "processing_time_ms": row.get("processing_time_ms") or 0,
-            "cached": True
-        }
+        return format_stored_result(row, claim_text, cached=False)
     except HTTPException:
         raise
     except Exception as exc:
