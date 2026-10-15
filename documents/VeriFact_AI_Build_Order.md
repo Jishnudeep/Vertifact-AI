@@ -225,49 +225,56 @@ Run a quick sanity check before moving on:
 
 **Gate:** Upload a screenshot, get a verification result back.
 
-### Step 2.4 — Frontend: Project Setup + Input Component
-**Depends on:** API routes working
+### Step 2.4 — Frontend: Project Setup + Input Component (Plan 7)
+**Implemented in:** Plan 7 (`docs/superpowers/plans/2026-10-15-frontend-mvp.md`)
+**Spec:** `docs/superpowers/specs/2026-10-15-frontend-mvp-design.md`
+**Depends on:** API routes working (Phase 1)
 
-1. `npm create vite@latest frontend -- --template react`
-2. Install Tailwind CSS, Recharts
-3. Build `InputBox.jsx`:
-   - Text input (default), URL input (auto-detected), Image upload (drag-drop or file picker)
-   - Tab or auto-detect based on content (starts with http? → URL mode)
-   - Submit button → calls backend API
-4. Mobile-first responsive layout (375px viewport)
+1. Vite React scaffold (`frontend/`) with Tailwind CSS tokens and Vitest.
+2. Design system: "Midnight Transit Diagram" (`#0F1B3D` ground, `#16244D` surface, `#F4F1EA` porcelain text, tabular numbers).
+3. Build `ClaimInput.jsx`:
+   - Text input with character counter (`n/2000`) and 2000-char client-side limit.
+   - Example claims component (`ExampleClaims.jsx`) for 1-click loading.
+   - Recent checks feed (`RecentList.jsx`) powered by `GET /api/results/recent`.
+4. Mobile-first responsive layout (375px baseline up to 1440px desktop).
 
-**Gate:** Input component renders, accepts text/URL/image, sends correct API request.
+**Gate:** Input renders, accepts text, enforces length limits, and displays validation errors properly.
 
-### Step 2.5 — Frontend: Trust Gauge Component
+### Step 2.5 — Frontend: Transit Diagram Component (Plan 7)
+**Implemented in:** Plan 7 (`docs/superpowers/plans/2026-10-15-frontend-mvp.md`)
 **Depends on:** Step 2.4
 
-1. Build `TrustGauge.jsx` — SVG semicircular gauge
-2. Implement color interpolation (red → amber → green based on score)
-3. Animated needle with CSS transition
-4. Large centered score number
-5. Confidence badge below gauge (High/Medium/Low/Insufficient)
+1. Build `TransitDiagram.jsx` — SVG verdict interchange diagram replacing the legacy semicircular gauge:
+   - Line-factcheck lilac (`#B9A2F2`), line-crossref teal (`#2BB3A3`), line-linguistic porcelain (`#F4F1EA`).
+   - Interchange station showing verdict word and score badge with identical color thresholds (0-33 red, 34-66 amber, 67-100 emerald).
+   - Dynamic track animations for checking and resolved states.
+   - Full accessibility pass with hidden screen-reader summary `<p className="sr-only">`.
 
-**Gate:** Gauge renders correctly for scores at 0, 25, 50, 75, 100. Animation smooth on mobile.
+**Gate:** Diagram renders correctly for all score ranges (0, 25, 50, 75, 100), handles unverified/disputed states, and passes axe keyboard/screen-reader tests.
 
-### Step 2.6 — Frontend: Linguistic Radar + Source Coverage
+### Step 2.6 — Frontend: Linguistic Radar + Source Coverage (Plan 7)
+**Implemented in:** Plan 7 (`docs/superpowers/plans/2026-10-15-frontend-mvp.md`)
 **Depends on:** Step 2.4
 
-1. Build `LinguisticRadar.jsx` — Recharts `<RadarChart>` with 4 axes
-2. Build `SourceCoverage.jsx` — source card list with bias label chips
-3. Build `ConfidenceBadge.jsx`
+1. Build `LinguisticRadar.jsx` — Recharts `<RadarChart>` with 4 axes, values scaled $\times 100$, degraded fallback state.
+2. Build `SourceList.jsx` and `SourceRow.jsx` — source cards grouped by `found_by` (`factcheck` vs `crossref`) with `BiasChip.jsx` (AllSides static labels) and `StanceChip.jsx`.
+3. Display required AllSides attribution link ("Media bias ratings: AllSides.com").
+4. Display Google Search Suggestions iframe when `search_suggestions_html` is provided.
 
-**Gate:** All visualization components render correctly with sample data.
+**Gate:** All visualization components render correctly with mock fixtures and degrade gracefully when agent outputs are absent.
 
-### Step 2.7 — Frontend: Results Page Assembly
+### Step 2.7 — Frontend: Results Page Assembly (Plan 7)
+**Implemented in:** Plan 7 (`docs/superpowers/plans/2026-10-15-frontend-mvp.md`)
 **Depends on:** Steps 2.5-2.6
 
-1. Build results page layout: Trust Gauge (hero), Linguistic Radar (below), Source Coverage (scrollable list)
-2. Connect to API via `useVerify` hook (fetch on submit, loading state, error state)
-3. Loading state: show agent pipeline status (basic version — just agent names with spinner/checkmark)
-4. Error state: display user-friendly error messages
-5. Mobile responsive pass (test at 375px, 428px, 768px, 1024px)
+1. Assemble `ResultView.jsx` and `ResultPage.jsx` (`/r/:id` permalink route):
+   - Two-column layout on $\ge 1024$px (diagram & breakdown on left, sources & radar on right).
+   - Formula breakdown with weights (`ScoreBreakdown.jsx`), verdict line (`VerdictLine.jsx`), footer with metadata & share button (`ResultFooter.jsx`).
+2. Connect to API via `useVerify` and `useResult` hooks.
+3. Handle checking state, rate limits (`Retry-After`), non-verifiable claims, and agent failure errors.
+4. Mobile responsive pass verified across 375px, 428px, 768px, 1024px, 1280px, and 1440px.
 
-**Gate:** Full user flow works: enter claim → see loading → see results. Works on mobile viewport.
+**Gate:** Full user flow works: submit claim → checking diagram → verdict & sources. Zero console errors, passes Lighthouse Performance $\ge 85$ and Accessibility $\ge 95$.
 
 ### Step 2.8 — WebSocket Agent Status (stretch)
 **Depends on:** Step 2.7
@@ -369,7 +376,7 @@ This phase is what separates a demo from a credible ML project. Do not skip it.
 
 1. Plot calibration curve: among claims scored 0.7-0.8, what % are actually true?
 2. If miscalibrated (e.g., 0.8 scores are only 60% accurate): adjust confidence capping rules
-3. Adjust display thresholds for the Trust Gauge color bands based on calibration data
+3. Adjust display thresholds for the Transit Diagram color bands based on calibration data
 
 **Gate:** Calibration curve is monotonically increasing (higher scores = higher accuracy).
 
@@ -377,7 +384,7 @@ This phase is what separates a demo from a credible ML project. Do not skip it.
 **Depends on:** Everything above
 
 1. **README.md** — project overview, architecture diagram (Mermaid), tech stack, setup instructions, eval results summary
-2. **Screenshots** — Trust Gauge, Linguistic Radar, full results page on mobile
+2. **Screenshots** — Transit Diagram, Linguistic Radar, full results page on mobile
 3. **Eval results** — include MAE, accuracy, calibration plot as images in README
 4. **CI workflow** — GitHub Action that runs eval suite on PR (`.github/workflows/eval.yml`)
 5. **Demo** — Deploy to Railway/Render + Vercel. Include live demo link in README
@@ -407,7 +414,7 @@ Phase 2: Multi-Modal + Frontend                            │
   2.1 OCR Agent ──► 2.3 Image API ─┐                      │
   2.2 URL Scraper ─────────────────┤                      │
   2.4 Frontend Setup ──────────────┼──► 2.7 Results Page ──► 2.8 WebSocket
-  2.5 Trust Gauge ─────────────────┤
+  2.5 Transit Diagram ─────────────┤
   2.6 Radar + Sources ─────────────┘
 
 Phase 3: Evaluation & Polish
