@@ -1,0 +1,55 @@
+{
+  "id": "33333333-3333-3333-3333-333333333333",
+  "claim": "Consuming lemon water cures diabetes within 48 hours.",
+  "trust_score": {
+    "c_total": 0.33,
+    "s_fact": 0.20,
+    "b_ling": 0.35,
+    "v_consensus": 0.15,
+    "weights": { "w1": 0.5, "w2": 0.2, "w3": 0.3 },
+    "raw_c_total": 0.52,
+    "cap_rule": "disputed"
+  },
+  "evidence_status": "disputed",
+  "confidence": {
+    "level": "high",
+    "reason": "Scientific consensus strongly refutes this claim."
+  },
+  "linguistic_profile": {
+    "sensationalism": 0.85,
+    "emotional_tone": 0.60,
+    "clickbait_syntax": 0.70,
+    "informational_density": 0.25
+  },
+  "sources": [
+    {
+      "url": "https://www.factcheck.org/2023/lemon-water-diabetes-claim/",
+      "title": "Lemon water does not cure diabetes, medical experts say",
+      "publisher": "FactCheck.org",
+      "bias_label": "Center",
+      "type": "corroborating",
+      "stance": "refutes",
+      "rating": "False",
+      "found_by": "factcheck"
+    },
+    {
+      "url": "https://www.mayoclinic.org/diseases-conditions/diabetes/expert-answers/lemon-cure",
+      "title": "Diabetes Treatment Myths: Lemon Water",
+      "publisher": "Mayo Clinic",
+      "bias_label": "Center",
+      "type": "corroborating",
+      "stance": "refutes",
+      "rating": null,
+      "found_by": "crossref"
+    }
+  ],
+  "processing_time_ms": 1150,
+  "cached": false,
+  "search_suggestions_html": null,
+  "agents": [
+    { "name": "factcheck", "status": "ok", "duration_ms": 650, "error_code": null },
+    { "name": "crossref", "status": "ok", "duration_ms": 890, "error_code": null },
+    { "name": "linguistic", "status": "ok", "duration_ms": 80, "error_code": null }
+  ],
+  "created_at": "2026-10-15T12:10:00Z"
+}

@@ -1,0 +1,45 @@
+{
+  "id": "55555555-5555-5555-5555-555555555555",
+  "claim": "A new solar flare disrupted transatlantic flights yesterday.",
+  "trust_score": {
+    "c_total": 0.40,
+    "s_fact": 0.50,
+    "b_ling": 0.50,
+    "v_consensus": 0.20,
+    "weights": { "w1": 0.5, "w2": 0.2, "w3": 0.3 },
+    "raw_c_total": 0.45,
+    "cap_rule": "partial"
+  },
+  "evidence_status": "corroborated",
+  "confidence": {
+    "level": "low",
+    "reason": "Linguistic analysis timed out; confidence capped."
+  },
+  "linguistic_profile": {
+    "sensationalism": 0.50,
+    "emotional_tone": 0.50,
+    "clickbait_syntax": 0.50,
+    "informational_density": 0.50
+  },
+  "sources": [
+    {
+      "url": "https://www.reuters.com/business/aerospace-defense/solar-storm-flight-delays",
+      "title": "Airlines report minor reroutes during solar storm",
+      "publisher": "Reuters",
+      "bias_label": "Center",
+      "type": "corroborating",
+      "stance": "supports",
+      "rating": null,
+      "found_by": "crossref"
+    }
+  ],
+  "processing_time_ms": 8200,
+  "cached": false,
+  "search_suggestions_html": null,
+  "agents": [
+    { "name": "factcheck", "status": "ok", "duration_ms": 950, "error_code": null },
+    { "name": "crossref", "status": "ok", "duration_ms": 1200, "error_code": null },
+    { "name": "linguistic", "status": "degraded", "duration_ms": 8000, "error_code": "TIMEOUT" }
+  ],
+  "created_at": "2026-10-15T12:20:00Z"
+}

@@ -1,0 +1,37 @@
+{
+  "id": "77777777-7777-7777-7777-777777777777",
+  "claim": "Historical claim verified prior to Plan 7 architecture upgrades.",
+  "trust_score": {
+    "c_total": 0.70,
+    "s_fact": 0.80,
+    "b_ling": 0.15,
+    "v_consensus": 0.65,
+    "weights": { "w1": 0.5, "w2": 0.2, "w3": 0.3 }
+  },
+  "evidence_status": "corroborated",
+  "confidence": {
+    "level": "medium",
+    "reason": "Corroborated by legacy cross-referencing."
+  },
+  "linguistic_profile": {
+    "sensationalism": 0.10,
+    "emotional_tone": 0.15,
+    "clickbait_syntax": 0.05,
+    "informational_density": 0.75
+  },
+  "sources": [
+    {
+      "url": "https://www.example.com/legacy-news",
+      "title": "Legacy Report on Space Exploration",
+      "publisher": "Example News",
+      "bias_label": "Center",
+      "type": "corroborating",
+      "stance": "supports",
+      "rating": null
+    }
+  ],
+  "processing_time_ms": 1300,
+  "cached": false,
+  "search_suggestions_html": null,
+  "agents": []
+}
