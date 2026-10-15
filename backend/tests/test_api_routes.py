@@ -156,3 +156,27 @@ def test_get_result_legacy_row_is_labelled():
     assert body["trust_score"]["v_refute"] == 0.0
     assert any("Legacy result" in w for w in body["confidence"]["warnings"])
 
+
+def test_schema_accepts_null_suggestions():
+    from app.api.schemas import VerifyResponse, TrustScoreModel, ConfidenceModel, LinguisticProfileModel
+    base_data = {
+        "claim": "Claim text",
+        "trust_score": TrustScoreModel(
+            c_total=0.8, s_fact=0.8, b_ling=0.2, v_consensus=0.8, v_refute=0.0,
+            weights={"w1": 0.5, "w2": 0.2, "w3": 0.3}
+        ),
+        "confidence": ConfidenceModel(level="high", warnings=[]),
+        "linguistic_profile": LinguisticProfileModel(
+            clickbait_syntax=0.0, emotional_framing=0.0, sensationalism=0.0, informational_density=0.8
+        ),
+        "sources": [],
+        "processing_time_ms": 100,
+        "cached": False,
+    }
+    resp_none = VerifyResponse(**base_data, search_suggestions_html=None)
+    assert resp_none.search_suggestions_html is None
+
+    resp_html = VerifyResponse(**base_data, search_suggestions_html="<div>Suggestions</div>")
+    assert resp_html.search_suggestions_html == "<div>Suggestions</div>"
+
+

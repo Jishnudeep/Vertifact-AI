@@ -125,6 +125,7 @@ class PipelineOutcome:
     warnings: List[str] = field(default_factory=list)
     sources: List[Dict[str, Any]] = field(default_factory=list)
     linguistic_profile: Dict[str, float] = field(default_factory=dict)
+    search_suggestions_html: Optional[str] = None
 
 
 @node(name="cache_lookup")
@@ -254,6 +255,11 @@ def score_node(node_input: Dict[str, Any]) -> PipelineOutcome:
             elif res.error:
                 enriched_warnings.append(f"{agent_label} agent degraded: {res.error}")
 
+    search_suggestions_html = (
+        getattr(fc_res, "search_suggestions_html", None)
+        or getattr(cr_res, "search_suggestions_html", None)
+    )
+
     return PipelineOutcome(
         cached=False,
         fc_res=fc_res,
@@ -268,6 +274,7 @@ def score_node(node_input: Dict[str, Any]) -> PipelineOutcome:
             "sensationalism": ling_res.sensationalism,
             "informational_density": ling_res.informational_density,
         },
+        search_suggestions_html=search_suggestions_html,
     )
 
 
@@ -320,6 +327,11 @@ async def run_verification_workflow(request: VerifyRequest) -> PipelineOutcome:
 
 
 def _format_cached_response(cached: Dict[str, Any], cleaned_text: str) -> Dict[str, Any]:
+    agent_outputs = cached.get("agent_outputs") or {}
+    search_suggestions_html = (
+        cached.get("search_suggestions_html")
+        or agent_outputs.get("search_suggestions_html")
+    )
     return {
         "id": str(cached.get("claim_id") or cached.get("id")),
         "claim": cached.get("extracted_claim") or cleaned_text,
@@ -344,7 +356,8 @@ def _format_cached_response(cached: Dict[str, Any], cleaned_text: str) -> Dict[s
             "informational_density": 0.5
         },
         "sources": cached.get("source_citations") or [],
-        "cached": True
+        "cached": True,
+        "search_suggestions_html": search_suggestions_html,
     }
 
 
@@ -484,7 +497,8 @@ async def verify_claim(raw_input: str, input_type: str = "text", bypass_cache: b
                         "degraded": ling_res.degraded,
                         "error": ling_res.error,
                         "error_details": ling_res.error_details.to_dict() if getattr(ling_res, "error_details", None) else None,
-                    }
+                    },
+                    "search_suggestions_html": outcome.search_suggestions_html,
                 },
                 source_citations=sources,
                 linguistic_profile=linguistic_profile,
@@ -528,5 +542,6 @@ async def verify_claim(raw_input: str, input_type: str = "text", bypass_cache: b
         "linguistic_profile": linguistic_profile,
         "sources": sources,
         "processing_time_ms": elapsed_ms,
-        "cached": False
+        "cached": False,
+        "search_suggestions_html": outcome.search_suggestions_html,
     }
