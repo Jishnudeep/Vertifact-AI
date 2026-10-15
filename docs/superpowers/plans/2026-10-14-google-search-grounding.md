@@ -63,7 +63,7 @@ This is the only task that spends API quota: about 6 Gemini calls on the free ti
 > - it includes a duplicate domain (`www.snopes.com`), more than 5 distinct domains, and a claim-review domain in coverage results.
 >
 > Three facts are still **unverified until the Task 9 live check**:
-> - (a) the model id `gemini-2.5-flash-lite` (it is the `search_model_id` default and can be overridden by env);
+> - (a) the model id `gemini-3.1-flash-lite` (it is the `search_model_id` default and can be overridden by env);
 > - (b) the real `web.domain` population;
 > - (c) latency.
 >

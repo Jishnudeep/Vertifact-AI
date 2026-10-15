@@ -111,7 +111,7 @@ def classify_provider_error(exc: Exception, provider: str = "unknown") -> AgentE
         return AgentErrorDetails(
             code=ProviderErrorCode.QUOTA_EXHAUSTED,
             provider=prov,
-            message="Daily call budget exhausted"
+            message=str(exc) or "Daily call budget exhausted"
         )
 
     # Check for unconfigured service errors

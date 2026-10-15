@@ -74,11 +74,3 @@ async def test_exhausted_llm_budget_raises_before_calling_the_model(monkeypatch)
         with pytest.raises(LLMBudgetExceeded):
             await adk_helpers.run_adk_agent("n", "i", "p", "app")
     runner.return_value.run_async.assert_not_called()
-
-
-@pytest.mark.anyio
-async def test_crossref_uses_basic_depth():
-    from app.agents.crossref_agent import run
-    with patch("app.agents.crossref_agent.search_web", new=AsyncMock(return_value=[])) as sw:
-        await run("NASA announces Mars landing")
-    assert all(c.kwargs.get("search_depth") == "basic" for c in sw.call_args_list)

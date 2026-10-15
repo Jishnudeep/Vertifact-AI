@@ -48,7 +48,7 @@ class Settings(BaseSettings):
     # tool only runs on Gemini models). UNVERIFIED: the Task 0 live probe was declined, so this
     # id has not been confirmed against the project key — it is checked in the Task 9 live gate.
     # Override with SEARCH_MODEL_ID.
-    search_model_id: str = "gemini-2.5-flash-lite"
+    search_model_id: str = "gemini-3.1-flash-lite"
 
     # Model name for generating embeddings
     embedding_model_name: str = "all-MiniLM-L6-v2"

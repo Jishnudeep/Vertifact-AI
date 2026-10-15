@@ -146,7 +146,7 @@ async def test_evidence_api_outage_surfaces_partial_analysis_warning():
          patch("app.agents.orchestrator.lookup_cache", return_value=None), \
          patch("app.agents.factcheck_agent.search_factchecks", side_effect=EvidenceAPIError("Google Fact Check returned HTTP 503")), \
          patch("app.agents.factcheck_agent.search_web", side_effect=outage), \
-         patch("app.agents.crossref_agent.search_web", side_effect=outage), \
+         patch("app.agents.crossref_agent.grounded_search", side_effect=outage), \
          patch("app.agents.orchestrator.insert_cache", return_value=None):
 
         result = await verify_claim("NASA launched a rocket to Mars yesterday", bypass_cache=True)

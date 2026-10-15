@@ -356,7 +356,9 @@ def _consolidate_sources(
     # Add fact-check sources
     for m in fc_res.all_matches:
         url_val = m.get("url") or ""
-        domain = extract_domain(url_val)
+        # Plan 6: a Layer-2 match carries its grounding/fetched domain. Its url may be a Google
+        # grounding redirect, whose own domain (google.com) must never pick the bias label.
+        domain = m.get("domain") or extract_domain(url_val)
         bias = get_bias_label(domain)
         src_type = "corroborating" if m.get("rating") == "Web Search Result" else "fact_check"
         sources.append({

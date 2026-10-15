@@ -28,10 +28,7 @@ def _fresh_budgets():
     yield
 
 
-async def _live_grounded_search_blocked(*_args, **_kwargs):
-    # pytest.fail raises a BaseException, so the agents' `except Exception` outage handling
-    # cannot turn a forgotten patch into a quietly degraded result.
-    pytest.fail("live Gemini search called in a unit test; patch grounded_search or mark live_search")
+_LIVE_SEARCH_MSG = "live Gemini search called in a unit test; patch grounded_search or mark live_search"
 
 
 @pytest.fixture(autouse=True)
@@ -40,11 +37,23 @@ def _no_live_grounded_search(request, monkeypatch):
     Plan 6: block real Gemini grounded-search calls in unit tests. A test opts out with
     `@pytest.mark.live_search`, or simply patches `run_grounded_agent` itself (its patch is
     applied after this one and wins).
+
+    The stub raises pytest.fail (a BaseException) so `except Exception` outage handling can't
+    absorb it, and teardown fails the test as well, because `gather(return_exceptions=True)`
+    would otherwise hand the exception back as a value and let the test pass.
     """
+    calls = []
+
+    async def _blocked(*_args, **_kwargs):
+        calls.append(1)
+        pytest.fail(_LIVE_SEARCH_MSG)
+
     if request.node.get_closest_marker("live_search") is None:
         from app.services import grounded_search
         from app.utils import adk_helpers
-        monkeypatch.setattr(adk_helpers, "run_grounded_agent", _live_grounded_search_blocked)
-        monkeypatch.setattr(grounded_search, "run_grounded_agent", _live_grounded_search_blocked)
+        monkeypatch.setattr(adk_helpers, "run_grounded_agent", _blocked)
+        monkeypatch.setattr(grounded_search, "run_grounded_agent", _blocked)
     yield
+    if calls:
+        pytest.fail(_LIVE_SEARCH_MSG)
 
