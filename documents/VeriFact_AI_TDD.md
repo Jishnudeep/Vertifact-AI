@@ -242,11 +242,11 @@ For URL input:
       "found_by": "crossref"
     }
   ],
-  "agents": {
-    "factcheck": "completed",
-    "crossref": "completed",
-    "linguistic": "completed"
-  },
+  "agents": [
+    { "name": "factcheck", "status": "ok", "duration_ms": 2130, "error_code": null },
+    { "name": "crossref", "status": "ok", "duration_ms": 3410, "error_code": null },
+    { "name": "linguistic", "status": "ok", "duration_ms": 480, "error_code": null }
+  ],
   "processing_time_ms": 7420,
   "cached": false,
   "created_at": "2026-10-15T12:00:00Z"
@@ -261,9 +261,9 @@ claim-review domain (see §7). It is the flag that gates `level: "high"`.
 (including claim-review sites returned by the Cross-Ref search).
 
 **Per-agent execution & capping fields:**
-- `agents`: maps each worker agent (`factcheck`, `crossref`, `linguistic`) to its status (`completed`, `degraded`, `failed`, `skipped`).
+- `agents`: list of per-agent execution status objects (`{name, status: "ok"|"degraded", duration_ms, error_code}`).
 - `trust_score.raw_c_total`: raw composite score before confidence-capping rules are applied.
-- `trust_score.cap_rule`: identifier of the binding confidence capping rule (e.g. `"disputed"`, `"unverified"`, `"no_fact_check"`, `"one_agent"`), or `null` if uncapped.
+- `trust_score.cap_rule`: identifier of the binding confidence capping rule (`"false_verdict"` | `"disputed"` | `"partial_analysis"` | `"low_evidence"`), or `null` if uncapped.
 - `sources[].found_by`: the discovering agent (`"factcheck"` | `"crossref"`), used to group citations in the UI.
 - `created_at`: ISO 8601 UTC timestamp of when verification was recorded.
 
@@ -310,29 +310,23 @@ Formed via the shared `format_stored_result` formatter to maintain strict field 
 Returns recent featured verification results for the home page feed.
 
 **Query Parameters:**
-- `limit` (int, default: 10, min: 1, max: 50): maximum number of results to return.
+- `limit` (int, default: 10, min: 1, max: 20): maximum number of results to return.
 
 **Response (200 OK):**
 ```json
-{
-  "results": [
-    {
-      "id": "a1b2c3d4-...",
-      "claim": "...",
-      "trust_score": { ... },
-      "confidence": { ... },
-      "linguistic_profile": { ... },
-      "sources": [ ... ],
-      "agents": { ... },
-      "processing_time_ms": 7420,
-      "cached": false,
-      "created_at": "2026-10-15T12:00:00Z"
-    }
-  ]
-}
+[
+  {
+    "id": "a1b2c3d4-...",
+    "claim": "...",
+    "c_total": 0.85,
+    "evidence_status": "corroborated",
+    "confidence_level": "medium",
+    "created_at": "2026-10-15T12:00:00Z"
+  }
+]
 ```
 
-Queries `results` where `featured = true`, ordered by `created_at DESC` up to `limit`. Formatted via the same shared stored-result formatter (`cached: false`).
+Queries `results` joined with `claims` where `featured = true`, ordered by `created_at DESC` up to `limit`. Returns a list of `RecentResultModel` objects with allow-listed summary fields.
 
 ### 3.5 WS /ws/status/{request_id}
 
@@ -1002,14 +996,14 @@ def get_bias_label(url: str) -> Optional[str]:
 ### 9.1 Transit Diagram Verdict Interchange (SVG)
 
 SVG verdict interchange diagram replacing the legacy semicircular gauge (`TrustGauge`), retaining identical thresholds and color tokens:
-- 0-33: Likely False (`#DC2626` crimson indicator / lilac fact-check line)
-- 34-66: Uncertain / Mixed (`#F59E0B` amber)
-- 67-100: Likely True (`#10B981` emerald)
+- 0-33: Likely false (`#DC2626` crimson indicator / lilac fact-check line)
+- 34-66: Mixed (`#F59E0B` amber)
+- 67-100: Likely true (`#10B981` emerald)
 
 **Styling & Design Tokens (Midnight Transit Diagram):**
 - Ground: Midnight ground (`#0F1B3D`), elevated surface (`#16244D`), borders (`#22366F`).
 - Lines: Fact-Check line (`#B9A2F2` lilac), Cross-Reference line (`#2BB3A3` teal), Linguistic track (`#F4F1EA` porcelain with navy casing).
-- Central interchange platform displaying the verdict word ("Likely True", "Uncertain", "Likely False") and prominent numeric trust score badge.
+- Central interchange platform displaying the verdict word ("Likely true", "Mixed", "Likely false") and prominent numeric trust score badge.
 - Checking state: animated pulse traversing the SVG tracks towards the junction.
 - Accessible summary: hidden `<p className="sr-only">` summarizing the verdict and score for screen readers.
 
