@@ -121,6 +121,76 @@ describe('Home Components', () => {
 
       expect(screen.getByText(ERROR_COPY.network)).toBeInTheDocument();
     });
+
+    it('maps 503 with no code to network copy', () => {
+      render(
+        <ClaimInput
+          onSubmit={vi.fn()}
+          status="error"
+          error={{ status: 503, code: null }}
+          value="Some claim"
+          onChange={vi.fn()}
+        />
+      );
+
+      expect(screen.getByText(ERROR_COPY.network)).toBeInTheDocument();
+    });
+
+    it('after a 429, submit and retry buttons are disabled and rate-limited copy is shown', () => {
+      const handleRetry = vi.fn();
+      render(
+        <ClaimInput
+          onSubmit={vi.fn()}
+          status="error"
+          error={{ status: 429, code: 'rate_limited' }}
+          blockedUntil={Date.now() + 60000}
+          onRetry={handleRetry}
+          value="Some claim"
+          onChange={vi.fn()}
+        />
+      );
+
+      expect(screen.getByText(ERROR_COPY.rate_limited)).toBeInTheDocument();
+      const submitBtn = screen.getByRole('button', { name: /Verify Claim/i });
+      expect(submitBtn).toBeDisabled();
+
+      const retryBtn = screen.getByRole('button', { name: /Try again/i });
+      expect(retryBtn).toBeDisabled();
+    });
+
+    it('shows error.detail for invalid_input when present and does not show retry button', () => {
+      const handleRetry = vi.fn();
+      render(
+        <ClaimInput
+          onSubmit={vi.fn()}
+          status="error"
+          error={{ status: 422, code: 'invalid_input', detail: 'Claim text exceeds 2000 characters' }}
+          onRetry={handleRetry}
+          value="Some claim"
+          onChange={vi.fn()}
+        />
+      );
+
+      expect(screen.getByText('Claim text exceeds 2000 characters')).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /Try again/i })).toBeNull();
+    });
+
+    it('shows request_validation copy and does not show retry button', () => {
+      const handleRetry = vi.fn();
+      render(
+        <ClaimInput
+          onSubmit={vi.fn()}
+          status="error"
+          error={{ status: 422, code: 'request_validation' }}
+          onRetry={handleRetry}
+          value="Some claim"
+          onChange={vi.fn()}
+        />
+      );
+
+      expect(screen.getByText(ERROR_COPY.request_validation)).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /Try again/i })).toBeNull();
+    });
   });
 
   describe('RecentList', () => {
@@ -151,6 +221,25 @@ describe('Home Components', () => {
       );
 
       expect(container.firstChild).toBeNull();
+    });
+  });
+
+  describe('HomePage recent feed failure resilience', () => {
+    it('still renders input and examples when getRecent rejects', async () => {
+      const api = await import('../lib/api');
+      vi.spyOn(api, 'getRecent').mockRejectedValueOnce(new Error('Feed failed'));
+      const HomePage = (await import('../pages/HomePage')).default;
+
+      render(
+        <MemoryRouter>
+          <HomePage />
+        </MemoryRouter>
+      );
+
+      expect(
+        screen.getByPlaceholderText(/Paste or type a factual claim to verify/i)
+      ).toBeInTheDocument();
+      expect(screen.getByText(/Try an example claim/i)).toBeInTheDocument();
     });
   });
 

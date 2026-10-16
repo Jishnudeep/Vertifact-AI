@@ -1,15 +1,20 @@
-import React from 'react';
+import React, { useState } from 'react';
 import TransitDiagram from './TransitDiagram';
 import VerdictLine from './VerdictLine';
 import ScoreBreakdown from './ScoreBreakdown';
 import SourceList from './SourceList';
-import LanguageRadar from './LanguageRadar';
 import SearchSuggestions from './SearchSuggestions';
 import ResultFooter from './ResultFooter';
 import { verdictView } from '../lib/verdict';
 
+const LanguageRadar = React.lazy(() => import('./LanguageRadar'));
+
 export default function ResultView({ result, fresh = false }) {
+  const [isClaimExpanded, setIsClaimExpanded] = useState(false);
+
   if (!result) return null;
+
+  const isLongClaim = (result.claim || '').length > 280;
 
   const verdict = verdictView(result);
   const lingAgent = result.agents?.find?.((a) => a.name === 'linguistic');
@@ -19,9 +24,22 @@ export default function ResultView({ result, fresh = false }) {
     <article className="w-full max-w-5xl mx-auto flex flex-col gap-6 py-6 px-4 sm:px-6">
       {/* Claim Title */}
       <div className="border-b border-slate-800 pb-4">
-        <blockquote className="text-xl sm:text-2xl font-bold text-porcelain leading-snug">
+        <blockquote
+          className={`text-xl sm:text-2xl font-bold text-porcelain leading-snug ${
+            !isClaimExpanded && isLongClaim ? 'line-clamp-4' : ''
+          }`}
+        >
           “{result.claim}”
         </blockquote>
+        {isLongClaim && (
+          <button
+            type="button"
+            onClick={() => setIsClaimExpanded(!isClaimExpanded)}
+            className="text-xs font-semibold text-slate-400 hover:text-porcelain mt-2 cursor-pointer transition-colors"
+          >
+            {isClaimExpanded ? 'Show less' : 'Show full claim'}
+          </button>
+        )}
       </div>
 
       {/* Transit Diagram signature */}
@@ -51,10 +69,14 @@ export default function ResultView({ result, fresh = false }) {
         {/* Right Column (2/5) */}
         <div className="lg:col-span-2 flex flex-col gap-6">
           <SourceList sources={result.sources || []} />
-          <LanguageRadar
-            profile={result.linguistic_profile}
-            isDegraded={isLingDegraded}
-          />
+          <React.Suspense
+            fallback={<div className="h-64 rounded-xl bg-surface/30 animate-pulse border border-slate-800" />}
+          >
+            <LanguageRadar
+              profile={result.linguistic_profile}
+              isDegraded={isLingDegraded}
+            />
+          </React.Suspense>
           <SearchSuggestions html={result.search_suggestions_html} />
           <ResultFooter
             processingTimeMs={result.processing_time_ms}

@@ -9,6 +9,7 @@ export function useVerify() {
   const [blockedUntil, setBlockedUntil] = useState(null);
 
   const timerRef = useRef(null);
+  const blockTimerRef = useRef(null);
   const startTimeRef = useRef(0);
 
   const clearTimer = useCallback(() => {
@@ -18,11 +19,19 @@ export function useVerify() {
     }
   }, []);
 
+  const clearBlockTimer = useCallback(() => {
+    if (blockTimerRef.current) {
+      clearTimeout(blockTimerRef.current);
+      blockTimerRef.current = null;
+    }
+  }, []);
+
   useEffect(() => {
     return () => {
       clearTimer();
+      clearBlockTimer();
     };
-  }, [clearTimer]);
+  }, [clearTimer, clearBlockTimer]);
 
   const submit = useCallback(
     async (text) => {
@@ -53,11 +62,15 @@ export function useVerify() {
         if (err.status === 429) {
           const waitS = err.retryAfterS || 60;
           setBlockedUntil(Date.now() + waitS * 1000);
-          setTimeout(() => setBlockedUntil(null), waitS * 1000);
+          clearBlockTimer();
+          blockTimerRef.current = setTimeout(() => {
+            setBlockedUntil(null);
+            blockTimerRef.current = null;
+          }, waitS * 1000);
         }
       }
     },
-    [clearTimer]
+    [clearTimer, clearBlockTimer]
   );
 
   const reset = useCallback(() => {

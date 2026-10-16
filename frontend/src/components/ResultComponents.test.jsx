@@ -10,6 +10,7 @@ import LanguageRadar from './LanguageRadar';
 import SearchSuggestions from './SearchSuggestions';
 import ResultFooter from './ResultFooter';
 import ResultView from './ResultView';
+import VerdictLine from './VerdictLine';
 
 import factCheckedFixture from '../fixtures/fact_checked.json';
 import unverifiedFixture from '../fixtures/unverified.json';
@@ -123,9 +124,27 @@ describe('Result Components', () => {
       expect(container.firstChild).toBeNull();
     });
 
-    it('StanceChip renders words first outline when stance is present', () => {
-      render(<StanceChip stance="supports" />);
+    it('StanceChip renders words outline-only without emerald or rose color tokens', () => {
+      const { container } = render(<StanceChip stance="supports" />);
       expect(screen.getByText('Supports')).toBeInTheDocument();
+      const chip = container.querySelector('span');
+      expect(chip.className).not.toMatch(/emerald/i);
+      expect(chip.className).not.toMatch(/rose/i);
+    });
+  });
+
+  describe('VerdictLine', () => {
+    it('shows band word and separate Disputed badge when disputed is true', () => {
+      const verdict = {
+        label: 'Likely false',
+        colorToken: 'verdict-false',
+        showScore: true,
+        score: 33,
+        disputed: true,
+      };
+      render(<VerdictLine verdict={verdict} confidence={{ level: 'medium' }} />);
+      expect(screen.getByText('Likely false')).toBeInTheDocument();
+      expect(screen.getByText('Disputed')).toBeInTheDocument();
     });
   });
 
@@ -166,9 +185,12 @@ describe('Result Components', () => {
 
       const iframe = screen.getByTitle('Related Google searches');
       expect(iframe).toBeInTheDocument();
-      expect(iframe.getAttribute('sandbox')).toBe(
-        'allow-popups allow-popups-to-escape-sandbox'
+      const sandbox = iframe.getAttribute('sandbox');
+      expect(sandbox).toBe(
+        'allow-popups allow-popups-to-escape-sandbox allow-top-navigation-by-user-activation'
       );
+      expect(sandbox).not.toContain('allow-scripts');
+      expect(sandbox).not.toContain('allow-same-origin');
       expect(iframe.getAttribute('srcdoc')).toBe(html);
     });
 
@@ -264,6 +286,36 @@ describe('Result Components', () => {
     it('renders partial analysis warning on screen below the verdict', () => {
       render(<ResultView result={partialFixture} fresh={false} />);
       expect(screen.getByText('Partial analysis: 2/3 agents succeeded')).toBeInTheDocument();
+    });
+
+    it('clamps claim > 280 chars with toggle button in ResultView', async () => {
+      const longClaimFixture = (await import('../fixtures/long_claim.json')).default;
+      render(<ResultView result={longClaimFixture} fresh={false} />);
+      const toggleBtn = screen.getByRole('button', { name: /Show full claim/i });
+      expect(toggleBtn).toBeInTheDocument();
+    });
+  });
+
+  describe('ScoreBreakdown responsive and neutral styling', () => {
+    it('uses neutral status styling and hides Duration and Weight on mobile', () => {
+      render(
+        <ScoreBreakdown
+          trustScore={partialFixture.trust_score}
+          evidenceStatus={partialFixture.confidence.evidence_status}
+          agents={partialFixture.agents}
+        />
+      );
+
+      const partialBadge = screen.getByText('Partial');
+      expect(partialBadge.className).not.toMatch(/amber/i);
+
+      const durationHeader = screen.getByText('Duration');
+      expect(durationHeader.className).toContain('hidden');
+      expect(durationHeader.className).toContain('sm:table-cell');
+
+      const weightHeader = screen.getByText('Weight');
+      expect(weightHeader.className).toContain('hidden');
+      expect(weightHeader.className).toContain('sm:table-cell');
     });
   });
 });

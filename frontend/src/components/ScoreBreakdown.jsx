@@ -82,9 +82,9 @@ export default function ScoreBreakdown({ trustScore, evidenceStatus, agents = []
             <tr>
               <th className="py-2 pr-3">Agent</th>
               <th className="py-2 pr-3">Status</th>
-              <th className="py-2 pr-3">Duration</th>
+              <th className="py-2 pr-3 hidden sm:table-cell">Duration</th>
               <th className="py-2 pr-3">Input</th>
-              <th className="py-2 pr-3">Weight</th>
+              <th className="py-2 pr-3 hidden sm:table-cell">Weight</th>
               {!isUnverified && <th className="py-2 text-right">Points</th>}
             </tr>
           </thead>
@@ -102,14 +102,14 @@ export default function ScoreBreakdown({ trustScore, evidenceStatus, agents = []
                   </td>
                   <td className="py-2 pr-3 font-sans">
                     {status === 'degraded' ? (
-                      <span className="text-amber-400 font-semibold">Partial</span>
+                      <span className="text-slate-300 font-semibold">Partial</span>
                     ) : (
-                      <span className="text-emerald-400">ok</span>
+                      <span className="text-slate-400">ok</span>
                     )}
                   </td>
-                  <td className="py-2 pr-3 text-slate-400">{duration}</td>
+                  <td className="py-2 pr-3 text-slate-400 hidden sm:table-cell">{duration}</td>
                   <td className="py-2 pr-3">{row.componentVal}</td>
-                  <td className="py-2 pr-3 text-slate-400">{row.weight}</td>
+                  <td className="py-2 pr-3 text-slate-400 hidden sm:table-cell">{row.weight}</td>
                   {!isUnverified && (
                     <td className="py-2 text-right font-bold text-porcelain">
                       {row.points}

@@ -101,4 +101,26 @@ describe('TransitDiagram', () => {
     expect(container.textContent).not.toContain('· s');
     expect(container.textContent).not.toMatch(/·\s*\d+(\.\d+)?\s*s/);
   });
+
+  it('renders verdict.label rather than DISPUTED inside interchange circle, and cap note is clear of tracks (y >= 265)', async () => {
+    const disputedFixture = (await import('../fixtures/disputed_capped.json')).default;
+    const verdict = verdictView(disputedFixture);
+    render(
+      <TransitDiagram
+        mode="result"
+        agents={disputedFixture.agents}
+        verdict={verdict}
+        capRule={disputedFixture.trust_score.cap_rule}
+        elapsedS={2.1}
+      />
+    );
+
+    // Should render the band word ("Likely false") and not "DISPUTED"
+    expect(screen.getByText('Likely false')).toBeInTheDocument();
+    expect(screen.queryByText('DISPUTED')).toBeNull();
+
+    // Cap note should be positioned at y >= 265 so it is clear of the linguistic track
+    const capText = screen.getByText('Reputable sources contradict this claim');
+    expect(Number(capText.getAttribute('y'))).toBeGreaterThanOrEqual(265);
+  });
 });

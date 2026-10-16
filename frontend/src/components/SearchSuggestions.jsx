@@ -13,7 +13,7 @@ export default function SearchSuggestions({ html }) {
       <div className="w-full min-h-[140px] rounded-lg overflow-hidden bg-white/5">
         <iframe
           title="Related Google searches"
-          sandbox="allow-popups allow-popups-to-escape-sandbox"
+          sandbox="allow-popups allow-popups-to-escape-sandbox allow-top-navigation-by-user-activation"
           srcDoc={html}
           className="w-full min-h-[140px] border-none"
         />

@@ -64,4 +64,23 @@ describe('useVerify hook', () => {
     expect(result.current.result).toEqual(mockResult);
     expect(result.current.error).toBeNull();
   });
+
+  it('clears block timer on unmount', async () => {
+    const clearTimeoutSpy = vi.spyOn(globalThis, 'clearTimeout');
+    const error429 = new api.ApiError({
+      status: 429,
+      code: 'rate_limited',
+      detail: 'Rate limited',
+      retryAfterS: 60,
+    });
+    vi.spyOn(api, 'verifyClaim').mockRejectedValue(error429);
+
+    const { result, unmount } = renderHook(() => useVerify());
+    await act(async () => {
+      await result.current.submit('Test claim');
+    });
+
+    unmount();
+    expect(clearTimeoutSpy).toHaveBeenCalled();
+  });
 });

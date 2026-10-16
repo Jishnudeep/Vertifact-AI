@@ -232,7 +232,7 @@ export default function TransitDiagram({
                 textTransform: 'uppercase',
               }}
             >
-              {verdict.disputed ? 'DISPUTED' : verdict.label}
+              {verdict.label}
             </text>
           </>
         ) : (
@@ -250,11 +250,11 @@ export default function TransitDiagram({
           </text>
         )}
 
-        {/* Cap note below the interchange circle if present */}
+        {/* Cap note below the interchange circle if present, placed clear of tracks */}
         {!isChecking && capRule && CAP_COPY[capRule] && (
           <text
             x="250"
-            y="232"
+            y="280"
             textAnchor="middle"
             style={{
               font: '600 11px "Hanken Grotesk", sans-serif',

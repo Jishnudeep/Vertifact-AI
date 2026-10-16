@@ -1,9 +1,9 @@
 import React from 'react';
 
 const STANCE_STYLES = {
-  supports: 'border-emerald-500/50 text-emerald-300 bg-emerald-950/20',
-  refutes: 'border-rose-500/50 text-rose-300 bg-rose-950/20',
-  neutral: 'border-slate-500/50 text-slate-300 bg-slate-900/20',
+  supports: 'border-slate-600/70 text-slate-200 bg-transparent',
+  refutes: 'border-slate-600/70 text-slate-200 bg-transparent',
+  neutral: 'border-slate-700/70 text-slate-400 bg-transparent',
 };
 
 export default function StanceChip({ stance }) {

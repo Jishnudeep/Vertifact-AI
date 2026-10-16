@@ -1,6 +1,6 @@
 const BASE_URL =
   (typeof import.meta !== 'undefined' && import.meta.env?.VITE_API_BASE_URL) ||
-  'http://localhost:8000';
+  '';
 
 export class ApiError extends Error {
   constructor({ status, code = null, detail = null, retryAfterS = null, message }) {

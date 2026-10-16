@@ -25,9 +25,29 @@ export default function ClaimInput({
 
   // Determine error message if error is set
   let errorMessage = null;
+  let isRetryAllowed = false;
+
   if (error) {
-    const code = error.code || (error.status === 0 ? 'network' : error.status === 404 ? 'not_found' : null);
-    errorMessage = (code && ERROR_COPY[code]) || error.detail || ERROR_COPY.server;
+    const code =
+      error.code ||
+      (error.status === 0 || error.status === 503
+        ? 'network'
+        : error.status === 404
+        ? 'not_found'
+        : error.status === 429
+        ? 'rate_limited'
+        : null);
+
+    if (code === 'invalid_input' && error.detail) {
+      errorMessage = error.detail;
+    } else {
+      errorMessage = (code && ERROR_COPY[code]) || error.detail || ERROR_COPY.server;
+    }
+
+    const nonRetryableCodes = ['invalid_input', 'request_validation', 'non_verifiable_claim', 'not_found'];
+    if (!nonRetryableCodes.includes(code) && error.status !== 422 && error.status !== 400) {
+      isRetryAllowed = true;
+    }
   }
 
   return (
@@ -67,11 +87,12 @@ export default function ClaimInput({
       {errorMessage && (
         <div className="p-4 rounded-xl bg-red-950/30 border border-red-800/50 text-red-200 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-xs">
           <p className="leading-relaxed">{errorMessage}</p>
-          {onRetry && (
+          {onRetry && isRetryAllowed && (
             <button
               type="button"
               onClick={onRetry}
-              className="px-3 py-1 rounded bg-red-800/40 hover:bg-red-800/60 border border-red-700/60 font-semibold transition-colors shrink-0 cursor-pointer"
+              disabled={isBlocked}
+              className="px-3 py-1 rounded bg-red-800/40 hover:bg-red-800/60 border border-red-700/60 font-semibold transition-colors shrink-0 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
             >
               Try again
             </button>
