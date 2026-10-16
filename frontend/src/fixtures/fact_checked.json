@@ -2,23 +2,29 @@
   "id": "11111111-1111-1111-1111-111111111111",
   "claim": "NASA successfully landed the Perseverance rover on Mars in 2021.",
   "trust_score": {
-    "c_total": 0.92,
+    "c_total": 0.935,
     "s_fact": 0.95,
     "b_ling": 0.05,
-    "v_consensus": 0.90,
-    "weights": { "w1": 0.5, "w2": 0.2, "w3": 0.3 },
-    "raw_c_total": 0.92,
+    "v_consensus": 0.9,
+    "v_refute": 0.0,
+    "weights": {
+      "w1": 0.5,
+      "w2": 0.2,
+      "w3": 0.3
+    },
+    "raw_c_total": 0.935,
     "cap_rule": null
   },
-  "evidence_status": "fact_checked",
   "confidence": {
     "level": "high",
-    "reason": "Direct fact-check match and unanimous consensus."
+    "warnings": [],
+    "verdict_found": true,
+    "evidence_status": "fact_checked"
   },
   "linguistic_profile": {
-    "sensationalism": 0.05,
-    "emotional_tone": 0.10,
     "clickbait_syntax": 0.02,
+    "emotional_framing": 0.1,
+    "sensationalism": 0.05,
     "informational_density": 0.88
   },
   "sources": [
@@ -28,7 +34,7 @@
       "publisher": "Snopes",
       "bias_label": "Center",
       "type": "fact_check",
-      "stance": "supports",
+      "stance": null,
       "rating": "True",
       "found_by": "factcheck"
     },
@@ -39,7 +45,7 @@
       "bias_label": "Center",
       "type": "corroborating",
       "stance": "supports",
-      "rating": "True",
+      "rating": null,
       "found_by": "crossref"
     }
   ],
@@ -47,9 +53,24 @@
   "cached": false,
   "search_suggestions_html": "<div id='google-suggestions'>Related searches: Mars Perseverance landing date, NASA rover 2021</div>",
   "agents": [
-    { "name": "factcheck", "status": "ok", "duration_ms": 780, "error_code": null },
-    { "name": "crossref", "status": "ok", "duration_ms": 950, "error_code": null },
-    { "name": "linguistic", "status": "ok", "duration_ms": 120, "error_code": null }
+    {
+      "name": "factcheck",
+      "status": "ok",
+      "duration_ms": 780,
+      "error_code": null
+    },
+    {
+      "name": "crossref",
+      "status": "ok",
+      "duration_ms": 950,
+      "error_code": null
+    },
+    {
+      "name": "linguistic",
+      "status": "ok",
+      "duration_ms": 120,
+      "error_code": null
+    }
   ],
   "created_at": "2026-10-15T12:00:00Z"
 }

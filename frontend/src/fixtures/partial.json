@@ -2,24 +2,32 @@
   "id": "55555555-5555-5555-5555-555555555555",
   "claim": "A new solar flare disrupted transatlantic flights yesterday.",
   "trust_score": {
-    "c_total": 0.40,
-    "s_fact": 0.50,
-    "b_ling": 0.50,
-    "v_consensus": 0.20,
-    "weights": { "w1": 0.5, "w2": 0.2, "w3": 0.3 },
-    "raw_c_total": 0.45,
-    "cap_rule": "partial"
+    "c_total": 0.5,
+    "s_fact": 0.5,
+    "b_ling": 0.5,
+    "v_consensus": 0.6,
+    "v_refute": 0.05,
+    "weights": {
+      "w1": 0.5,
+      "w2": 0.2,
+      "w3": 0.3
+    },
+    "raw_c_total": 0.53,
+    "cap_rule": "partial_analysis"
   },
-  "evidence_status": "corroborated",
   "confidence": {
-    "level": "low",
-    "reason": "Linguistic analysis timed out; confidence capped."
+    "level": "medium",
+    "warnings": [
+      "Partial analysis: 2/3 agents succeeded"
+    ],
+    "verdict_found": false,
+    "evidence_status": "corroborated"
   },
   "linguistic_profile": {
-    "sensationalism": 0.50,
-    "emotional_tone": 0.50,
-    "clickbait_syntax": 0.50,
-    "informational_density": 0.50
+    "clickbait_syntax": 0.5,
+    "emotional_framing": 0.5,
+    "sensationalism": 0.5,
+    "informational_density": 0.5
   },
   "sources": [
     {
@@ -37,9 +45,24 @@
   "cached": false,
   "search_suggestions_html": null,
   "agents": [
-    { "name": "factcheck", "status": "ok", "duration_ms": 950, "error_code": null },
-    { "name": "crossref", "status": "ok", "duration_ms": 1200, "error_code": null },
-    { "name": "linguistic", "status": "degraded", "duration_ms": 8000, "error_code": "TIMEOUT" }
+    {
+      "name": "factcheck",
+      "status": "ok",
+      "duration_ms": 950,
+      "error_code": null
+    },
+    {
+      "name": "crossref",
+      "status": "ok",
+      "duration_ms": 1200,
+      "error_code": null
+    },
+    {
+      "name": "linguistic",
+      "status": "degraded",
+      "duration_ms": 8000,
+      "error_code": "TIMEOUT"
+    }
   ],
   "created_at": "2026-10-15T12:20:00Z"
 }

@@ -3,22 +3,30 @@
   "claim": "Consuming lemon water cures diabetes within 48 hours.",
   "trust_score": {
     "c_total": 0.33,
-    "s_fact": 0.20,
+    "s_fact": 0.5,
     "b_ling": 0.35,
     "v_consensus": 0.15,
-    "weights": { "w1": 0.5, "w2": 0.2, "w3": 0.3 },
-    "raw_c_total": 0.52,
+    "v_refute": 0.8,
+    "weights": {
+      "w1": 0.5,
+      "w2": 0.2,
+      "w3": 0.3
+    },
+    "raw_c_total": 0.425,
     "cap_rule": "disputed"
   },
-  "evidence_status": "disputed",
   "confidence": {
-    "level": "high",
-    "reason": "Scientific consensus strongly refutes this claim."
+    "level": "medium",
+    "warnings": [
+      "Disputed: reputable sources contradict this claim"
+    ],
+    "verdict_found": false,
+    "evidence_status": "disputed"
   },
   "linguistic_profile": {
+    "clickbait_syntax": 0.7,
+    "emotional_framing": 0.6,
     "sensationalism": 0.85,
-    "emotional_tone": 0.60,
-    "clickbait_syntax": 0.70,
     "informational_density": 0.25
   },
   "sources": [
@@ -29,8 +37,8 @@
       "bias_label": "Center",
       "type": "corroborating",
       "stance": "refutes",
-      "rating": "False",
-      "found_by": "factcheck"
+      "rating": null,
+      "found_by": "crossref"
     },
     {
       "url": "https://www.mayoclinic.org/diseases-conditions/diabetes/expert-answers/lemon-cure",
@@ -47,9 +55,24 @@
   "cached": false,
   "search_suggestions_html": null,
   "agents": [
-    { "name": "factcheck", "status": "ok", "duration_ms": 650, "error_code": null },
-    { "name": "crossref", "status": "ok", "duration_ms": 890, "error_code": null },
-    { "name": "linguistic", "status": "ok", "duration_ms": 80, "error_code": null }
+    {
+      "name": "factcheck",
+      "status": "ok",
+      "duration_ms": 650,
+      "error_code": null
+    },
+    {
+      "name": "crossref",
+      "status": "ok",
+      "duration_ms": 890,
+      "error_code": null
+    },
+    {
+      "name": "linguistic",
+      "status": "ok",
+      "duration_ms": 80,
+      "error_code": null
+    }
   ],
   "created_at": "2026-10-15T12:10:00Z"
 }

@@ -2,23 +2,31 @@
   "id": "88888888-8888-8888-8888-888888888888",
   "claim": "According to extensive archaeological documentation and historical records spanning several centuries across the Mediterranean basin, ancient civilizations developed intricate methods of civil engineering and water management that allowed cities in arid regions to sustain populations numbering in the tens of thousands. These systems included subterranean aqueducts known as qanats, complex cistern reservoirs carved directly into bedrock, and terraced agricultural slopes designed to capture seasonal runoff. Scholars from various academic institutions have cross-examined these artifacts using carbon dating, stratigraphic analysis, and comparative textual analysis from contemporaneous administrative records. However, in recent years, alternative interpretations circulating across digital platforms and fringe publications have asserted that these architectural marvels could not possibly have been engineered using the copper and bronze metallurgy available during the third millennium before the common era. Proponents of these fringe narratives claim that anomalous stone carvings depict high-energy electrical infrastructure and precision laser apparatus, suggesting the involvement of extraterrestrial visitors or technologically advanced lost civilizations that disappeared during a sudden cataclysmic event at the conclusion of the Younger Dryas climatic oscillation. Mainstream geologists, Egyptologists, and material scientists have repeatedly analyzed the physical quarry markings and tool marks on surviving granite monuments, demonstrating conclusively that diorite pounders, copper saws with quartz abrasive slurries, and wooden expansion wedges were fully capable of producing the observed structural tolerances. Despite extensive peer-reviewed refutations published in respected journals, the speculative theories continue to achieve substantial viral reach across online discussion forums, documentary channels, and short-form video streaming services worldwide.",
   "trust_score": {
-    "c_total": 0.22,
-    "s_fact": 0.10,
-    "b_ling": 0.30,
-    "v_consensus": 0.15,
-    "weights": { "w1": 0.5, "w2": 0.2, "w3": 0.3 },
-    "raw_c_total": 0.22,
-    "cap_rule": null
+    "c_total": 0.33,
+    "s_fact": 0.5,
+    "b_ling": 0.3,
+    "v_consensus": 0.1,
+    "v_refute": 0.75,
+    "weights": {
+      "w1": 0.5,
+      "w2": 0.2,
+      "w3": 0.3
+    },
+    "raw_c_total": 0.42,
+    "cap_rule": "disputed"
   },
-  "evidence_status": "disputed",
   "confidence": {
-    "level": "high",
-    "reason": "Academic consensus refutes fringe claims."
+    "level": "medium",
+    "warnings": [
+      "Disputed: reputable sources contradict this claim"
+    ],
+    "verdict_found": false,
+    "evidence_status": "disputed"
   },
   "linguistic_profile": {
+    "clickbait_syntax": 0.1,
+    "emotional_framing": 0.2,
     "sensationalism": 0.35,
-    "emotional_tone": 0.20,
-    "clickbait_syntax": 0.10,
     "informational_density": 0.85
   },
   "sources": [],
@@ -26,9 +34,24 @@
   "cached": false,
   "search_suggestions_html": null,
   "agents": [
-    { "name": "factcheck", "status": "ok", "duration_ms": 900, "error_code": null },
-    { "name": "crossref", "status": "ok", "duration_ms": 1100, "error_code": null },
-    { "name": "linguistic", "status": "ok", "duration_ms": 150, "error_code": null }
+    {
+      "name": "factcheck",
+      "status": "ok",
+      "duration_ms": 900,
+      "error_code": null
+    },
+    {
+      "name": "crossref",
+      "status": "ok",
+      "duration_ms": 1100,
+      "error_code": null
+    },
+    {
+      "name": "linguistic",
+      "status": "ok",
+      "duration_ms": 150,
+      "error_code": null
+    }
   ],
   "created_at": "2026-10-15T12:25:00Z"
 }
