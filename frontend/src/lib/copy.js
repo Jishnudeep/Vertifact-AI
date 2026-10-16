@@ -10,10 +10,10 @@ export const ERROR_COPY = {
 };
 
 export const CAP_COPY = {
-  partial: "Partial analysis: not every check finished",
-  insufficient_coverage: "No fact-check and little coverage",
   false_verdict: "A fact-check rated this false",
   disputed: "Reputable sources contradict this claim",
+  partial_analysis: "Partial analysis: not every check finished",
+  low_evidence: "No fact-check and little coverage",
 };
 
 export const CONFIDENCE_COPY = {

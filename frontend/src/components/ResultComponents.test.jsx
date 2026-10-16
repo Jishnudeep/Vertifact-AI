@@ -252,6 +252,9 @@ describe('Result Components', () => {
       // ScoreBreakdown cap disclosure must not print "Capped from"
       expect(screen.queryByText(/Capped from/i)).toBeNull();
 
+      // Cap copy should still show in TransitDiagram and ScoreBreakdown
+      expect(screen.getAllByText('No fact-check and little coverage').length).toBeGreaterThanOrEqual(1);
+
       // Verify no score number is rendered
       expect(screen.queryByText(/55/)).toBeNull();
     });
