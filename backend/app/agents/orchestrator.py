@@ -407,6 +407,24 @@ def _consolidate_sources(
     return sources
 
 
+async def prepare_verify_request(raw_input: str, bypass_cache: bool = False) -> VerifyRequest:
+    """Steps 1-4 of verify_claim: sanitize, validate, check verifiability, embed. Raises on bad input."""
+    deadline = time.monotonic() + settings.request_deadline_s
+
+    cleaned_text = sanitize_text(raw_input)
+
+    valid_len, len_error = validate_input_length(cleaned_text)
+    if not valid_len:
+        raise InvalidInputError(len_error)
+
+    verifiable, ver_error = is_verifiable_claim(cleaned_text)
+    if not verifiable:
+        raise NonVerifiableClaimError(ver_error)
+
+    embedding = await asyncio.to_thread(generate_embedding, cleaned_text)
+    return VerifyRequest(claim=cleaned_text, embedding=embedding, deadline=deadline, bypass_cache=bypass_cache)
+
+
 async def verify_claim(raw_input: str, input_type: str = "text", bypass_cache: bool = False) -> Dict[str, Any]:
     """
     Main orchestration pipeline for claim verification:
@@ -422,31 +440,14 @@ async def verify_claim(raw_input: str, input_type: str = "text", bypass_cache: b
     8. Return full structured verification response.
     """
     start_time = time.time()
-    deadline = time.monotonic() + settings.request_deadline_s
 
-    # 1. Sanitize input
-    cleaned_text = sanitize_text(raw_input)
-
-    # 2. Validate length
-    valid_len, len_error = validate_input_length(cleaned_text)
-    if not valid_len:
-        raise InvalidInputError(len_error)
-
-    # 3. Validate claim verifiability
-    verifiable, ver_error = is_verifiable_claim(cleaned_text)
-    if not verifiable:
-        raise NonVerifiableClaimError(ver_error)
-
-    # 4. Generate embedding
-    embedding = await asyncio.to_thread(generate_embedding, cleaned_text)
+    # 1-4. Sanitize, validate, embed
+    request = await prepare_verify_request(raw_input, bypass_cache=bypass_cache)
+    cleaned_text = request.claim
+    deadline = request.deadline
 
     # 5. Verification workflow
-    outcome = await run_verification_workflow(VerifyRequest(
-        claim=cleaned_text,
-        embedding=embedding,
-        deadline=deadline,
-        bypass_cache=bypass_cache,
-    ))
+    outcome = await run_verification_workflow(request)
 
     if outcome.cached:
         logger.info(f"Returning cached verification result for: {cleaned_text}")
@@ -476,7 +477,7 @@ async def verify_claim(raw_input: str, input_type: str = "text", bypass_cache: b
                 input_type=input_type,
                 raw_input=cleaned_text,  # H4: never persist unsanitized input
                 extracted_claim=cleaned_text,
-                embedding=embedding,
+                embedding=request.embedding,
                 c_total=scoring_res.c_total,
                 s_fact=scoring_res.components.s_fact,
                 b_ling=scoring_res.components.b_ling,

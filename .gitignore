@@ -117,3 +117,6 @@ review-fixes-handoff.md
 # DESIGN.md (repo root) and .impeccable/design.json are the tracked design-system outputs.
 .impeccable/*
 !.impeccable/design.json
+
+# ADK dev UI (adk web) local session store: holds claims, embeddings, agent outputs
+.adk/
