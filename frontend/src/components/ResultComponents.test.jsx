@@ -133,13 +133,15 @@ describe('Result Components', () => {
     it('scales values 0..1 to 0..100 and shows numbers', () => {
       const profile = {
         clickbait_syntax: 0.28,
-        emotional_tone: 0.45,
+        emotional_framing: 0.45,
         sensationalism: 0.15,
         informational_density: 0.85,
       };
       render(<LanguageRadar profile={profile} isDegraded={false} />);
       expect(screen.getByText(/28/)).toBeInTheDocument();
+      expect(screen.getByText(/45/)).toBeInTheDocument();
       expect(screen.getByText(/Clickbait Syntax/i)).toBeInTheDocument();
+      expect(screen.getByText(/Emotional Framing/i)).toBeInTheDocument();
     });
 
     it('shows degradation message and no chart when degraded', () => {

@@ -22,7 +22,7 @@ export default function LanguageRadar({ profile, isDegraded = false }) {
   }
 
   const clickbaitVal = Math.round((profile.clickbait_syntax ?? 0) * 100);
-  const emotionalVal = Math.round((profile.emotional_tone ?? 0) * 100);
+  const emotionalVal = Math.round(((profile.emotional_framing ?? profile.emotional_tone) ?? 0) * 100);
   const sensationalVal = Math.round((profile.sensationalism ?? 0) * 100);
   const densityVal = Math.round((profile.informational_density ?? 0) * 100);
 
