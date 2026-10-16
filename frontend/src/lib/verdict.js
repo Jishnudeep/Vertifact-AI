@@ -37,7 +37,8 @@ export function verdictView(resp) {
     };
   }
 
-  const isUnverified = resp.evidence_status === 'unverified';
+  const evidenceStatus = resp.confidence?.evidence_status ?? resp.evidence_status;
+  const isUnverified = evidenceStatus === 'unverified';
   if (isUnverified) {
     return {
       label: 'Not enough evidence',
@@ -53,7 +54,7 @@ export function verdictView(resp) {
   const band = bandFor(score);
 
   const disputed =
-    resp.evidence_status === 'disputed' ||
+    evidenceStatus === 'disputed' ||
     resp.trust_score?.cap_rule === 'disputed';
 
   let label = 'Mixed';

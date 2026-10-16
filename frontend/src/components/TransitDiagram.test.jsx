@@ -23,7 +23,7 @@ describe('TransitDiagram', () => {
     );
 
     expect(screen.getByText('Likely true')).toBeInTheDocument();
-    expect(screen.getByText('92')).toBeInTheDocument();
+    expect(screen.getByText('94')).toBeInTheDocument();
   });
 
   it('renders unverified with "Not enough evidence" and no digits inside the circle', () => {

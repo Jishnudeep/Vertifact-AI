@@ -66,9 +66,11 @@ export default function ScoreBreakdown({ trustScore, evidenceStatus, agents = []
       {/* Cap disclosure */}
       {capRule && rawScore !== null && (
         <div className="p-3 rounded-lg bg-red-950/20 border border-red-900/40 text-xs text-red-200 flex flex-col gap-1">
-          <span className="font-bold">
-            Capped from {rawScore} to {finalScore}
-          </span>
+          {!isUnverified && (
+            <span className="font-bold">
+              Capped from {rawScore} to {finalScore}
+            </span>
+          )}
           {CAP_COPY[capRule] && <span>{CAP_COPY[capRule]}</span>}
         </div>
       )}

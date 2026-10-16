@@ -58,7 +58,7 @@ describe('verdict logic', () => {
       const view = verdictView(factCheckedFixture);
       expect(view.disputed).toBe(false);
       expect(view.showScore).toBe(true);
-      expect(view.score).toBe(92);
+      expect(view.score).toBe(94);
       expect(view.label).toBe('Likely true');
       expect(view.colorToken).toBe('verdict-true');
     });

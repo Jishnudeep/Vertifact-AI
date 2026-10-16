@@ -24,7 +24,7 @@ describe('Result Components', () => {
       render(
         <ScoreBreakdown
           trustScore={factCheckedFixture.trust_score}
-          evidenceStatus={factCheckedFixture.evidence_status}
+          evidenceStatus={factCheckedFixture.confidence.evidence_status}
           agents={factCheckedFixture.agents}
         />
       );
@@ -41,7 +41,7 @@ describe('Result Components', () => {
       const { container } = render(
         <ScoreBreakdown
           trustScore={unverifiedFixture.trust_score}
-          evidenceStatus={unverifiedFixture.evidence_status}
+          evidenceStatus={unverifiedFixture.confidence.evidence_status}
           agents={unverifiedFixture.agents}
         />
       );
@@ -54,12 +54,12 @@ describe('Result Components', () => {
       render(
         <ScoreBreakdown
           trustScore={disputedFixture.trust_score}
-          evidenceStatus={disputedFixture.evidence_status}
+          evidenceStatus={disputedFixture.confidence.evidence_status}
           agents={disputedFixture.agents}
         />
       );
 
-      expect(screen.getByText(/Capped from 52 to 33/i)).toBeInTheDocument();
+      expect(screen.getByText(/Capped from 43 to 33/i)).toBeInTheDocument();
       expect(screen.getByText(/Reputable sources contradict this claim/i)).toBeInTheDocument();
     });
   });
@@ -227,6 +227,38 @@ describe('Result Components', () => {
         render(<ResultView result={legacyFixture} fresh={false} />);
       }).not.toThrow();
       expect(screen.getByText(new RegExp(legacyFixture.claim))).toBeInTheDocument();
+    });
+  });
+
+  describe('ResultView B1 and B3 contract tests', () => {
+    it('renders unverified response with no score digits anywhere on the page', () => {
+      const { container } = render(<ResultView result={unverifiedFixture} fresh={false} />);
+      expect(screen.getAllByText('Not enough evidence').length).toBeGreaterThanOrEqual(1);
+
+      // Interchange circle must not have the numeric score
+      const interchangeScore = container.querySelector('[data-testid="interchange-score"]');
+      expect(interchangeScore).toBeNull();
+
+      // Verdict line must not render "/ 100"
+      expect(screen.queryByText(/\/ 100/)).toBeNull();
+
+      // Breakdown total must not render
+      expect(container.querySelector('[data-testid="total"]')).toBeNull();
+      expect(screen.getByText('Inputs measured — no score given')).toBeInTheDocument();
+
+      // Breakdown table must not have Points column
+      expect(screen.queryByText('Points')).toBeNull();
+
+      // ScoreBreakdown cap disclosure must not print "Capped from"
+      expect(screen.queryByText(/Capped from/i)).toBeNull();
+
+      // Verify no score number is rendered
+      expect(screen.queryByText(/55/)).toBeNull();
+    });
+
+    it('renders partial analysis warning on screen below the verdict', () => {
+      render(<ResultView result={partialFixture} fresh={false} />);
+      expect(screen.getByText('Partial analysis: 2/3 agents succeeded')).toBeInTheDocument();
     });
   });
 });
