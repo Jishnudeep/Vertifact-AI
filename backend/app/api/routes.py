@@ -3,6 +3,7 @@ import logging
 import uuid
 from typing import List
 from fastapi import APIRouter, Request, HTTPException, status
+from pydantic import ValidationError
 from slowapi import Limiter
 from app.api.client_ip import client_ip
 
@@ -15,6 +16,17 @@ logger = logging.getLogger(__name__)
 
 limiter = Limiter(key_func=client_ip)
 router = APIRouter(prefix="/api")
+
+_UNDEFINED_COLUMN = "42703"
+
+
+def _is_undefined_column(exc: Exception) -> bool:
+    """Postgres undefined_column (e.g. migration 07 `featured` not applied yet)."""
+    if getattr(exc, "code", None) == _UNDEFINED_COLUMN:
+        return True
+    err_msg = str(exc)
+    return _UNDEFINED_COLUMN in err_msg or "undefined_column" in err_msg.lower()
+
 
 @router.post(
     "/verify",
@@ -65,29 +77,34 @@ async def get_recent_results_endpoint(request: Request, limit: int = 10):
 
         items = []
         for r in data:
+            row_id = r.get("id")
+            # created_at is required by RecentResultModel: a NULL is skipped rather than served
+            # as a made-up timestamp (str(None) would render as fake recency in the feed).
+            missing = [f for f in ("c_total", "confidence_level", "created_at") if r.get(f) is None]
+            if missing:
+                logger.warning("Skipping recent result row %s: missing %s", row_id, ", ".join(missing))
+                continue
             try:
-                c_total = r.get("c_total")
-                confidence_level = r.get("confidence_level")
-                if c_total is None or confidence_level is None:
-                    continue
                 claims_data = r.get("claims") or {}
                 claim_text = claims_data.get("extracted_claim") or ""
                 items.append(RecentResultModel(
-                    id=str(r.get("id")),
+                    id=str(row_id),
                     claim=claim_text,
-                    c_total=c_total,
+                    c_total=r.get("c_total"),
                     evidence_status=r.get("evidence_status") or "unverified",
-                    confidence_level=confidence_level,
+                    confidence_level=r.get("confidence_level"),
                     created_at=str(r.get("created_at")),
                 ))
+            except ValidationError as row_exc:
+                # Log field names only: pydantic messages embed input values (row contents).
+                fields = sorted({".".join(str(p) for p in e["loc"]) for e in row_exc.errors()})
+                logger.warning("Skipping invalid recent result row %s: invalid %s", row_id, ", ".join(fields))
             except Exception as row_exc:
-                logger.warning(f"Skipping invalid recent result row {r.get('id')}: {row_exc}")
-                continue
+                logger.warning("Skipping recent result row %s: %s", row_id, type(row_exc).__name__)
         return items
     except Exception as exc:
-        err_msg = str(exc)
-        if "42703" in err_msg or "undefined_column" in err_msg.lower():
-            logger.warning(f"Featured column not available in results table (migration 07 pending): {exc}")
+        if _is_undefined_column(exc):
+            logger.warning("Featured column not available in results table (migration 07 pending)")
             return []
         logger.error(f"Error retrieving recent results: {exc}")
         raise HTTPException(

@@ -2,9 +2,14 @@ import json
 from pathlib import Path
 from app.scoring.engine import ScoringEngine
 from app.api.schemas import VerifyResponse, RecentResultModel
+from app.api.result_format import format_stored_result
+from app.utils.errors import degradation_message
 
 fixtures_dir = Path(__file__).resolve().parent.parent.parent / "frontend" / "src" / "fixtures"
 engine = ScoringEngine()
+
+# Mirrors score_node in app/agents/orchestrator.py: one sanitized warning per degraded agent.
+AGENT_LABELS = {"factcheck": "Fact-check", "crossref": "Cross-reference", "linguistic": "Linguistic"}
 
 def build_fixture(
     id_str, claim, s_fact, b_ling, v_consensus, v_refute,
@@ -25,9 +30,12 @@ def build_fixture(
         v_refute=v_refute,
     )
     warnings = list(res.warnings)
+    for agent in agents or []:
+        if agent.get("status") == "degraded":
+            warnings.append(degradation_message(AGENT_LABELS[agent["name"]], agent.get("error_code")))
     if custom_warnings:
         warnings.extend(custom_warnings)
-    
+
     data = {
         "id": id_str,
         "claim": claim,
@@ -257,28 +265,44 @@ cached_data = build_fixture(
 (fixtures_dir / "cached.json").write_text(json.dumps(cached_data, indent=2))
 
 # 7. legacy.json
-leg_sources = [
-    {
-        "url": "https://www.example.com/legacy-news",
-        "title": "Legacy Report on Space Exploration",
-        "publisher": "Example News",
-        "bias_label": "Center",
-        "type": "corroborating",
-        "stance": "supports",
-        "rating": None,
-        "found_by": "crossref",
-    }
-]
-leg_data = build_fixture(
-    "77777777-7777-7777-7777-777777777777",
-    "Historical claim verified prior to Plan 7 architecture upgrades.",
-    0.80, 0.15, 0.65, 0.0,
-    [], leg_sources, False, False,
-    {"clickbait_syntax": 0.05, "emotional_framing": 0.15, "sensationalism": 0.10, "informational_density": 0.75},
-    1300, False, None,
-    "2026-10-15T10:00:00Z",
-    custom_warnings=["Legacy result: scored before stance-aware consensus; treat corroboration as unverified"]
-)
+# A row stored before stance-aware consensus: evidence_status NULL, v_refute NULL, no
+# agent_outputs.scoring, sources without stance/found_by. The only way such a row reaches the
+# client is GET /api/results/{id} -> format_stored_result, so the fixture is produced by it.
+legacy_row = {
+    "id": "77777777-0000-4000-8000-000000000001",
+    "claim_id": "77777777-7777-7777-7777-777777777777",
+    "c_total": 0.765,
+    "s_fact": 0.80,
+    "b_ling": 0.15,
+    "v_consensus": 0.65,
+    "v_refute": None,
+    "weights": {"w1": 0.5, "w2": 0.2, "w3": 0.3},
+    "confidence_level": "medium",
+    "evidence_status": None,
+    "warnings": [],
+    "agent_outputs": None,
+    "linguistic_profile": {
+        "clickbait_syntax": 0.05, "emotional_framing": 0.15,
+        "sensationalism": 0.10, "informational_density": 0.75,
+    },
+    "source_citations": [
+        {
+            "url": "https://www.example.com/legacy-news",
+            "title": "Legacy Report on Space Exploration",
+            "publisher": "Example News",
+            "bias_label": "Center",
+            "type": "corroborating",
+            "rating": None,
+        }
+    ],
+    "processing_time_ms": 1300,
+    "created_at": "2026-10-15T10:00:00Z",
+    "claims": {"extracted_claim": "Historical claim verified prior to Plan 7 architecture upgrades."},
+}
+# Same call and serialization path as get_result_endpoint (response_model=VerifyResponse).
+leg_data = VerifyResponse.model_validate(
+    format_stored_result(legacy_row, legacy_row["claims"]["extracted_claim"], cached=False)
+).model_dump(mode="json")
 (fixtures_dir / "legacy.json").write_text(json.dumps(leg_data, indent=2))
 
 # 8. long_claim.json

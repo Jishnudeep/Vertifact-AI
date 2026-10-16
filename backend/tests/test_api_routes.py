@@ -457,6 +457,134 @@ def test_get_result_sanitizes_raw_degradation_warnings():
         assert "Linguistic check timed out" in warnings
 
 
+def test_format_stored_result_drops_non_string_warnings():
+    """Stored JSONB warnings are untrusted: non-strings must be dropped, not crash the formatter."""
+    from app.api.result_format import format_stored_result
+    row = {
+        "id": "r-1", "claim_id": "c-1", "c_total": 0.5, "s_fact": 0.5, "b_ling": 0.5,
+        "v_consensus": 0.5, "confidence_level": "medium", "evidence_status": "corroborated",
+        "warnings": [None, 42, {"x": 1}, "Low confidence: no fact-checks found",
+                     "Linguistic agent degraded: raw boom"],
+        "agent_outputs": {"linguistic": {"degraded": True, "error_details": {"code": "TIMEOUT"}}},
+    }
+    out = format_stored_result(row, "claim", cached=False)
+    warnings = out["confidence"]["warnings"]
+    assert all(isinstance(w, str) for w in warnings)
+    assert "Low confidence: no fact-checks found" in warnings
+    assert "Linguistic check timed out" in warnings
+    assert not any("agent degraded:" in w for w in warnings)
+
+
+def test_format_stored_result_non_strings_alone_do_not_regenerate_degradation():
+    """Dropping a non-string is not a sanitized degradation string; nothing should be invented."""
+    from app.api.result_format import format_stored_result
+    row = {
+        "id": "r-1", "c_total": 0.5, "s_fact": 0.5, "b_ling": 0.5, "v_consensus": 0.5,
+        "confidence_level": "medium", "evidence_status": "corroborated", "warnings": [None, 7],
+        "agent_outputs": {"linguistic": {"degraded": True, "error_details": {"code": "TIMEOUT"}}},
+    }
+    assert format_stored_result(row, "claim", cached=False)["confidence"]["warnings"] == []
+
+
+def test_get_result_via_claim_id_fallback_returns_claim_id():
+    """GET /api/results/{id} accepts a claim_id: the results.id lookup misses, the claim_id one hits."""
+    claim_uuid = "c1c1c1c1-0000-4000-8000-000000000001"
+    row = {
+        "id": "d2d2d2d2-0000-4000-8000-000000000002", "claim_id": claim_uuid,
+        "c_total": 0.6, "s_fact": 0.5, "b_ling": 0.2, "v_consensus": 0.6,
+        "confidence_level": "medium", "evidence_status": "corroborated", "warnings": [],
+        "claims": {"extracted_claim": "Fallback claim"},
+    }
+    mock_supabase = MagicMock()
+    select = mock_supabase.table.return_value.select.return_value
+    select.eq.return_value.execute.side_effect = [MagicMock(data=[]), MagicMock(data=[row])]
+    with patch("app.api.routes.get_supabase", return_value=mock_supabase):
+        response = client.get(f"/api/results/{claim_uuid}")
+    assert response.status_code == 200
+    assert response.json()["id"] == claim_uuid
+    assert [c.args for c in select.eq.call_args_list] == [("id", claim_uuid), ("claim_id", claim_uuid)]
+
+
+def _recent_supabase(rows):
+    mock_supabase = MagicMock()
+    (mock_supabase.table.return_value.select.return_value.eq.return_value
+     .order.return_value.limit.return_value.execute.return_value) = MagicMock(data=rows)
+    return mock_supabase
+
+
+def _recent_row(**overrides):
+    row = {
+        "id": "good-row", "c_total": 0.75, "evidence_status": "corroborated",
+        "confidence_level": "medium", "created_at": "2026-10-15T12:00:00Z",
+        "claims": {"extracted_claim": "Good row claim"},
+    }
+    row.update(overrides)
+    return row
+
+
+def test_recent_undefined_column_detected_by_error_code():
+    """postgrest APIError exposes `.code`; detection must not depend on the message text."""
+    class FakeAPIError(Exception):
+        code = "42703"
+
+    mock_supabase = MagicMock()
+    (mock_supabase.table.return_value.select.return_value.eq.return_value
+     .order.return_value.limit.return_value.execute.side_effect) = FakeAPIError("column does not exist")
+    with patch("app.api.routes.get_supabase", return_value=mock_supabase):
+        response = client.get("/api/results/recent")
+    assert response.status_code == 200
+    assert response.json() == []
+
+
+def test_recent_other_db_error_is_500():
+    class FakeAPIError(Exception):
+        code = "PGRST301"
+
+    mock_supabase = MagicMock()
+    (mock_supabase.table.return_value.select.return_value.eq.return_value
+     .order.return_value.limit.return_value.execute.side_effect) = FakeAPIError("jwt expired")
+    with patch("app.api.routes.get_supabase", return_value=mock_supabase):
+        response = client.get("/api/results/recent")
+    assert response.status_code == 500
+
+
+def test_recent_skips_row_failing_validation():
+    rows = [_recent_row(id="bogus-row", confidence_level="bogus"), _recent_row()]
+    with patch("app.api.routes.get_supabase", return_value=_recent_supabase(rows)):
+        response = client.get("/api/results/recent")
+    assert response.status_code == 200
+    assert [item["id"] for item in response.json()] == ["good-row"]
+
+
+def test_recent_skips_row_with_null_created_at():
+    """RecentResultModel.created_at is required: a NULL must be skipped, never served as "None"."""
+    rows = [_recent_row(id="no-date", created_at=None), _recent_row()]
+    with patch("app.api.routes.get_supabase", return_value=_recent_supabase(rows)):
+        response = client.get("/api/results/recent")
+    assert response.status_code == 200
+    data = response.json()
+    assert [item["id"] for item in data] == ["good-row"]
+    assert all(item["created_at"] != "None" for item in data)
+
+
+def test_recent_logs_skipped_rows_without_contents(caplog):
+    secret_claim = "SECRET-CLAIM-TEXT"
+    rows = [
+        _recent_row(id="null-score", c_total=None, claims={"extracted_claim": secret_claim}),
+        _recent_row(id="no-date", created_at=None, claims={"extracted_claim": secret_claim}),
+        _recent_row(id="bogus-row", confidence_level="bogus-level", claims={"extracted_claim": secret_claim}),
+    ]
+    with caplog.at_level("DEBUG", logger="app.api.routes"), \
+         patch("app.api.routes.get_supabase", return_value=_recent_supabase(rows)):
+        response = client.get("/api/results/recent")
+    assert response.status_code == 200
+    assert response.json() == []
+    messages = [r.getMessage() for r in caplog.records if r.name == "app.api.routes"]
+    for row_id in ("null-score", "no-date", "bogus-row"):
+        assert any(row_id in m for m in messages), f"no log for skipped row {row_id}: {messages}"
+    assert not any(secret_claim in m or "bogus-level" in m for m in messages)
+
+
 
 
 

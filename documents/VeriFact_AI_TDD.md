@@ -133,7 +133,7 @@ verifact-ai/
 │   │   ├── components/
 │   │   │   ├── ClaimInput.jsx       # Text claim input with char counter
 │   │   │   ├── TransitDiagram.jsx   # SVG verdict interchange diagram
-│   │   │   ├── LinguisticRadar.jsx  # Recharts radar chart
+│   │   │   ├── LanguageRadar.jsx    # Recharts radar chart
 │   │   │   ├── SourceList.jsx       # Grouped source citations with bias labels
 │   │   │   ├── ScoreBreakdown.jsx   # Formula breakdown with weights
 │   │   │   ├── VerdictLine.jsx      # Verdict statement & confidence
@@ -142,7 +142,7 @@ verifact-ai/
 │   │   │   ├── useVerify.js         # API call & verification state
 │   │   │   ├── useResult.js         # Stored result fetch hook
 │   │   │   └── useRecent.js         # Recent featured results fetch hook
-│   │   └── index.css                # Tailwind base + midnight transit design tokens
+│   │   └── styles/globals.css       # Tailwind base + midnight transit design tokens
 │   ├── package.json
 │   └── vite.config.js
 ├── eval/
@@ -303,6 +303,8 @@ Every response carries `X-Process-Time-Ms`. The pipeline runs under a 9.5 s requ
 
 Returns a previously computed result by ID. Used for sharing and direct permalink navigation (`/r/:id`).
 
+`{id}` must be a UUID (anything else is `404`). It is looked up first as `results.id`, then, on a miss, as `results.claim_id`, so both a results-row ID (e.g. from §3.4) and a claim ID (the `id` returned by `POST /api/verify` and cache hits) resolve. The response's `id` is always the row's **`claim_id`** (falling back to `results.id` only if `claim_id` is null), whichever ID was requested.
+
 Formed via the shared `format_stored_result` formatter to maintain strict field parity with `POST /api/verify`, including `agents`, `trust_score.raw_c_total`, `trust_score.cap_rule`, `created_at`, and `sources[].found_by`. Always returns `cached: false` (since it is a stored DB lookup rather than a semantic cache hit). Returns `404` if the ID is not found.
 
 ### 3.4 GET /api/results/recent
@@ -326,7 +328,9 @@ Returns recent featured verification results for the home page feed.
 ]
 ```
 
-Queries `results` joined with `claims` where `featured = true`, ordered by `created_at DESC` up to `limit`. Returns a list of `RecentResultModel` objects with allow-listed summary fields.
+Queries `results` joined with `claims` where `featured = true`, ordered by `created_at DESC` up to `limit`. Returns a list of `RecentResultModel` objects with allow-listed summary fields. Each item's `id` is the **`results.id`** (not the claim ID); it resolves through §3.3's `results.id` lookup, which then returns the `claim_id` as its `id`.
+
+Rows with a null `c_total`, `confidence_level` or `created_at`, or that fail `RecentResultModel` validation, are skipped (logged by row ID only, never row contents) rather than served with made-up values. If the `featured` column does not exist yet (Postgres `42703` undefined_column, migration 07 pending) the endpoint returns `[]`; any other database error is a `500`.
 
 ### 3.5 WS /ws/status/{request_id}
 
@@ -1014,7 +1018,6 @@ When `confidence.evidence_status == "unverified"`, render 'Not enough evidence' 
 4-axis radar chart with axes: Clickbait Syntax, Emotional Framing, Sensationalism, Informational Density.
 - Axis values are scaled $\times 100$ (0.0–1.0 float values mapped to 0–100 integer scale for visualization).
 - Filled area with 30% opacity.
-- Tooltip shows flagged phrases per axis.
 - Degraded state: when the linguistic agent fails or is degraded, renders the fallback text "Language analysis unavailable for this check" with no chart rendered.
 
 ### 9.3 Source Coverage List
@@ -1023,7 +1026,7 @@ Vertical list of source cards grouped by `found_by`:
 - **Fact-Check Sources** (`found_by == "factcheck"`): Reviews from recognized fact-checking organizations.
 - **Corroborating & Context Sources** (`found_by == "crossref"`): Reporting across the political spectrum with AllSides bias ratings.
 
-Each card displays: publisher name, article title (linked with `target="_blank" rel="noopener noreferrer"`), AllSides bias label chip (blue=Left, light blue=Lean Left, gray=Center, light red=Lean Right, red=Right, neutral="Unrated"), type badge (Fact-Check or Corroborating), and stance chip (Supports / Refutes / Neutral).
+Each card displays: publisher name, article title (linked with `target="_blank" rel="noopener noreferrer"`), AllSides bias label chip (blue=Left, light blue=Lean Left, gray=Center, light red=Lean Right, red=Right, neutral="Unrated"), stance chip (Supports / Refutes / Neutral), and the fact-check rating when present. The source type is conveyed by the group heading, not a per-card badge.
 
 Below the source list, render 'Media bias ratings: AllSides.com (CC BY-NC 4.0)' as a link. This is required by the license.
 

@@ -256,7 +256,7 @@ Run a quick sanity check before moving on:
 **Implemented in:** Plan 7 (`docs/superpowers/plans/2026-10-15-frontend-mvp.md`)
 **Depends on:** Step 2.4
 
-1. Build `LinguisticRadar.jsx` — Recharts `<RadarChart>` with 4 axes, values scaled $\times 100$, degraded fallback state.
+1. Build `LanguageRadar.jsx` — Recharts `<RadarChart>` with 4 axes, values scaled $\times 100$, degraded fallback state.
 2. Build `SourceList.jsx` and `SourceRow.jsx` — source cards grouped by `found_by` (`factcheck` vs `crossref`) with `BiasChip.jsx` (AllSides static labels) and `StanceChip.jsx`.
 3. Display required AllSides attribution link ("Media bias ratings: AllSides.com").
 4. Display Google Search Suggestions iframe when `search_suggestions_html` is provided.

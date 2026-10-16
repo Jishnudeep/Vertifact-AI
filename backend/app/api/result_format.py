@@ -1,6 +1,8 @@
 from typing import Dict, Any, List, Optional
 from app.utils.errors import degradation_message
 
+LEGACY_WARNING = "Legacy result: scored before stance-aware consensus; treat corroboration as unverified"
+
 
 def format_stored_result(row: Dict[str, Any], claim_text: str, *, cached: bool) -> Dict[str, Any]:
     """
@@ -33,11 +35,12 @@ def format_stored_result(row: Dict[str, Any], claim_text: str, *, cached: bool) 
         or agent_outputs.get("search_suggestions_html")
     )
 
-    # Sanitize stored warnings: drop raw exception strings matching " agent degraded:"
-    # and regenerate them from agent_outputs using degradation_message.
+    # Sanitize stored warnings: drop non-strings (stored JSONB is untrusted), drop raw exception
+    # strings matching " agent degraded:" and regenerate them from agent_outputs using degradation_message.
     raw_warnings = row.get("warnings") or []
-    sanitized_warnings = [w for w in raw_warnings if " agent degraded:" not in w]
-    if len(sanitized_warnings) < len(raw_warnings):
+    string_warnings = [w for w in raw_warnings if isinstance(w, str)] if isinstance(raw_warnings, list) else []
+    sanitized_warnings = [w for w in string_warnings if " agent degraded:" not in w]
+    if len(sanitized_warnings) < len(string_warnings):
         agent_labels = {
             "factcheck": "Fact-check",
             "crossref": "Cross-reference",
@@ -53,10 +56,7 @@ def format_stored_result(row: Dict[str, Any], claim_text: str, *, cached: bool) 
                     sanitized_warnings.append(msg)
 
     # Legacy warnings: scored before stance-aware consensus (evidence_status is None)
-    legacy_warning = (
-        [] if row.get("evidence_status")
-        else ["Legacy result: scored before stance-aware consensus; treat corroboration as unverified"]
-    )
+    legacy_warning = [] if row.get("evidence_status") else [LEGACY_WARNING]
     warnings = sanitized_warnings + legacy_warning
 
     # Linguistic profile default fallback
