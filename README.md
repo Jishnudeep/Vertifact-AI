@@ -112,9 +112,12 @@ Run tests with `uv run pytest`.
 ```bash
 # 1. Configure environment
 cd frontend
-cp .env.example .env    # sets VITE_API_BASE_URL=http://localhost:8000
+cp .env.example .env    # VITE_API_BASE_URL is empty = same-origin
+# For local dev against the separate backend above, edit .env:
+#   VITE_API_BASE_URL=http://localhost:8000
 
-# 2. Install dependencies & run dev server
+# 2. Install dependencies & run dev server (run from inside frontend/:
+#    Tailwind's content paths are relative to the working directory)
 npm install
 npm run dev
 
@@ -123,7 +126,9 @@ npm test
 npm run build
 ```
 
-The frontend runs locally at `http://localhost:5173`. In development mode, append `?fixture=<name>` (e.g. `?fixture=high_credibility`, `?fixture=unverified`, `?fixture=disputed_capped`) to preview specific credibility states.
+`VITE_API_BASE_URL` empty means the app calls `/api/...` on its own origin, which is the recommended setting for production builds served behind the same origin as the API. Set it to `http://localhost:8000` only for local development against a separately running backend. Never put secrets in it: `VITE_*` values are bundled into the client.
+
+The frontend runs locally at `http://localhost:5173`. In development mode, append `?fixture=<name>` to preview a state from `frontend/src/fixtures/`: `fact_checked`, `corroborated`, `disputed_capped`, `unverified`, `partial`, `cached`, `legacy` or `long_claim` (e.g. `?fixture=fact_checked`).
 
 ## Project status
 
@@ -140,7 +145,7 @@ Realigned on 2026-10-15 ([roadmap](docs/superpowers/specs/2026-10-15-realigned-r
   - the API routes and hardening.
 
   ✅ Plan 6 (Google Search grounding replaces Tavily) completed.
-- ✅ **Frontend MVP (Plan 7):** text input end to end, responsive React dashboard, "Midnight Transit Diagram" design.
+- 🚧 **Frontend MVP (Plan 7), in review (PR #4):** text input end to end, responsive React dashboard, "Midnight Transit Diagram" design. Not merged; the Lighthouse run and the live end-to-end check are not yet recorded.
 - 🔜 **Evaluation:** curated set, DeepEval guardrails, ADK eval over pipeline traces, calibration.
 - 🔜 **Governance, observability & deployment:** tracing, structured logs, agent registry, deploy.
 - 🔜 **URL + screenshot input (Plan 8, last):** scraper and Surya OCR.

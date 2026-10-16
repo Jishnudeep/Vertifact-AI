@@ -37,7 +37,8 @@ export function verdictView(resp) {
     };
   }
 
-  const evidenceStatus = resp.confidence?.evidence_status ?? resp.evidence_status;
+  // VerifyResponse carries evidence_status only under `confidence`.
+  const evidenceStatus = resp.confidence?.evidence_status;
   const isUnverified = evidenceStatus === 'unverified';
   if (isUnverified) {
     return {

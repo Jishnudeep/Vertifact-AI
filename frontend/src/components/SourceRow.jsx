@@ -1,9 +1,14 @@
 import React from 'react';
 import BiasChip from './BiasChip';
 import StanceChip from './StanceChip';
+import { safeHttpUrl } from '../lib/url';
 
 export default function SourceRow({ source }) {
   if (!source) return null;
+
+  const href = safeHttpUrl(source.url);
+  const titleText = source.title || source.url || 'Untitled source';
+  const titleClass = 'text-sm font-medium line-clamp-2 break-words';
 
   return (
     <div className="py-3 border-b border-surface/80 last:border-b-0 flex flex-col gap-1.5">
@@ -19,14 +24,18 @@ export default function SourceRow({ source }) {
           )}
         </div>
       </div>
-      <a
-        href={source.url}
-        target="_blank"
-        rel="noopener noreferrer"
-        className="text-sm font-medium text-sky-300 hover:text-sky-200 hover:underline transition-colors line-clamp-2"
-      >
-        {source.title || source.url}
-      </a>
+      {href ? (
+        <a
+          href={href}
+          target="_blank"
+          rel="noopener noreferrer"
+          className={`${titleClass} text-sky-300 hover:text-sky-200 hover:underline transition-colors`}
+        >
+          {titleText}
+        </a>
+      ) : (
+        <span className={`${titleClass} text-slate-300`}>{titleText}</span>
+      )}
     </div>
   );
 }

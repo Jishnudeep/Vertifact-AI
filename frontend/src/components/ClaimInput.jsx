@@ -1,6 +1,8 @@
 import React from 'react';
 import { ERROR_COPY } from '../lib/copy';
 
+const RETRYABLE_CODES = new Set(['all_agents_failed', 'network']);
+
 export default function ClaimInput({
   value = '',
   onChange,
@@ -27,6 +29,12 @@ export default function ClaimInput({
   let errorMessage = null;
   let isRetryAllowed = false;
 
+  if (!error && isBlocked) {
+    // Lockout restored from a previous mount (useVerify persists it): explain
+    // why submit is disabled even though this mount saw no error.
+    errorMessage = ERROR_COPY.rate_limited;
+  }
+
   if (error) {
     const code =
       error.code ||
@@ -44,10 +52,10 @@ export default function ClaimInput({
       errorMessage = (code && ERROR_COPY[code]) || error.detail || ERROR_COPY.server;
     }
 
-    const nonRetryableCodes = ['invalid_input', 'request_validation', 'non_verifiable_claim', 'not_found'];
-    if (!nonRetryableCodes.includes(code) && error.status !== 422 && error.status !== 400) {
-      isRetryAllowed = true;
-    }
+    // Allow-list (spec §6): only a total agent failure and an unreachable
+    // service offer "Try again". Everything else (input errors, 429, unknown
+    // codes) is fixed by changing the input or waiting, not by resending.
+    isRetryAllowed = RETRYABLE_CODES.has(code);
   }
 
   return (

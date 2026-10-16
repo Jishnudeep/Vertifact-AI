@@ -21,14 +21,34 @@ export default function TransitDiagram({
   const crAgent = agents?.find?.((a) => a.name === 'crossref') || null;
   const lingAgent = agents?.find?.((a) => a.name === 'linguistic') || null;
 
+  // An agent whose status the API did not send (e.g. `agents: []` on an older
+  // stored result) is "unknown": never drawn or described as healthy.
+  function statusOf(agent) {
+    if (isChecking) return 'checking';
+    return agent?.status === 'ok' || agent?.status === 'degraded' ? agent.status : 'unknown';
+  }
+
+  // Line styling per status: healthy = solid, full ink; degraded = dashed and
+  // dimmed; unknown = solid but muted, so it reads as neither healthy nor failed.
+  function lineStyle(agent) {
+    const status = statusOf(agent);
+    return {
+      'data-status': status,
+      strokeDasharray: status === 'degraded' ? '8 6' : undefined,
+      opacity: status === 'degraded' ? 0.5 : status === 'unknown' ? 0.35 : 1,
+    };
+  }
+
   function formatAgentLabel(name, agent) {
     const base = AGENT_LABELS[name] || name;
-    if (isChecking) return base;
+    const status = statusOf(agent);
+    if (status === 'checking') return base;
+    if (status === 'unknown') return `${base} · —`;
     let label = base;
     if (agent?.duration_ms != null) {
       label += ` · ${(agent.duration_ms / 1000).toFixed(1)} s`;
     }
-    if (agent?.status === 'degraded') {
+    if (status === 'degraded') {
       label += ' · Partial';
     }
     return label;
@@ -53,10 +73,13 @@ export default function TransitDiagram({
     ['factcheck', 'crossref', 'linguistic'].forEach((name) => {
       const a = agents?.find?.((item) => item.name === name);
       const label = AGENT_LABELS[name];
-      if (a?.status === 'degraded') {
+      const status = statusOf(a);
+      if (status === 'degraded') {
         summaryParts.push(`${label}: degraded (Partial analysis).`);
-      } else if (a?.status === 'ok') {
+      } else if (status === 'ok') {
         summaryParts.push(`${label}: completed successfully.`);
+      } else {
+        summaryParts.push(`${label}: status not recorded.`);
       }
     });
   }
@@ -97,9 +120,7 @@ export default function TransitDiagram({
           fill="none"
           strokeLinecap="round"
           className={isChecking ? 'transit-checking' : ''}
-          strokeDasharray={!isChecking && fcAgent?.status === 'degraded' ? '8 6' : undefined}
-          opacity={!isChecking && fcAgent?.status === 'degraded' ? 0.5 : 1}
-          data-status={fcAgent?.status || 'ok'}
+          {...lineStyle(fcAgent)}
         />
         {/* Fact-Check Station dot */}
         <circle cx="80" cy="40" r="6" fill="#F4F1EA" stroke="#B9A2F2" strokeWidth="3" />
@@ -119,9 +140,7 @@ export default function TransitDiagram({
           fill="none"
           strokeLinecap="round"
           className={isChecking ? 'transit-checking' : ''}
-          strokeDasharray={!isChecking && crAgent?.status === 'degraded' ? '8 6' : undefined}
-          opacity={!isChecking && crAgent?.status === 'degraded' ? 0.5 : 1}
-          data-status={crAgent?.status || 'ok'}
+          {...lineStyle(crAgent)}
         />
         {/* Cross-Ref Station dots */}
         <circle cx="70" cy="150" r="6" fill="#F4F1EA" stroke="#2BB3A3" strokeWidth="3" />
@@ -149,9 +168,7 @@ export default function TransitDiagram({
           fill="none"
           strokeLinecap="round"
           className={isChecking ? 'transit-checking' : ''}
-          strokeDasharray={!isChecking && lingAgent?.status === 'degraded' ? '8 6' : undefined}
-          opacity={!isChecking && lingAgent?.status === 'degraded' ? 0.5 : 1}
-          data-status={lingAgent?.status || 'ok'}
+          {...lineStyle(lingAgent)}
         />
         {/* Linguistic Station dot */}
         <circle cx="90" cy="260" r="6" fill="#F4F1EA" stroke="#0F1B3D" strokeWidth="3" />

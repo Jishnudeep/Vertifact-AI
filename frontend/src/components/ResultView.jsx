@@ -57,11 +57,11 @@ export default function ResultView({ result, fresh = false }) {
           <VerdictLine
             verdict={verdict}
             confidence={result.confidence}
-            warnings={result.confidence?.warnings ?? result.warnings ?? []}
+            warnings={result.confidence?.warnings ?? []}
           />
           <ScoreBreakdown
             trustScore={result.trust_score}
-            evidenceStatus={result.confidence?.evidence_status ?? result.evidence_status}
+            evidenceStatus={result.confidence?.evidence_status}
             agents={result.agents || []}
           />
         </div>

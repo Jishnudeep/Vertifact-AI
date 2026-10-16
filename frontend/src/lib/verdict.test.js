@@ -54,6 +54,17 @@ describe('verdict logic', () => {
       expect(view.colorToken).toBe('verdict-false');
     });
 
+    it('reads evidence_status only from confidence (no top-level legacy fallback)', () => {
+      const { evidence_status: _e, ...confidenceWithout } = factCheckedFixture.confidence;
+      const view = verdictView({
+        ...factCheckedFixture,
+        confidence: confidenceWithout,
+        evidence_status: 'unverified',
+      });
+      expect(view.showScore).toBe(true);
+      expect(view.score).toBe(94);
+    });
+
     it('handles fact-checked true result', () => {
       const view = verdictView(factCheckedFixture);
       expect(view.disputed).toBe(false);

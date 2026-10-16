@@ -18,7 +18,8 @@
   "confidence": {
     "level": "medium",
     "warnings": [
-      "Partial analysis: 2/3 agents succeeded"
+      "Partial analysis: 2/3 agents succeeded",
+      "Linguistic check timed out"
     ],
     "verdict_found": false,
     "evidence_status": "corroborated"

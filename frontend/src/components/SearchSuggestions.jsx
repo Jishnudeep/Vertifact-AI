@@ -11,9 +11,12 @@ export default function SearchSuggestions({ html }) {
         </h3>
       </div>
       <div className="w-full min-h-[140px] rounded-lg overflow-hidden bg-white/5">
+        {/* Sandbox is exactly the two tokens spec §5.1 allows. Height is fixed:
+            without allow-same-origin the parent cannot read the frame's
+            document to measure and fit its content height. */}
         <iframe
           title="Related Google searches"
-          sandbox="allow-popups allow-popups-to-escape-sandbox allow-top-navigation-by-user-activation"
+          sandbox="allow-popups allow-popups-to-escape-sandbox"
           srcDoc={html}
           className="w-full min-h-[140px] border-none"
         />

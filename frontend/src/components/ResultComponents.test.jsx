@@ -11,6 +11,27 @@ import SearchSuggestions from './SearchSuggestions';
 import ResultFooter from './ResultFooter';
 import ResultView from './ResultView';
 import VerdictLine from './VerdictLine';
+import SourceRow from './SourceRow';
+import { RadarAxisTick } from './LanguageRadar';
+import { score100, verdictView } from '../lib/verdict';
+
+// Any verdict-band or alarm hue. Spec §3: verdict colour appears only on the
+// interchange ring and the verdict word, so chips and notes must not use it.
+const VERDICT_HUE = /amber|red-|rose|emerald|green|yellow|orange|#DC2626|#F59E0B|#10B981/i;
+
+function baseSource(overrides = {}) {
+  return {
+    url: 'https://example.com/story',
+    title: 'Example story',
+    publisher: 'Example Pub',
+    bias_label: 'Center',
+    type: 'corroborating',
+    stance: null,
+    rating: null,
+    found_by: 'crossref',
+    ...overrides,
+  };
+}
 
 import factCheckedFixture from '../fixtures/fact_checked.json';
 import unverifiedFixture from '../fixtures/unverified.json';
@@ -62,6 +83,109 @@ describe('Result Components', () => {
 
       expect(screen.getByText(/Capped from 43 to 33/i)).toBeInTheDocument();
       expect(screen.getByText(/Reputable sources contradict this claim/i)).toBeInTheDocument();
+    });
+
+    it.each([
+      ['disputed_capped', disputedFixture],
+      ['unverified', unverifiedFixture],
+      ['partial', partialFixture],
+      ['cached (false_verdict)', cachedFixture],
+    ])('cap note uses neutral styling, never a verdict hue (%s)', (_name, fixture) => {
+      render(
+        <ScoreBreakdown
+          trustScore={fixture.trust_score}
+          evidenceStatus={fixture.confidence.evidence_status}
+          agents={fixture.agents}
+        />
+      );
+      const capNote = screen.getByTestId('cap-note');
+      expect(capNote.className).not.toMatch(VERDICT_HUE);
+      capNote.querySelectorAll('*').forEach((el) => {
+        expect(el.getAttribute('class') || '').not.toMatch(VERDICT_HUE);
+      });
+    });
+
+    it('shows "—" (not "ok") for every agent status when agents is []', () => {
+      render(
+        <ScoreBreakdown
+          trustScore={factCheckedFixture.trust_score}
+          evidenceStatus={factCheckedFixture.confidence.evidence_status}
+          agents={[]}
+        />
+      );
+      ['factcheck', 'crossref', 'linguistic'].forEach((name) => {
+        const cell = screen.getByTestId(`status-${name}`);
+        expect(cell).toHaveTextContent('—');
+        expect(cell).not.toHaveTextContent(/ok/i);
+      });
+      expect(screen.queryByText('ok')).toBeNull();
+    });
+
+    it('still shows "ok" and "Partial" for known statuses', () => {
+      render(
+        <ScoreBreakdown
+          trustScore={partialFixture.trust_score}
+          evidenceStatus={partialFixture.confidence.evidence_status}
+          agents={partialFixture.agents}
+        />
+      );
+      const statuses = ['factcheck', 'crossref', 'linguistic'].map(
+        (name) => screen.getByTestId(`status-${name}`).textContent
+      );
+      expect(statuses).toContain('Partial');
+      expect(statuses).toContain('ok');
+    });
+
+    it('does not invent weights when trust_score.weights lacks a key', () => {
+      const trustScore = {
+        ...factCheckedFixture.trust_score,
+        weights: { w1: 0.5, w3: 0.3 },
+      };
+      const { container } = render(
+        <ScoreBreakdown
+          trustScore={trustScore}
+          evidenceStatus={factCheckedFixture.confidence.evidence_status}
+          agents={factCheckedFixture.agents}
+        />
+      );
+      // The old fallback silently printed the default 0.20 for w2.
+      expect(container.textContent).not.toContain('0.20');
+      expect(container.querySelector('code').textContent).toContain('— · (1 − B_ling)');
+    });
+  });
+
+  describe('SourceRow URL scheme guard', () => {
+    it.each([
+      ['https', 'https://example.com/story'],
+      ['http', 'http://example.com/story'],
+    ])('renders an %s URL as a new-tab link', (_scheme, url) => {
+      render(<SourceRow source={baseSource({ url })} />);
+      const link = screen.getByRole('link', { name: 'Example story' });
+      expect(link).toHaveAttribute('href', url);
+      expect(link).toHaveAttribute('target', '_blank');
+      expect(link).toHaveAttribute('rel', 'noopener noreferrer');
+    });
+
+    it.each([
+      ['javascript:', 'javascript:alert(document.cookie)'],
+      ['javascript: (mixed case, padded)', '  JaVaScRiPt:alert(1)'],
+      ['data:', 'data:text/html,<script>alert(1)</script>'],
+      ['vbscript:', 'vbscript:msgbox(1)'],
+      ['malformed', 'ht!tp://not a url'],
+      ['relative', '/relative/path'],
+      ['null', null],
+    ])('renders %s URL as plain text with no href', (_name, url) => {
+      const { container } = render(<SourceRow source={baseSource({ url })} />);
+      expect(screen.queryByRole('link')).toBeNull();
+      expect(container.querySelector('[href]')).toBeNull();
+      expect(screen.getByText('Example story')).toBeInTheDocument();
+    });
+
+    it('shows the raw URL text (inert) when an unsafe URL has no title', () => {
+      const url = 'javascript:alert(1)';
+      const { container } = render(<SourceRow source={baseSource({ url, title: null })} />);
+      expect(container.querySelector('[href]')).toBeNull();
+      expect(screen.getByText(url)).toBeInTheDocument();
     });
   });
 
@@ -146,6 +270,26 @@ describe('Result Components', () => {
       expect(screen.getByText('Likely false')).toBeInTheDocument();
       expect(screen.getByText('Disputed')).toBeInTheDocument();
     });
+
+    it('Disputed chip is a neutral outline chip, not a verdict hue; verdict word keeps its band colour', () => {
+      const verdict = verdictView(disputedFixture);
+      render(
+        <VerdictLine
+          verdict={verdict}
+          confidence={disputedFixture.confidence}
+          warnings={disputedFixture.confidence.warnings}
+        />
+      );
+      const chip = screen.getByText('Disputed');
+      expect(chip.className).not.toMatch(VERDICT_HUE);
+      expect(chip.className).toMatch(/\bborder\b/);
+      expect(chip.className).toMatch(/bg-transparent/);
+      // The first warning is also not a verdict-coloured box.
+      const warning = screen.getByText(disputedFixture.confidence.warnings[0]);
+      expect(warning.className).not.toMatch(VERDICT_HUE);
+      // The verdict word is one of the two places the band colour is allowed.
+      expect(screen.getByText('Likely false').className).toContain('#DC2626');
+    });
   });
 
   describe('LanguageRadar', () => {
@@ -176,6 +320,54 @@ describe('Result Components', () => {
       ).toBeInTheDocument();
       expect(container.querySelector('.recharts-responsive-container')).toBeNull();
     });
+
+    it('reads emotional_framing only (no emotional_tone fallback)', () => {
+      const profile = {
+        clickbait_syntax: 0.11,
+        emotional_tone: 0.93,
+        sensationalism: 0.12,
+        informational_density: 0.14,
+      };
+      const { container } = render(<LanguageRadar profile={profile} isDegraded={false} />);
+      expect(container.textContent).not.toContain('93');
+    });
+
+    describe('RadarAxisTick (clipping guard at 375px)', () => {
+      function renderTick(props) {
+        return render(
+          <svg>
+            <RadarAxisTick x={100} y={100} fill="#F4F1EA" {...props} />
+          </svg>
+        );
+      }
+
+      it.each([
+        ['Informational Density', 'end', ['Informational', 'Density']],
+        ['Emotional Framing', 'start', ['Emotional', 'Framing']],
+      ])('wraps the side label "%s" onto two lines', (value, textAnchor, lines) => {
+        const { container } = renderTick({
+          payload: { value },
+          textAnchor,
+          verticalAnchor: 'middle',
+        });
+        const text = container.querySelector('text');
+        const tspans = [...container.querySelectorAll('tspan')].map((t) => t.textContent);
+        expect(tspans).toEqual(lines);
+        expect(text.getAttribute('text-anchor')).toBe(textAnchor);
+        // Font never shrinks below the 11px station-label floor (spec §7).
+        expect(Number(text.getAttribute('font-size'))).toBeGreaterThanOrEqual(11);
+      });
+
+      it('keeps top/bottom labels on one line', () => {
+        const { container } = renderTick({
+          payload: { value: 'Clickbait Syntax' },
+          textAnchor: 'middle',
+          verticalAnchor: 'end',
+        });
+        const tspans = [...container.querySelectorAll('tspan')].map((t) => t.textContent);
+        expect(tspans).toEqual(['Clickbait Syntax']);
+      });
+    });
   });
 
   describe('SearchSuggestions', () => {
@@ -186,9 +378,10 @@ describe('Result Components', () => {
       const iframe = screen.getByTitle('Related Google searches');
       expect(iframe).toBeInTheDocument();
       const sandbox = iframe.getAttribute('sandbox');
-      expect(sandbox).toBe(
-        'allow-popups allow-popups-to-escape-sandbox allow-top-navigation-by-user-activation'
-      );
+      // Spec §5.1: exactly these two tokens, nothing else (no top navigation,
+      // no scripts, no same-origin).
+      expect(sandbox).toBe('allow-popups allow-popups-to-escape-sandbox');
+      expect(sandbox).not.toContain('allow-top-navigation');
       expect(sandbox).not.toContain('allow-scripts');
       expect(sandbox).not.toContain('allow-same-origin');
       expect(iframe.getAttribute('srcdoc')).toBe(html);
@@ -279,8 +472,28 @@ describe('Result Components', () => {
       // Cap copy should still show in TransitDiagram and ScoreBreakdown
       expect(screen.getAllByText('No fact-check and little coverage').length).toBeGreaterThanOrEqual(1);
 
-      // Verify no score number is rendered
-      expect(screen.queryByText(/55/)).toBeNull();
+      // No composite score anywhere: neither the capped c_total (0.55 -> 55)
+      // nor the pre-cap raw_c_total (0.56 -> 56).
+      expect(score100(unverifiedFixture.trust_score.c_total)).toBe(55);
+      expect(score100(unverifiedFixture.trust_score.raw_c_total)).toBe(56);
+      expect(container.textContent).not.toMatch(/\b55\b|\b56\b/);
+      const transitSummary = container.querySelector('#transit-summary');
+      expect(transitSummary.textContent).not.toMatch(/\b55\b|\b56\b/);
+    });
+
+    it('ignores non-contract top-level warnings / evidence_status (no legacy fallback)', () => {
+      // Real VerifyResponse shape carries these only under `confidence`.
+      const { confidence, ...rest } = factCheckedFixture;
+      const { warnings: _w, evidence_status: _e, ...confidenceWithout } = confidence;
+      const offContract = {
+        ...rest,
+        confidence: confidenceWithout,
+        warnings: ['Off-contract top-level warning'],
+        evidence_status: 'unverified',
+      };
+      render(<ResultView result={offContract} fresh={false} />);
+      expect(screen.queryByText('Off-contract top-level warning')).toBeNull();
+      expect(screen.queryByText('Inputs measured — no score given')).toBeNull();
     });
 
     it('renders partial analysis warning on screen below the verdict', () => {

@@ -18,8 +18,10 @@ export default function VerdictLine({ verdict, confidence, warnings = [] }) {
           <h2 className={`text-3xl font-extrabold tracking-tight ${colorClass}`}>
             {verdict.label}
           </h2>
+          {/* Neutral outline chip: verdict colour is reserved for the
+              interchange ring and the verdict word (spec §3). */}
           {verdict.disputed && (
-            <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold uppercase tracking-wider border border-amber-600/70 text-amber-400 bg-amber-950/20">
+            <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold uppercase tracking-wider border border-porcelain/60 text-porcelain bg-transparent">
               Disputed
             </span>
           )}
@@ -32,9 +34,9 @@ export default function VerdictLine({ verdict, confidence, warnings = [] }) {
       </div>
 
       {warnings && warnings.length > 0 && (
-        <div className="mt-1 p-3 rounded-lg bg-amber-950/30 border border-amber-800/40 text-amber-200 text-xs">
+        <p className="mt-1 p-3 rounded-lg bg-midnight/60 border border-slate-600 border-l-4 border-l-porcelain text-porcelain font-semibold text-xs">
           {warnings[0]}
-        </div>
+        </p>
       )}
     </div>
   );

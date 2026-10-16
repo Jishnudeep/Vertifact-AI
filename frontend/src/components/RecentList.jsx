@@ -9,9 +9,12 @@ const DOT_COLORS = {
   unverified: 'bg-[#8A94B0]',
 };
 
+// Returns null when created_at is missing or unparseable: the row then shows
+// no time at all rather than a made-up "just now".
 function formatRelativeTime(dateString) {
-  if (!dateString) return '';
+  if (!dateString) return null;
   const date = new Date(dateString);
+  if (Number.isNaN(date.getTime())) return null;
   const now = new Date();
   const diffMs = now - date;
   const diffSec = Math.floor(diffMs / 1000);

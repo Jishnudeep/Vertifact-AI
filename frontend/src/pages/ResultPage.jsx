@@ -1,5 +1,5 @@
 import React from 'react';
-import { useParams, Link, useLocation } from 'react-router-dom';
+import { useParams, Link } from 'react-router-dom';
 import { useResult } from '../hooks/useResult';
 import AppHeader from '../components/AppHeader';
 import ResultView from '../components/ResultView';
@@ -7,10 +7,14 @@ import ErrorNotice from '../components/ErrorNotice';
 
 export default function ResultPage() {
   const { id } = useParams();
-  const location = useLocation();
-  const { status, result, error } = useResult(id);
+  // Keyed by id: a different result always starts from a clean hand-off/fetch.
+  return <ResultScreen key={id} id={id} />;
+}
 
-  const fresh = location.state?.fresh ?? false;
+function ResultScreen({ id }) {
+  // `fresh` is true only for the render that follows a submit; reloads and
+  // revisits get false, so the footer reads "Checked on", not "Cached result".
+  const { status, result, error, fresh } = useResult(id);
 
   return (
     <div className="min-h-screen bg-midnight text-porcelain flex flex-col">

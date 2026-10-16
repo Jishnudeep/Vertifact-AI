@@ -1,10 +1,30 @@
 import { useState, useEffect } from 'react';
-import { useLocation } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { getResult } from '../lib/api';
 
+/**
+ * Loads a result for /r/:id.
+ *
+ * A fresh submit hands its response over in navigation state
+ * ({ result, fresh: true }) so the page renders without a refetch and can say
+ * "Cached result" when the submit was answered from the cache. That hand-off
+ * is read once, at mount, and then removed from the history entry: browsers
+ * keep history state across reloads and back/forward, and a revisit must read
+ * the stored copy ("Checked on <date>", spec §5.1), not the fresh-submit view.
+ *
+ * Callers should key the component by `id` so a new id starts clean.
+ */
 export function useResult(id) {
   const location = useLocation();
-  const stateResult = location.state?.result;
+  const navigate = useNavigate();
+
+  const [handoff] = useState(() => {
+    const navState = location.state;
+    if (id && navState?.result && navState.result.id === id) {
+      return { result: navState.result, fresh: navState.fresh === true };
+    }
+    return null;
+  });
 
   const [state, setState] = useState(() => {
     if (!id) {
@@ -14,14 +34,24 @@ export function useResult(id) {
         error: { status: 404, message: 'Result not found' },
       };
     }
-    if (stateResult && stateResult.id === id) {
-      return { status: 'done', result: stateResult, error: null };
+    if (handoff) {
+      return { status: 'done', result: handoff.result, error: null };
     }
     return { status: 'loading', result: null, error: null };
   });
 
+  // Consume the hand-off: replace the current entry with the same URL and no
+  // state, so a reload or a later revisit of this entry fetches the stored copy.
+  const hasNavState = location.state != null;
+  const { pathname, search, hash } = location;
   useEffect(() => {
-    if (!id || (stateResult && stateResult.id === id)) {
+    if (hasNavState) {
+      navigate({ pathname, search, hash }, { replace: true, state: null });
+    }
+  }, [hasNavState, pathname, search, hash, navigate]);
+
+  useEffect(() => {
+    if (!id || handoff) {
       return;
     }
 
@@ -42,7 +72,7 @@ export function useResult(id) {
     return () => {
       isCancelled = true;
     };
-  }, [id, stateResult]);
+  }, [id, handoff]);
 
-  return state;
+  return { ...state, fresh: handoff?.fresh ?? false };
 }

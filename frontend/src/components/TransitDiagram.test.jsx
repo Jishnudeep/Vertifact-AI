@@ -102,6 +102,52 @@ describe('TransitDiagram', () => {
     expect(container.textContent).not.toMatch(/·\s*\d+(\.\d+)?\s*s/);
   });
 
+  it('draws no healthy line when agent status is unknown (agents: [])', () => {
+    const verdict = verdictView(factCheckedFixture);
+    const { container } = render(
+      <TransitDiagram
+        mode="result"
+        agents={[]}
+        verdict={verdict}
+        capRule={factCheckedFixture.trust_score.cap_rule}
+      />
+    );
+
+    // No line may claim to be healthy when the API gave no status.
+    expect(container.querySelector('[data-status="ok"]')).toBeNull();
+    const lines = container.querySelectorAll('[data-status]');
+    expect(lines).toHaveLength(3);
+    lines.forEach((line) => {
+      expect(line.getAttribute('data-status')).toBe('unknown');
+      // Muted, but not the dashed "degraded" pattern.
+      expect(Number(line.getAttribute('opacity'))).toBeLessThan(1);
+      expect(line.getAttribute('stroke-dasharray')).toBeNull();
+    });
+
+    // Labels carry the neutral "—" marker; the summary never says "completed successfully".
+    expect(container.textContent).toContain('Fact-Check · —');
+    expect(container.textContent).toContain('Cross-Ref · —');
+    expect(container.textContent).toContain('Linguistic · —');
+    const summary = container.querySelector('#transit-summary').textContent;
+    expect(summary).not.toContain('completed successfully');
+    expect(summary).toContain('Fact-Check: status not recorded.');
+  });
+
+  it('keeps healthy lines solid at full opacity when status is ok', () => {
+    const verdict = verdictView(factCheckedFixture);
+    const { container } = render(
+      <TransitDiagram
+        mode="result"
+        agents={factCheckedFixture.agents}
+        verdict={verdict}
+        capRule={factCheckedFixture.trust_score.cap_rule}
+      />
+    );
+    const lines = container.querySelectorAll('[data-status="ok"]');
+    expect(lines).toHaveLength(3);
+    lines.forEach((line) => expect(line.getAttribute('opacity')).toBe('1'));
+  });
+
   it('renders verdict.label rather than DISPUTED inside interchange circle, and cap note is clear of tracks (y >= 265)', async () => {
     const disputedFixture = (await import('../fixtures/disputed_capped.json')).default;
     const verdict = verdictView(disputedFixture);
