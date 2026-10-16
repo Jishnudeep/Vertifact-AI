@@ -73,7 +73,7 @@ async def test_one_agent_raising_does_not_cancel_its_siblings():
     assert sorted(finished) == ["crossref", "linguistic"]
     warnings = result["confidence"]["warnings"]
     assert any("Partial analysis: 2/3" in w for w in warnings)
-    assert any(w.startswith("Fact-check agent degraded") for w in warnings)
+    assert any(w == "Fact-check check failed" for w in warnings)
     assert result["cached"] is False
 
 
@@ -97,7 +97,7 @@ async def test_agent_ignoring_its_budget_hits_the_adk_node_backstop(monkeypatch)
 
     warnings = result["confidence"]["warnings"]
     assert any("Partial analysis: 2/3" in w for w in warnings)
-    assert any("Fact-check agent degraded" in w and "timed out" in w for w in warnings)
+    assert any(w == "Fact-check check timed out" for w in warnings)
     # ADK's NodeTimeoutError is not a TimeoutError subclass; it must still classify as TIMEOUT.
     fc_out = insert.call_args.kwargs["agent_outputs"]["factcheck"]
     assert fc_out["error_details"]["code"] == ProviderErrorCode.TIMEOUT.value
@@ -119,7 +119,7 @@ async def test_agent_ignoring_its_budget_is_cut_off_at_the_request_budget(monkey
     elapsed = time.perf_counter() - start
 
     assert elapsed < 1.0 + orchestrator.AGENT_GRACE_S + 1.0
-    assert any("Fact-check agent degraded" in w and "timed out" in w
+    assert any(w == "Fact-check check timed out"
                for w in result["confidence"]["warnings"])
 
 
@@ -186,7 +186,7 @@ async def test_wrong_result_type_degrades_that_agent_only():
         _patches(stack, AsyncMock(return_value=fc), AsyncMock(return_value={"not": "a result"}),
                  AsyncMock(return_value=ling))
         result = await verify_claim(CLAIM)
-    assert any("Cross-reference agent degraded" in w for w in result["confidence"]["warnings"])
+    assert any(w == "Cross-reference check failed" for w in result["confidence"]["warnings"])
     assert result["trust_score"]["v_consensus"] == 0.0
 
 
@@ -236,8 +236,10 @@ async def test_provider_error_classification_survives_the_node_wrapper():
     with ExitStack() as stack:
         _patches(stack, AsyncMock(return_value=fc), AsyncMock(side_effect=quota), AsyncMock(return_value=ling))
         result = await verify_claim(CLAIM)
-    assert any("Cross-reference agent degraded" in w and "(gemini_search)" in w
-               for w in result["confidence"]["warnings"])
+    assert any(w == "Cross-reference check quota exhausted" for w in result["confidence"]["warnings"])
+    cr_status = next(a for a in result["agents"] if a["name"] == "crossref")
+    assert cr_status["status"] == "degraded"
+    assert cr_status["error_code"] == "QUOTA_EXHAUSTED"
 
 
 @pytest.mark.anyio
@@ -291,4 +293,107 @@ async def test_search_suggestions_survive_cache_hit():
         result = await verify_claim(CLAIM)
     assert result["cached"] is True
     assert result["search_suggestions_html"] == "<div>Cached Suggestions</div>"
+
+
+@pytest.mark.anyio
+async def test_response_has_agent_status_and_durations():
+    fc, cr, ling = _ok_results()
+    with ExitStack() as stack:
+        _patches(stack, AsyncMock(return_value=fc), AsyncMock(return_value=cr), AsyncMock(return_value=ling))
+        result = await verify_claim(CLAIM)
+    agents = result.get("agents")
+    assert agents is not None
+    assert len(agents) == 3
+    assert [a["name"] for a in agents] == ["factcheck", "crossref", "linguistic"]
+    for a in agents:
+        assert a["status"] == "ok"
+        assert a["error_code"] is None
+        assert isinstance(a["duration_ms"], int) and a["duration_ms"] >= 0
+
+
+@pytest.mark.anyio
+async def test_degraded_agent_status_and_code():
+    fc, cr, ling = _ok_results()
+    with ExitStack() as stack:
+        _patches(stack, AsyncMock(return_value=fc), AsyncMock(side_effect=TimeoutError("timed out")), AsyncMock(return_value=ling))
+        result = await verify_claim(CLAIM)
+    agents = result["agents"]
+    cr_agent = next(a for a in agents if a["name"] == "crossref")
+    assert cr_agent["status"] == "degraded"
+    assert cr_agent["error_code"] == "TIMEOUT"
+    assert isinstance(cr_agent["duration_ms"], int) and cr_agent["duration_ms"] >= 0
+
+
+@pytest.mark.anyio
+async def test_unknown_error_text_never_in_warnings():
+    fc, cr, ling = _ok_results()
+    with ExitStack() as stack:
+        _patches(stack, AsyncMock(return_value=fc), AsyncMock(return_value=cr), AsyncMock(side_effect=RuntimeError("secret-path /etc/x")))
+        result = await verify_claim(CLAIM)
+    warnings = result["confidence"]["warnings"]
+    assert not any("secret-path" in w for w in warnings)
+    assert any(w == "Linguistic check failed" for w in warnings)
+
+
+@pytest.mark.anyio
+async def test_found_by_marks_layer2_results_as_factcheck():
+    fc, cr, ling = _ok_results()
+    fc.all_matches = [{
+        "url": "https://example.com/article",
+        "claim_reviewed": "Article title",
+        "publisher": "Example News",
+        "rating": "Web Search Result",
+        "domain": "example.com",
+    }]
+    cr.sources_found = [{
+        "url": "https://reuters.com/news",
+        "title": "Reuters Article",
+        "publisher": "Reuters",
+        "bias_label": "Center",
+        "stance": "supports",
+    }]
+    with ExitStack() as stack:
+        _patches(stack, AsyncMock(return_value=fc), AsyncMock(return_value=cr), AsyncMock(return_value=ling))
+        result = await verify_claim(CLAIM)
+    sources = result["sources"]
+    fc_src = next(s for s in sources if s["url"] == "https://example.com/article")
+    cr_src = next(s for s in sources if s["url"] == "https://reuters.com/news")
+    assert fc_src["type"] == "corroborating"
+    assert fc_src["found_by"] == "factcheck"
+    assert cr_src["found_by"] == "crossref"
+
+
+@pytest.mark.anyio
+async def test_cap_fields_in_response():
+    fc, cr, ling = _ok_results()
+    ling.degraded = True
+    fc.s_fact_score = 0.9
+    cr.v_consensus_score = 0.8
+    with ExitStack() as stack:
+        _patches(stack, AsyncMock(return_value=fc), AsyncMock(return_value=cr), AsyncMock(side_effect=RuntimeError("ling fail")))
+        result = await verify_claim(CLAIM)
+    ts = result["trust_score"]
+    assert ts["cap_rule"] == "partial_analysis"
+    assert ts["raw_c_total"] is not None
+    assert ts["raw_c_total"] > ts["c_total"]
+    assert ts["c_total"] == 0.50
+
+
+@pytest.mark.anyio
+async def test_agent_outputs_persist_durations_and_scoring():
+    fc, cr, ling = _ok_results()
+    with ExitStack() as stack:
+        _patches(stack, AsyncMock(return_value=fc), AsyncMock(return_value=cr), AsyncMock(return_value=ling))
+        insert_mock = AsyncMock(return_value="id-persist")
+        stack.enter_context(patch("app.agents.orchestrator.insert_cache", new=insert_mock))
+        await verify_claim(CLAIM)
+    assert insert_mock.called
+    kwargs = insert_mock.call_args.kwargs
+    agent_outputs = kwargs["agent_outputs"]
+    assert "crossref" in agent_outputs
+    assert isinstance(agent_outputs["crossref"]["duration_ms"], int)
+    assert "scoring" in agent_outputs
+    assert "cap_rule" in agent_outputs["scoring"]
+    assert "raw_c_total" in agent_outputs["scoring"]
+
 

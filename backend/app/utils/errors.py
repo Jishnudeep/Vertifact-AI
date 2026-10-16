@@ -41,6 +41,30 @@ class AgentErrorDetails:
         d["code"] = self.code.value
         return d
 
+_DEGRADATION_MESSAGES: Dict[str, str] = {
+    ProviderErrorCode.RATE_LIMIT.value: "{agent_label} check rate limited",
+    ProviderErrorCode.QUOTA_EXHAUSTED.value: "{agent_label} check quota exhausted",
+    ProviderErrorCode.AUTH_ERROR.value: "{agent_label} authentication failed",
+    ProviderErrorCode.MODEL_NOT_FOUND.value: "{agent_label} model unavailable",
+    ProviderErrorCode.TIMEOUT.value: "{agent_label} check timed out",
+    ProviderErrorCode.SERVICE_UNAVAILABLE.value: "{agent_label} service unavailable",
+    ProviderErrorCode.PARSE_ERROR.value: "{agent_label} response could not be parsed",
+    ProviderErrorCode.UNKNOWN.value: "{agent_label} check failed",
+}
+
+def degradation_message(agent_label: str, error_code: Optional[str]) -> str:
+    """
+    Returns a fixed sanitized degradation message per error code.
+    UNKNOWN or None returns f"{agent_label} check failed".
+    Never includes raw exception text.
+    """
+    if not error_code:
+        return f"{agent_label} check failed"
+    template = _DEGRADATION_MESSAGES.get(error_code)
+    if template:
+        return template.format(agent_label=agent_label)
+    return f"{agent_label} check failed"
+
 def _display_name(provider: str) -> str:
     """'gemini_search' -> 'Gemini search', 'google_factcheck' -> 'Google factcheck'."""
     return provider.replace("_", " ").strip().capitalize() or "Provider"

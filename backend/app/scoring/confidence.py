@@ -1,4 +1,4 @@
-from typing import List, Tuple
+from typing import List, Tuple, Optional
 
 # Stance-aware thresholds (C1 / D2). Track 3.1: calibrate against the eval set (Plan 3).
 CORROBORATED_MIN = 0.3      # v_consensus at/above this counts as real corroboration
@@ -6,6 +6,56 @@ DISPUTED_REFUTE_MIN = 0.3   # v_refute at/above this, AND above v_consensus, mar
 DISPUTED_CAP = 0.33         # top of the red gauge band (TDD §9.1: 0-33 = likely false)
 
 EVIDENCE_STATUSES = ("fact_checked", "disputed", "corroborated", "unverified")
+CAP_RULES = ("false_verdict", "disputed", "partial_analysis", "low_evidence")
+
+
+def binding_cap_rule(
+    c_total_raw: float,
+    s_fact: float,
+    v_consensus: float,
+    agents_succeeded: int,
+    total_agents: int = 3,
+    fact_check_found: bool = False,
+    verdict_found: bool = False,
+    v_refute: float = 0.0,
+) -> Optional[str]:
+    """
+    Returns the rule whose cap is the lowest value below c_total_raw, or None if uncapped.
+    Tie-break order follows CAP_RULES.
+    """
+    disputed = is_disputed(v_consensus, v_refute, verdict_found)
+    candidates = []
+
+    # Rule 3: Confirmed False Verdict Dominance Cap
+    if verdict_found and s_fact <= 0.25:
+        cap = min(s_fact + 0.15, 0.25)
+        if cap < c_total_raw:
+            candidates.append(("false_verdict", cap))
+
+    # Rule 4: Disputed Cap
+    if disputed:
+        cap = DISPUTED_CAP
+        if cap < c_total_raw:
+            candidates.append(("disputed", cap))
+
+    # Rule 1: Partial analysis cap
+    if agents_succeeded < total_agents:
+        cap = 0.50
+        if cap < c_total_raw:
+            candidates.append(("partial_analysis", cap))
+
+    # Rule 2: Low evidence cap
+    if not fact_check_found and v_consensus < CORROBORATED_MIN and not disputed:
+        cap = 0.55
+        if cap < c_total_raw:
+            candidates.append(("low_evidence", cap))
+
+    if not candidates:
+        return None
+
+    # Lowest cap value wins; on tie, CAP_RULES index breaks it
+    candidates.sort(key=lambda item: (item[1], CAP_RULES.index(item[0])))
+    return candidates[0][0]
 
 
 def is_disputed(v_consensus: float, v_refute: float, verdict_found: bool) -> bool:

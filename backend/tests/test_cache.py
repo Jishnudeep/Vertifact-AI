@@ -337,3 +337,38 @@ async def test_insert_cache_persists_refute_and_evidence_status():
     assert result_row["v_refute"] == 0.6
     assert result_row["evidence_status"] == "disputed"
 
+
+def test_cache_hit_uses_shared_formatter():
+    from app.api.result_format import format_stored_result
+    stored_claim = "NASA confirmed liquid water on Mars"
+    row = _servable_row(
+        id="results-row-999",
+        claim_id="claim-uuid-111",
+        extracted_claim=stored_claim,
+        c_total=0.85,
+        s_fact=0.9,
+        b_ling=0.1,
+        v_consensus=0.8,
+        confidence_level="high",
+        evidence_status="fact_checked",
+        warnings=[],
+        source_citations=[],
+        agent_outputs={
+            "factcheck": {"degraded": False, "duration_ms": 100},
+            "crossref": {"degraded": False, "duration_ms": 200},
+            "linguistic": {"degraded": False, "duration_ms": 50},
+            "scoring": {"raw_c_total": 0.85, "cap_rule": None},
+        },
+    )
+    # The user's wording differs from the stored claim: the response must show the claim that was scored.
+    user_claim = "nasa found water on mars??"
+    assert user_claim != stored_claim
+    expected = format_stored_result(row, user_claim, cached=True)
+    from app.agents.orchestrator import _format_cached_response
+    actual = _format_cached_response(row, user_claim)
+    assert actual == expected
+    assert actual["id"] == "claim-uuid-111"
+    assert actual["claim"] == stored_claim
+    assert actual["cached"] is True
+
+

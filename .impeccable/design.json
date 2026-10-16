@@ -1,0 +1,34 @@
+{
+  "name": "VeriFact AI",
+  "version": "1.0.0",
+  "direction": "Midnight Transit Diagram",
+  "tokens": {
+    "colors": {
+      "midnight": "#0F1B3D",
+      "surface": "#16244D",
+      "porcelain": "#F4F1EA",
+      "line-factcheck": "#B9A2F2",
+      "line-crossref": "#2BB3A3",
+      "line-linguistic": "#F4F1EA",
+      "verdict-false": "#DC2626",
+      "verdict-mixed": "#F59E0B",
+      "verdict-true": "#10B981",
+      "verdict-none": "#8A94B0",
+      "bias-left": "#3B6FD8",
+      "bias-leanleft": "#8FB0F0",
+      "bias-center": "#9AA3B5",
+      "bias-leanright": "#F0A39B",
+      "bias-right": "#D9544A"
+    },
+    "typography": {
+      "fontFamily": "Hanken Grotesk, system-ui, -apple-system, sans-serif",
+      "weights": [500, 600, 700, 800],
+      "tabularNums": true
+    },
+    "geometry": {
+      "lineStrokeWidth": 8,
+      "interchangeRadius": 58,
+      "verdictRingRadius": 64
+    }
+  }
+}

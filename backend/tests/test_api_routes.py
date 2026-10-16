@@ -118,7 +118,7 @@ def test_get_result_found():
         response = client.get(f"/api/results/{valid_uuid}")
         assert response.status_code == 200
         data = response.json()
-        assert data["id"] == valid_uuid
+        assert data["id"] == mock_row["claim_id"]
         assert data["claim"] == "Historical verified claim"
         assert data["trust_score"]["c_total"] == 0.88
 
@@ -178,5 +178,413 @@ def test_schema_accepts_null_suggestions():
 
     resp_html = VerifyResponse(**base_data, search_suggestions_html="<div>Suggestions</div>")
     assert resp_html.search_suggestions_html == "<div>Suggestions</div>"
+
+
+def test_get_result_not_marked_cached():
+    valid_uuid = "22222222-2222-2222-2222-222222222222"
+    mock_row = {
+        "id": valid_uuid,
+        "claim_id": valid_uuid,
+        "c_total": 0.88,
+        "s_fact": 0.9,
+        "b_ling": 0.1,
+        "v_consensus": 0.8,
+        "weights": {"w1": 0.5, "w2": 0.2, "w3": 0.3},
+        "confidence_level": "high",
+        "evidence_status": "fact_checked",
+        "warnings": [],
+        "source_citations": [],
+        "linguistic_profile": None,
+        "processing_time_ms": 1200,
+        "created_at": "2026-10-15T12:00:00Z",
+        "claims": {"extracted_claim": "Historical claim"}
+    }
+    mock_supabase = MagicMock()
+    mock_supabase.table.return_value.select.return_value.eq.return_value.execute.return_value = MagicMock(data=[mock_row])
+
+    with patch("app.api.routes.get_supabase", return_value=mock_supabase):
+        response = client.get(f"/api/results/{valid_uuid}")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["cached"] is False
+        assert data["created_at"] == "2026-10-15T12:00:00Z"
+
+
+def test_get_result_has_agents_and_suggestions():
+    valid_uuid = "33333333-3333-3333-3333-333333333333"
+    mock_row = {
+        "id": valid_uuid,
+        "c_total": 0.85,
+        "s_fact": 0.9,
+        "b_ling": 0.1,
+        "v_consensus": 0.8,
+        "weights": {"w1": 0.5, "w2": 0.2, "w3": 0.3},
+        "confidence_level": "high",
+        "evidence_status": "fact_checked",
+        "warnings": [],
+        "source_citations": [],
+        "search_suggestions_html": "<div>Suggestions</div>",
+        "agent_outputs": {
+            "factcheck": {"degraded": False, "duration_ms": 150},
+            "crossref": {"degraded": True, "duration_ms": 300, "error_details": {"code": "TIMEOUT"}},
+            "linguistic": {"degraded": False, "duration_ms": 50},
+            "scoring": {"raw_c_total": 0.92, "cap_rule": None},
+        },
+        "created_at": "2026-10-15T12:00:00Z",
+        "claims": {"extracted_claim": "Agent test claim"}
+    }
+    mock_supabase = MagicMock()
+    mock_supabase.table.return_value.select.return_value.eq.return_value.execute.return_value = MagicMock(data=[mock_row])
+
+    with patch("app.api.routes.get_supabase", return_value=mock_supabase):
+        response = client.get(f"/api/results/{valid_uuid}")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["search_suggestions_html"] == "<div>Suggestions</div>"
+        assert len(data["agents"]) == 3
+        fc_agent = next(a for a in data["agents"] if a["name"] == "factcheck")
+        assert fc_agent["status"] == "ok"
+        assert fc_agent["duration_ms"] == 150
+        cr_agent = next(a for a in data["agents"] if a["name"] == "crossref")
+        assert cr_agent["status"] == "degraded"
+        assert cr_agent["error_code"] == "TIMEOUT"
+        assert cr_agent["duration_ms"] == 300
+        assert data["trust_score"]["raw_c_total"] == 0.92
+        assert data["trust_score"]["cap_rule"] is None
+
+
+def test_stored_legacy_row_formats():
+    valid_uuid = "44444444-4444-4444-4444-444444444444"
+    legacy_row = {
+        "id": valid_uuid,
+        "c_total": 0.70,
+        "s_fact": 0.5,
+        "b_ling": 0.2,
+        "v_consensus": 0.6,
+        "weights": {"w1": 0.5, "w2": 0.2, "w3": 0.3},
+        "confidence_level": "medium",
+        "evidence_status": None,
+        "agent_outputs": None,
+        "warnings": [],
+        "source_citations": [],
+        "created_at": "2026-09-01T12:00:00Z",
+        "claims": {"extracted_claim": "Legacy claim"}
+    }
+    mock_supabase = MagicMock()
+    mock_supabase.table.return_value.select.return_value.eq.return_value.execute.return_value = MagicMock(data=[legacy_row])
+
+    with patch("app.api.routes.get_supabase", return_value=mock_supabase):
+        response = client.get(f"/api/results/{valid_uuid}")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["agents"] == []
+        assert data["trust_score"]["cap_rule"] is None
+        assert data["confidence"]["evidence_status"] == "unverified"
+        assert any("Legacy result" in w for w in data["confidence"]["warnings"])
+
+
+def test_rate_limit_sets_retry_after():
+    from app.api.routes import limiter
+    limiter.reset()
+    mock_result = {
+        "id": "result-1", "claim": "claim",
+        "trust_score": {"c_total": 0.8, "s_fact": 1.0, "b_ling": 0.1, "v_consensus": 0.8, "weights": {"w1": 0.5, "w2": 0.2, "w3": 0.3}},
+        "confidence": {"level": "high", "warnings": []},
+        "linguistic_profile": {"clickbait_syntax": 0.0, "emotional_framing": 0.0, "sensationalism": 0.0, "informational_density": 0.9},
+        "sources": [], "processing_time_ms": 100, "cached": False, "agents": []
+    }
+    with patch("app.api.routes.verify_claim", return_value=mock_result):
+        for _ in range(10):
+            res = client.post("/api/verify", json={"input": "test claim"})
+            assert res.status_code == 200
+        res_limit = client.post("/api/verify", json={"input": "test claim"})
+        assert res_limit.status_code == 429
+        assert res_limit.headers.get("Retry-After") == "60"
+    limiter.reset()
+
+
+def test_recent_route_not_shadowed():
+    mock_supabase = MagicMock()
+    mock_supabase.table.return_value.select.return_value.eq.return_value.order.return_value.limit.return_value.execute.return_value = MagicMock(data=[])
+    with patch("app.api.routes.get_supabase", return_value=mock_supabase):
+        response = client.get("/api/results/recent")
+        assert response.status_code == 200
+        assert response.json() == []
+
+
+def test_recent_only_featured_newest_first():
+    mock_supabase = MagicMock()
+    mock_table = mock_supabase.table.return_value
+    mock_select = mock_table.select.return_value
+    mock_eq = mock_select.eq.return_value
+    mock_order = mock_eq.order.return_value
+    mock_order.limit.return_value.execute.return_value = MagicMock(data=[])
+
+    with patch("app.api.routes.get_supabase", return_value=mock_supabase):
+        response = client.get("/api/results/recent")
+        assert response.status_code == 200
+        mock_select.eq.assert_called_once_with("featured", True)
+        mock_eq.order.assert_called_once_with("created_at", desc=True)
+
+
+def test_recent_limit_clamped():
+    mock_supabase = MagicMock()
+    mock_table = mock_supabase.table.return_value
+    mock_select = mock_table.select.return_value
+    mock_eq = mock_select.eq.return_value
+    mock_order = mock_eq.order.return_value
+    mock_order.limit.return_value.execute.return_value = MagicMock(data=[])
+
+    with patch("app.api.routes.get_supabase", return_value=mock_supabase):
+        # limit=500 clamped to 20
+        response = client.get("/api/results/recent?limit=500")
+        assert response.status_code == 200
+        mock_order.limit.assert_called_with(20)
+
+        # limit=0 clamped to 1
+        response = client.get("/api/results/recent?limit=0")
+        assert response.status_code == 200
+        mock_order.limit.assert_called_with(1)
+
+
+def test_recent_field_allow_list():
+    sample_row = {
+        "id": "11111111-1111-1111-1111-111111111111",
+        "c_total": 0.85,
+        "evidence_status": "fact_checked",
+        "confidence_level": "high",
+        "created_at": "2026-10-15T12:00:00Z",
+        "claims": {"extracted_claim": "Moon landing was real"},
+    }
+    mock_supabase = MagicMock()
+    mock_supabase.table.return_value.select.return_value.eq.return_value.order.return_value.limit.return_value.execute.return_value = MagicMock(data=[sample_row])
+
+    with patch("app.api.routes.get_supabase", return_value=mock_supabase):
+        response = client.get("/api/results/recent")
+        assert response.status_code == 200
+        data = response.json()
+        assert len(data) == 1
+        item = data[0]
+        assert set(item.keys()) == {"id", "claim", "c_total", "evidence_status", "confidence_level", "created_at"}
+        assert item["id"] == "11111111-1111-1111-1111-111111111111"
+        assert item["claim"] == "Moon landing was real"
+        assert item["c_total"] == 0.85
+        assert item["evidence_status"] == "fact_checked"
+        assert item["confidence_level"] == "high"
+        assert item["created_at"] == "2026-10-15T12:00:00Z"
+
+
+def test_recent_empty_list():
+    mock_supabase = MagicMock()
+    mock_supabase.table.return_value.select.return_value.eq.return_value.order.return_value.limit.return_value.execute.return_value = MagicMock(data=[])
+
+    with patch("app.api.routes.get_supabase", return_value=mock_supabase):
+        response = client.get("/api/results/recent")
+        assert response.status_code == 200
+        assert response.json() == []
+
+
+def test_recent_undefined_column_returns_empty_list():
+    mock_supabase = MagicMock()
+    mock_supabase.table.return_value.select.return_value.eq.return_value.order.return_value.limit.return_value.execute.side_effect = Exception("column results.featured does not exist (PostgreSQL error 42703)")
+
+    with patch("app.api.routes.get_supabase", return_value=mock_supabase):
+        response = client.get("/api/results/recent")
+        assert response.status_code == 200
+        assert response.json() == []
+
+
+def test_recent_skips_bad_row():
+    bad_row = {
+        "id": "bad-row-1",
+        "c_total": None,  # invalid: None c_total
+        "evidence_status": "unverified",
+        "confidence_level": None,
+        "created_at": "2026-10-15T12:00:00Z",
+        "claims": {"extracted_claim": "Bad row claim"},
+    }
+    good_row = {
+        "id": "good-row-2",
+        "c_total": 0.75,
+        "evidence_status": "corroborated",
+        "confidence_level": "medium",
+        "created_at": "2026-10-15T12:00:00Z",
+        "claims": {"extracted_claim": "Good row claim"},
+    }
+    mock_supabase = MagicMock()
+    mock_supabase.table.return_value.select.return_value.eq.return_value.order.return_value.limit.return_value.execute.return_value = MagicMock(data=[bad_row, good_row])
+
+    with patch("app.api.routes.get_supabase", return_value=mock_supabase):
+        response = client.get("/api/results/recent")
+        assert response.status_code == 200
+        data = response.json()
+        assert len(data) == 1
+        assert data[0]["id"] == "good-row-2"
+        assert data[0]["c_total"] == 0.75
+
+
+def test_get_result_sanitizes_raw_degradation_warnings():
+    valid_uuid = "a1b2c3d4-e5f6-4a5b-8c9d-0e1f2a3b4c5d"
+    mock_row = {
+        "id": valid_uuid,
+        "c_total": 0.5,
+        "s_fact": 0.5,
+        "b_ling": 0.5,
+        "v_consensus": 0.5,
+        "v_refute": 0.0,
+        "weights": {"w1": 0.5, "w2": 0.2, "w3": 0.3},
+        "confidence_level": "medium",
+        "evidence_status": "corroborated",
+        "warnings": ["Linguistic agent degraded: Connection timeout to remote service"],
+        "processing_time_ms": 2000,
+        "agent_outputs": {
+            "linguistic": {
+                "degraded": True,
+                "error_details": {"code": "TIMEOUT"}
+            }
+        },
+        "claims": {"extracted_claim": "Some claim"}
+    }
+    mock_supabase = MagicMock()
+    mock_supabase.table.return_value.select.return_value.eq.return_value.execute.return_value = MagicMock(data=[mock_row])
+
+    with patch("app.api.routes.get_supabase", return_value=mock_supabase):
+        response = client.get(f"/api/results/{valid_uuid}")
+        assert response.status_code == 200
+        data = response.json()
+        warnings = data["confidence"]["warnings"]
+        assert not any("agent degraded:" in w for w in warnings)
+        assert "Linguistic check timed out" in warnings
+
+
+def test_format_stored_result_drops_non_string_warnings():
+    """Stored JSONB warnings are untrusted: non-strings must be dropped, not crash the formatter."""
+    from app.api.result_format import format_stored_result
+    row = {
+        "id": "r-1", "claim_id": "c-1", "c_total": 0.5, "s_fact": 0.5, "b_ling": 0.5,
+        "v_consensus": 0.5, "confidence_level": "medium", "evidence_status": "corroborated",
+        "warnings": [None, 42, {"x": 1}, "Low confidence: no fact-checks found",
+                     "Linguistic agent degraded: raw boom"],
+        "agent_outputs": {"linguistic": {"degraded": True, "error_details": {"code": "TIMEOUT"}}},
+    }
+    out = format_stored_result(row, "claim", cached=False)
+    warnings = out["confidence"]["warnings"]
+    assert all(isinstance(w, str) for w in warnings)
+    assert "Low confidence: no fact-checks found" in warnings
+    assert "Linguistic check timed out" in warnings
+    assert not any("agent degraded:" in w for w in warnings)
+
+
+def test_format_stored_result_non_strings_alone_do_not_regenerate_degradation():
+    """Dropping a non-string is not a sanitized degradation string; nothing should be invented."""
+    from app.api.result_format import format_stored_result
+    row = {
+        "id": "r-1", "c_total": 0.5, "s_fact": 0.5, "b_ling": 0.5, "v_consensus": 0.5,
+        "confidence_level": "medium", "evidence_status": "corroborated", "warnings": [None, 7],
+        "agent_outputs": {"linguistic": {"degraded": True, "error_details": {"code": "TIMEOUT"}}},
+    }
+    assert format_stored_result(row, "claim", cached=False)["confidence"]["warnings"] == []
+
+
+def test_get_result_via_claim_id_fallback_returns_claim_id():
+    """GET /api/results/{id} accepts a claim_id: the results.id lookup misses, the claim_id one hits."""
+    claim_uuid = "c1c1c1c1-0000-4000-8000-000000000001"
+    row = {
+        "id": "d2d2d2d2-0000-4000-8000-000000000002", "claim_id": claim_uuid,
+        "c_total": 0.6, "s_fact": 0.5, "b_ling": 0.2, "v_consensus": 0.6,
+        "confidence_level": "medium", "evidence_status": "corroborated", "warnings": [],
+        "claims": {"extracted_claim": "Fallback claim"},
+    }
+    mock_supabase = MagicMock()
+    select = mock_supabase.table.return_value.select.return_value
+    select.eq.return_value.execute.side_effect = [MagicMock(data=[]), MagicMock(data=[row])]
+    with patch("app.api.routes.get_supabase", return_value=mock_supabase):
+        response = client.get(f"/api/results/{claim_uuid}")
+    assert response.status_code == 200
+    assert response.json()["id"] == claim_uuid
+    assert [c.args for c in select.eq.call_args_list] == [("id", claim_uuid), ("claim_id", claim_uuid)]
+
+
+def _recent_supabase(rows):
+    mock_supabase = MagicMock()
+    (mock_supabase.table.return_value.select.return_value.eq.return_value
+     .order.return_value.limit.return_value.execute.return_value) = MagicMock(data=rows)
+    return mock_supabase
+
+
+def _recent_row(**overrides):
+    row = {
+        "id": "good-row", "c_total": 0.75, "evidence_status": "corroborated",
+        "confidence_level": "medium", "created_at": "2026-10-15T12:00:00Z",
+        "claims": {"extracted_claim": "Good row claim"},
+    }
+    row.update(overrides)
+    return row
+
+
+def test_recent_undefined_column_detected_by_error_code():
+    """postgrest APIError exposes `.code`; detection must not depend on the message text."""
+    class FakeAPIError(Exception):
+        code = "42703"
+
+    mock_supabase = MagicMock()
+    (mock_supabase.table.return_value.select.return_value.eq.return_value
+     .order.return_value.limit.return_value.execute.side_effect) = FakeAPIError("column does not exist")
+    with patch("app.api.routes.get_supabase", return_value=mock_supabase):
+        response = client.get("/api/results/recent")
+    assert response.status_code == 200
+    assert response.json() == []
+
+
+def test_recent_other_db_error_is_500():
+    class FakeAPIError(Exception):
+        code = "PGRST301"
+
+    mock_supabase = MagicMock()
+    (mock_supabase.table.return_value.select.return_value.eq.return_value
+     .order.return_value.limit.return_value.execute.side_effect) = FakeAPIError("jwt expired")
+    with patch("app.api.routes.get_supabase", return_value=mock_supabase):
+        response = client.get("/api/results/recent")
+    assert response.status_code == 500
+
+
+def test_recent_skips_row_failing_validation():
+    rows = [_recent_row(id="bogus-row", confidence_level="bogus"), _recent_row()]
+    with patch("app.api.routes.get_supabase", return_value=_recent_supabase(rows)):
+        response = client.get("/api/results/recent")
+    assert response.status_code == 200
+    assert [item["id"] for item in response.json()] == ["good-row"]
+
+
+def test_recent_skips_row_with_null_created_at():
+    """RecentResultModel.created_at is required: a NULL must be skipped, never served as "None"."""
+    rows = [_recent_row(id="no-date", created_at=None), _recent_row()]
+    with patch("app.api.routes.get_supabase", return_value=_recent_supabase(rows)):
+        response = client.get("/api/results/recent")
+    assert response.status_code == 200
+    data = response.json()
+    assert [item["id"] for item in data] == ["good-row"]
+    assert all(item["created_at"] != "None" for item in data)
+
+
+def test_recent_logs_skipped_rows_without_contents(caplog):
+    secret_claim = "SECRET-CLAIM-TEXT"
+    rows = [
+        _recent_row(id="null-score", c_total=None, claims={"extracted_claim": secret_claim}),
+        _recent_row(id="no-date", created_at=None, claims={"extracted_claim": secret_claim}),
+        _recent_row(id="bogus-row", confidence_level="bogus-level", claims={"extracted_claim": secret_claim}),
+    ]
+    with caplog.at_level("DEBUG", logger="app.api.routes"), \
+         patch("app.api.routes.get_supabase", return_value=_recent_supabase(rows)):
+        response = client.get("/api/results/recent")
+    assert response.status_code == 200
+    assert response.json() == []
+    messages = [r.getMessage() for r in caplog.records if r.name == "app.api.routes"]
+    for row_id in ("null-score", "no-date", "bogus-row"):
+        assert any(row_id in m for m in messages), f"no log for skipped row {row_id}: {messages}"
+    assert not any(secret_claim in m or "bogus-level" in m for m in messages)
+
+
+
 
 

@@ -1,11 +1,12 @@
 import asyncio
+import datetime
 import importlib.util
 import logging
 import sys
 import time
 import uuid
 from dataclasses import dataclass, field
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Tuple
 
 # VeriFact does not use A2A. ADK's build_node() (called on EVERY ctx.run_node) tries
 # `from google.adk.agents.remote_a2a_agent import RemoteA2aAgent` inside try/except ImportError
@@ -31,7 +32,7 @@ from app.services.cache import lookup_cache, insert_cache  # noqa: E402
 from app.scoring.engine import ScoringEngine, ScoringResult  # noqa: E402
 from app.agents import factcheck_agent, crossref_agent, linguistic_agent  # noqa: E402
 from app.services.bias_lookup import get_bias_label  # noqa: E402
-from app.utils.errors import classify_provider_error  # noqa: E402
+from app.utils.errors import classify_provider_error, degradation_message  # noqa: E402
 from app.utils.text_processing import extract_domain  # noqa: E402
 
 logger = logging.getLogger(__name__)
@@ -126,6 +127,7 @@ class PipelineOutcome:
     sources: List[Dict[str, Any]] = field(default_factory=list)
     linguistic_profile: Dict[str, float] = field(default_factory=dict)
     search_suggestions_html: Optional[str] = None
+    agents: List[Dict[str, Any]] = field(default_factory=list)
 
 
 @node(name="cache_lookup")
@@ -194,12 +196,28 @@ AGENT_NODES = (
 @node(name="dispatch_agents", rerun_on_resume=True)
 async def dispatch_agents_node(ctx: Context, node_input: VerifyRequest) -> Dict[str, Any]:
     """Supervisor: run the three agents concurrently; a failed agent degrades, never the run."""
+    async def _timed_run(agent_node: Any) -> Tuple[Any, int]:
+        t0 = time.monotonic()
+        try:
+            res = await ctx.run_node(agent_node, node_input)
+            dur_ms = int((time.monotonic() - t0) * 1000)
+            return res, dur_ms
+        except Exception as exc:
+            dur_ms = int((time.monotonic() - t0) * 1000)
+            return exc, dur_ms
+
     results = await asyncio.gather(
-        *(ctx.run_node(agent_node, node_input) for agent_node, _, _ in AGENT_NODES),
+        *(_timed_run(agent_node) for agent_node, _, _ in AGENT_NODES),
         return_exceptions=True,
     )
     outputs: Dict[str, Any] = {}
-    for (agent_node, provider, make_neutral), res in zip(AGENT_NODES, results):
+    timings: Dict[str, int] = {}
+    for (agent_node, provider, make_neutral), item in zip(AGENT_NODES, results):
+        if isinstance(item, tuple):
+            res, dur_ms = item
+        else:
+            res, dur_ms = item, 0
+        timings[agent_node.name] = dur_ms
         if isinstance(res, BaseException):
             if not isinstance(res, Exception):
                 raise res  # cancellation / interrupt: not an agent failure
@@ -219,6 +237,7 @@ async def dispatch_agents_node(ctx: Context, node_input: VerifyRequest) -> Dict[
                 error_details=classify_provider_error(cause, provider=provider),
             )
         outputs[agent_node.name] = res
+    outputs["timings"] = timings
     return outputs
 
 
@@ -228,11 +247,29 @@ def score_node(node_input: Dict[str, Any]) -> PipelineOutcome:
     fc_res: factcheck_agent.FactCheckResult = node_input["factcheck"]
     cr_res: crossref_agent.CrossRefResult = node_input["crossref"]
     ling_res: linguistic_agent.LinguisticResult = node_input["linguistic"]
+    timings: Dict[str, int] = node_input.get("timings") or {}
+
+    agents_status = []
+    for name, res in [("factcheck", fc_res), ("crossref", cr_res), ("linguistic", ling_res)]:
+        ed = getattr(res, "error_details", None)
+        error_code = ed.code.value if ed else None
+        agents_status.append({
+            "name": name,
+            "status": "degraded" if res.degraded else "ok",
+            "duration_ms": timings.get(name),
+            "error_code": error_code,
+        })
 
     agents_succeeded = sum(1 for res in (fc_res, cr_res, ling_res) if not res.degraded)
     if agents_succeeded == 0:
         # Guardrail: never score. verify_claim raises AllAgentsFailedError outside the graph.
-        return PipelineOutcome(cached=False, fc_res=fc_res, cr_res=cr_res, ling_res=ling_res)
+        return PipelineOutcome(
+            cached=False,
+            fc_res=fc_res,
+            cr_res=cr_res,
+            ling_res=ling_res,
+            agents=agents_status,
+        )
 
     scoring_res = ScoringEngine().compute(
         s_fact=fc_res.s_fact_score,
@@ -250,10 +287,7 @@ def score_node(node_input: Dict[str, Any]) -> PipelineOutcome:
     for agent_label, res in [("Fact-check", fc_res), ("Cross-reference", cr_res), ("Linguistic", ling_res)]:
         if res.degraded:
             ed = getattr(res, "error_details", None)
-            if ed is not None:
-                enriched_warnings.append(f"{agent_label} agent degraded: {ed.message} ({ed.provider})")
-            elif res.error:
-                enriched_warnings.append(f"{agent_label} agent degraded: {res.error}")
+            enriched_warnings.append(degradation_message(agent_label, ed.code.value if ed else None))
 
     search_suggestions_html = (
         getattr(fc_res, "search_suggestions_html", None)
@@ -275,6 +309,7 @@ def score_node(node_input: Dict[str, Any]) -> PipelineOutcome:
             "informational_density": ling_res.informational_density,
         },
         search_suggestions_html=search_suggestions_html,
+        agents=agents_status,
     )
 
 
@@ -327,38 +362,9 @@ async def run_verification_workflow(request: VerifyRequest) -> PipelineOutcome:
 
 
 def _format_cached_response(cached: Dict[str, Any], cleaned_text: str) -> Dict[str, Any]:
-    agent_outputs = cached.get("agent_outputs") or {}
-    search_suggestions_html = (
-        cached.get("search_suggestions_html")
-        or agent_outputs.get("search_suggestions_html")
-    )
-    return {
-        "id": str(cached.get("claim_id") or cached.get("id")),
-        "claim": cached.get("extracted_claim") or cleaned_text,
-        "trust_score": {
-            "c_total": cached.get("c_total"),
-            "s_fact": cached.get("s_fact"),
-            "b_ling": cached.get("b_ling"),
-            "v_consensus": cached.get("v_consensus"),
-            "v_refute": cached.get("v_refute") or 0.0,
-            "weights": cached.get("weights") or {"w1": 0.50, "w2": 0.20, "w3": 0.30}
-        },
-        "confidence": {
-            "level": cached.get("confidence_level"),
-            "warnings": cached.get("warnings") or [],
-            "verdict_found": cached.get("confidence_level") == "high",
-            "evidence_status": cached.get("evidence_status"),
-        },
-        "linguistic_profile": cached.get("linguistic_profile") or {
-            "clickbait_syntax": 0.0,
-            "emotional_framing": 0.0,
-            "sensationalism": 0.0,
-            "informational_density": 0.5
-        },
-        "sources": cached.get("source_citations") or [],
-        "cached": True,
-        "search_suggestions_html": search_suggestions_html,
-    }
+    # Function-local import avoids circular dependency between routes and orchestrator
+    from app.api.result_format import format_stored_result
+    return format_stored_result(cached, cleaned_text, cached=True)
 
 
 def _consolidate_sources(
@@ -381,7 +387,8 @@ def _consolidate_sources(
             "rating": m.get("rating"),
             "bias_label": bias,
             "type": src_type,
-            "stance": None
+            "stance": None,
+            "found_by": "factcheck",
         })
         
     # Add corroborating sources
@@ -393,7 +400,8 @@ def _consolidate_sources(
             "rating": None,
             "bias_label": s.get("bias_label") or "Unrated",
             "type": "corroborating",
-            "stance": s.get("stance")
+            "stance": s.get("stance"),
+            "found_by": "crossref",
         })
 
     return sources
@@ -482,6 +490,7 @@ async def verify_claim(raw_input: str, input_type: str = "text", bypass_cache: b
                         "degraded": fc_res.degraded,
                         "error": fc_res.error,
                         "error_details": fc_res.error_details.to_dict() if getattr(fc_res, "error_details", None) else None,
+                        "duration_ms": next((a["duration_ms"] for a in outcome.agents if a["name"] == "factcheck"), None),
                     },
                     "crossref": {
                         "entities_extracted": cr_res.entities_extracted,
@@ -490,6 +499,7 @@ async def verify_claim(raw_input: str, input_type: str = "text", bypass_cache: b
                         "degraded": cr_res.degraded,
                         "error": cr_res.error,
                         "error_details": cr_res.error_details.to_dict() if getattr(cr_res, "error_details", None) else None,
+                        "duration_ms": next((a["duration_ms"] for a in outcome.agents if a["name"] == "crossref"), None),
                     },
                     "linguistic": {
                         "b_ling_score": ling_res.b_ling_score,
@@ -497,8 +507,13 @@ async def verify_claim(raw_input: str, input_type: str = "text", bypass_cache: b
                         "degraded": ling_res.degraded,
                         "error": ling_res.error,
                         "error_details": ling_res.error_details.to_dict() if getattr(ling_res, "error_details", None) else None,
+                        "duration_ms": next((a["duration_ms"] for a in outcome.agents if a["name"] == "linguistic"), None),
                     },
                     "search_suggestions_html": outcome.search_suggestions_html,
+                    "scoring": {
+                        "raw_c_total": scoring_res.raw_c_total,
+                        "cap_rule": scoring_res.cap_rule,
+                    },
                 },
                 source_citations=sources,
                 linguistic_profile=linguistic_profile,
@@ -522,6 +537,8 @@ async def verify_claim(raw_input: str, input_type: str = "text", bypass_cache: b
         except Exception as exc:
             logger.warning(f"Failed to persist result to database: {exc}")
 
+    created_at = datetime.datetime.now(datetime.timezone.utc).isoformat()
+
     return {
         "id": claim_id,
         "claim": cleaned_text,
@@ -531,7 +548,9 @@ async def verify_claim(raw_input: str, input_type: str = "text", bypass_cache: b
             "b_ling": scoring_res.components.b_ling,
             "v_consensus": scoring_res.components.v_consensus,
             "v_refute": scoring_res.components.v_refute,
-            "weights": scoring_res.weights
+            "weights": scoring_res.weights,
+            "raw_c_total": scoring_res.raw_c_total,
+            "cap_rule": scoring_res.cap_rule,
         },
         "confidence": {
             "level": scoring_res.confidence_level,
@@ -544,4 +563,6 @@ async def verify_claim(raw_input: str, input_type: str = "text", bypass_cache: b
         "processing_time_ms": elapsed_ms,
         "cached": False,
         "search_suggestions_html": outcome.search_suggestions_html,
+        "agents": outcome.agents,
+        "created_at": created_at,
     }

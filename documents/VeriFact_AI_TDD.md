@@ -14,8 +14,8 @@
 ┌─────────────────────────────────────────────────────────────────┐
 │                        FRONTEND (React + Vite)                  │
 │  ┌──────────┐  ┌──────────────┐  ┌───────────┐  ┌───────────┐  │
-│  │ Input    │  │ Agent Status │  │ Trust     │  │ Linguistic│  │
-│  │ Box      │  │ Pipeline     │  │ Gauge     │  │ Radar     │  │
+│  │ Input    │  │ Agent Status │  │ Transit   │  │ Linguistic│  │
+│  │ Box      │  │ Pipeline     │  │ Diagram   │  │ Radar     │  │
 │  └────┬─────┘  └──────▲───────┘  └─────▲─────┘  └─────▲─────┘  │
 │       │               │               │               │         │
 │       │          WebSocket             │  REST (JSON)  │         │
@@ -131,17 +131,18 @@ verifact-ai/
 │   ├── src/
 │   │   ├── App.jsx
 │   │   ├── components/
-│   │   │   ├── InputBox.jsx         # Unified text/URL/image input
-│   │   │   ├── TrustGauge.jsx       # SVG semicircular gauge
-│   │   │   ├── LinguisticRadar.jsx  # Recharts radar chart
-│   │   │   ├── SourceCoverage.jsx   # Source list with bias labels
-│   │   │   ├── AgentPipeline.jsx    # Real-time agent status display
-│   │   │   └── ConfidenceBadge.jsx  # High/Medium/Low/Insufficient indicator
+│   │   │   ├── ClaimInput.jsx       # Text claim input with char counter
+│   │   │   ├── TransitDiagram.jsx   # SVG verdict interchange diagram
+│   │   │   ├── LanguageRadar.jsx    # Recharts radar chart
+│   │   │   ├── SourceList.jsx       # Grouped source citations with bias labels
+│   │   │   ├── ScoreBreakdown.jsx   # Formula breakdown with weights
+│   │   │   ├── VerdictLine.jsx      # Verdict statement & confidence
+│   │   │   └── RecentList.jsx       # Featured recent verification checks
 │   │   ├── hooks/
-│   │   │   ├── useVerify.js         # API call + WebSocket management
-│   │   │   └── useAgentStatus.js    # WebSocket agent progress
-│   │   └── styles/
-│   │       └── globals.css          # Tailwind base + custom gauge animations
+│   │   │   ├── useVerify.js         # API call & verification state
+│   │   │   ├── useResult.js         # Stored result fetch hook
+│   │   │   └── useRecent.js         # Recent featured results fetch hook
+│   │   └── styles/globals.css       # Tailwind base + midnight transit design tokens
 │   ├── package.json
 │   └── vite.config.js
 ├── eval/
@@ -205,7 +206,9 @@ For URL input:
     "b_ling": 0.22,
     "v_consensus": 0.68,
     "v_refute": 0.0,
-    "weights": { "w1": 0.50, "w2": 0.20, "w3": 0.30 }
+    "weights": { "w1": 0.50, "w2": 0.20, "w3": 0.30 },
+    "raw_c_total": 0.73,
+    "cap_rule": null
   },
   "confidence": {
     "level": "high",
@@ -226,7 +229,8 @@ For URL input:
       "publisher": "PolitiFact",
       "rating": "Mostly True",
       "bias_label": "Lean Left",
-      "type": "fact_check"
+      "type": "fact_check",
+      "found_by": "factcheck"
     },
     {
       "url": "https://www.reuters.com/...",
@@ -234,11 +238,18 @@ For URL input:
       "publisher": "Reuters",
       "bias_label": "Center",
       "type": "corroborating",
-      "stance": "supports"
+      "stance": "supports",
+      "found_by": "crossref"
     }
   ],
+  "agents": [
+    { "name": "factcheck", "status": "ok", "duration_ms": 2130, "error_code": null },
+    { "name": "crossref", "status": "ok", "duration_ms": 3410, "error_code": null },
+    { "name": "linguistic", "status": "ok", "duration_ms": 480, "error_code": null }
+  ],
   "processing_time_ms": 7420,
-  "cached": false
+  "cached": false,
+  "created_at": "2026-10-15T12:00:00Z"
 }
 ```
 
@@ -248,6 +259,13 @@ claim-review domain (see §7). It is the flag that gates `level: "high"`.
 `confidence.evidence_status` is defined in PRD §6 'Evidence Status'. `sources[].stance` is
 `supports`/`refutes`/`neutral` for corroborating sources and `null` for fact-check sources
 (including claim-review sites returned by the Cross-Ref search).
+
+**Per-agent execution & capping fields:**
+- `agents`: list of per-agent execution status objects (`{name, status: "ok"|"degraded", duration_ms, error_code}`).
+- `trust_score.raw_c_total`: raw composite score before confidence-capping rules are applied.
+- `trust_score.cap_rule`: identifier of the binding confidence capping rule (`"false_verdict"` | `"disputed"` | `"partial_analysis"` | `"low_evidence"`), or `null` if uncapped.
+- `sources[].found_by`: the discovering agent (`"factcheck"` | `"crossref"`), used to group citations in the UI.
+- `created_at`: ISO 8601 UTC timestamp of when verification was recorded.
 
 **Request size limits (two distinct layers):**
 
@@ -262,7 +280,7 @@ claim-review domain (see §7). It is the flag that gates `level: "high"`.
 
 - `400` — Invalid input (empty, too long >2000 chars, unsupported format)
 - `422` — Input classified as non-verifiable (opinion, question), or request body exceeds the 10000-char schema ceiling
-- `429` — Rate limited
+- `429` — Rate limited (returns `Retry-After: <seconds>` header)
 - `500` — All agents failed
 - `503` — LLM provider unavailable
 
@@ -283,9 +301,38 @@ Every response carries `X-Process-Time-Ms`. The pipeline runs under a 9.5 s requ
 
 ### 3.3 GET /api/results/{id}
 
-Returns a previously computed result by ID. Used for sharing/bookmarking.
+Returns a previously computed result by ID. Used for sharing and direct permalink navigation (`/r/:id`).
 
-### 3.4 WS /ws/status/{request_id}
+`{id}` must be a UUID (anything else is `404`). It is looked up first as `results.id`, then, on a miss, as `results.claim_id`, so both a results-row ID (e.g. from §3.4) and a claim ID (the `id` returned by `POST /api/verify` and cache hits) resolve. The response's `id` is always the row's **`claim_id`** (falling back to `results.id` only if `claim_id` is null), whichever ID was requested.
+
+Formed via the shared `format_stored_result` formatter to maintain strict field parity with `POST /api/verify`, including `agents`, `trust_score.raw_c_total`, `trust_score.cap_rule`, `created_at`, and `sources[].found_by`. Always returns `cached: false` (since it is a stored DB lookup rather than a semantic cache hit). Returns `404` if the ID is not found.
+
+### 3.4 GET /api/results/recent
+
+Returns recent featured verification results for the home page feed.
+
+**Query Parameters:**
+- `limit` (int, default: 10, min: 1, max: 20): maximum number of results to return.
+
+**Response (200 OK):**
+```json
+[
+  {
+    "id": "a1b2c3d4-...",
+    "claim": "...",
+    "c_total": 0.85,
+    "evidence_status": "corroborated",
+    "confidence_level": "medium",
+    "created_at": "2026-10-15T12:00:00Z"
+  }
+]
+```
+
+Queries `results` joined with `claims` where `featured = true`, ordered by `created_at DESC` up to `limit`. Returns a list of `RecentResultModel` objects with allow-listed summary fields. Each item's `id` is the **`results.id`** (not the claim ID); it resolves through §3.3's `results.id` lookup, which then returns the `claim_id` as its `id`.
+
+Rows with a null `c_total`, `confidence_level` or `created_at`, or that fail `RecentResultModel` validation, are skipped (logged by row ID only, never row contents) rather than served with made-up values. If the `featured` column does not exist yet (Postgres `42703` undefined_column, migration 07 pending) the endpoint returns `[]`; any other database error is a `500`.
+
+### 3.5 WS /ws/status/{request_id}
 
 WebSocket endpoint for real-time agent pipeline status during verification.
 
@@ -561,10 +608,12 @@ CREATE TABLE results (
     source_citations JSONB DEFAULT '[]',
     linguistic_profile JSONB,
     processing_time_ms INT,
+    featured BOOLEAN NOT NULL DEFAULT FALSE,
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 CREATE INDEX idx_results_claim_id ON results(claim_id);
+CREATE INDEX idx_results_featured_created_at ON results (created_at DESC) WHERE featured = TRUE;
 
 -- Static bias ratings (pre-loaded from AllSides CSV)
 CREATE TABLE bias_ratings (
@@ -948,28 +997,40 @@ def get_bias_label(url: str) -> Optional[str]:
 
 ## 9. Frontend Component Specifications
 
-### 9.1 Trust Gauge (SVG)
+### 9.1 Transit Diagram Verdict Interchange (SVG)
 
-Semi-circular gauge from 0 to 100. Color transitions:
-- 0-33: `#DC2626` (Crimson — likely false)
-- 34-66: `#F59E0B` (Amber — mixed/uncertain)
-- 67-100: `#10B981` (Emerald — likely true)
+SVG verdict interchange diagram replacing the legacy semicircular gauge (`TrustGauge`), retaining identical thresholds and color tokens:
+- 0-33: Likely false (`#DC2626` crimson indicator / lilac fact-check line)
+- 34-66: Mixed (`#F59E0B` amber)
+- 67-100: Likely true (`#10B981` emerald)
 
-Needle animated with CSS `transition: transform 1.2s ease-out`.
+**Styling & Design Tokens (Midnight Transit Diagram):**
+- Ground: Midnight ground (`#0F1B3D`), elevated surface (`#16244D`), borders (`#22366F`).
+- Lines: Fact-Check line (`#B9A2F2` lilac), Cross-Reference line (`#2BB3A3` teal), Linguistic track (`#F4F1EA` porcelain with navy casing).
+- Central interchange platform displaying the verdict word ("Likely true", "Mixed", "Likely false") and prominent numeric trust score badge.
+- Checking state: animated pulse traversing the SVG tracks towards the junction.
+- Accessible summary: hidden `<p className="sr-only">` summarizing the verdict and score for screen readers.
 
-Score displayed as large centered number. Confidence badge shown below.
-
-When `confidence.evidence_status == "unverified"`, render 'Not enough evidence' in place of the numeric score and needle, and keep the confidence badge and warnings. When it is `disputed`, show a 'Disputed' chip under the gauge. Source cards show a stance chip (Supports / Refutes / Neutral).
+When `confidence.evidence_status == "unverified"`, render 'Not enough evidence' in place of the numeric score, keeping the confidence badge and warnings. When `disputed`, show a 'Disputed' chip under the interchange and display the binding cap explanation (`trust_score.cap_rule`). Source cards show a stance chip (Supports / Refutes / Neutral).
 
 ### 9.2 Linguistic Volatility Radar (Recharts)
 
-4-axis radar chart with axes: Clickbait Syntax, Emotional Framing, Sensationalism, Informational Density. Each axis 0-100. Filled area with 30% opacity. Tooltip shows flagged phrases per axis.
+4-axis radar chart with axes: Clickbait Syntax, Emotional Framing, Sensationalism, Informational Density.
+- Axis values are scaled $\times 100$ (0.0–1.0 float values mapped to 0–100 integer scale for visualization).
+- Filled area with 30% opacity.
+- Degraded state: when the linguistic agent fails or is degraded, renders the fallback text "Language analysis unavailable for this check" with no chart rendered.
 
 ### 9.3 Source Coverage List
 
-Vertical list of source cards, each showing: publisher name, article title (linked), AllSides bias label (colored chip: blue=Left, light blue=Lean Left, gray=Center, light red=Lean Right, red=Right), and type badge (Fact-Check or Corroborating). Below the source list, render 'Media bias ratings: AllSides.com (CC BY-NC 4.0)' as a link. This is required by the license.
+Vertical list of source cards grouped by `found_by`:
+- **Fact-Check Sources** (`found_by == "factcheck"`): Reviews from recognized fact-checking organizations.
+- **Corroborating & Context Sources** (`found_by == "crossref"`): Reporting across the political spectrum with AllSides bias ratings.
 
-If `search_suggestions_html` is returned in the API response (required by Google Search Grounding ToS when present), render it below the source list inside `<iframe sandbox srcdoc={search_suggestions_html} />`.
+Each card displays: publisher name, article title (linked with `target="_blank" rel="noopener noreferrer"`), AllSides bias label chip (blue=Left, light blue=Lean Left, gray=Center, light red=Lean Right, red=Right, neutral="Unrated"), stance chip (Supports / Refutes / Neutral), and the fact-check rating when present. The source type is conveyed by the group heading, not a per-card badge.
+
+Below the source list, render 'Media bias ratings: AllSides.com (CC BY-NC 4.0)' as a link. This is required by the license.
+
+If `search_suggestions_html` is returned in the API response (required by Google Search Grounding ToS when present), render it below the source list inside `<iframe sandbox="allow-popups allow-popups-to-escape-sandbox" srcdoc={search_suggestions_html} />`.
 
 ---
 

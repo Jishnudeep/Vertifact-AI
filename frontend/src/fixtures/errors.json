@@ -1,0 +1,27 @@
+{
+  "invalid_input": {
+    "error": "Claim text exceeds maximum allowed length of 2000 characters.",
+    "code": "invalid_input",
+    "detail": "Claim text exceeds maximum allowed length of 2000 characters."
+  },
+  "non_verifiable_claim": {
+    "error": "The input is not a verifiable factual claim (appears to be an opinion or question).",
+    "code": "non_verifiable_claim",
+    "detail": "The input is not a verifiable factual claim (appears to be an opinion or question)."
+  },
+  "request_validation": {
+    "error": "Invalid request schema.",
+    "code": "request_validation",
+    "detail": "Field required: input"
+  },
+  "rate_limited": {
+    "error": "Too many verification requests. Maximum 10 requests per minute.",
+    "code": "rate_limited",
+    "detail": "10 per 1 minute"
+  },
+  "all_agents_failed": {
+    "error": "All verification agents failed to complete analysis.",
+    "code": "all_agents_failed",
+    "detail": "Network timeout contacting factcheck, crossref, linguistic services."
+  }
+}

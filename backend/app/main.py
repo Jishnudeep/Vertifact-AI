@@ -100,8 +100,8 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
-    # Without this, browsers hide the latency header from the cross-origin frontend.
-    expose_headers=["X-Process-Time-Ms"],
+    # Without this, browsers hide latency and retry-after headers from cross-origin frontend.
+    expose_headers=["X-Process-Time-Ms", "Retry-After"],
 )
 
 @app.middleware("http")
@@ -128,6 +128,7 @@ async def rate_limited_handler(request: Request, exc: RateLimitExceeded):
     return JSONResponse(
         status_code=429,
         content={"error": "Rate Limited", "code": "rate_limited", "detail": str(exc.detail)},
+        headers={"Retry-After": "60"},
     )
 
 @app.exception_handler(InvalidInputError)
