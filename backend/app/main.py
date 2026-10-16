@@ -8,10 +8,7 @@ from fastapi.exceptions import RequestValidationError
 from slowapi.errors import RateLimitExceeded
 
 from app.config import settings
-from app.services.bias_lookup import load_bias_ratings
-from app.agents.linguistic_agent import get_spacy_nlp
-from app.services.embedding import generate_embedding
-from app.services.nli import get_nli_model
+from app.services.warmup import warm_models
 from app.api.routes import router as api_router, limiter
 from app.agents.orchestrator import (
     InvalidInputError, NonVerifiableClaimError, AllAgentsFailedError, drain_background_tasks,
@@ -47,30 +44,8 @@ async def lifespan(app: FastAPI):
             ", ".join(missing_keys),
         )
 
-    # 1. Load AllSides bias ratings
-    logger.info("Loading AllSides bias ratings...")
-    load_bias_ratings()
-    
-    # 2. Preload spaCy NLP pipeline. Not wrapped: en_core_web_sm is a pinned dependency, so a
-    # failure is a broken install, not a transient error. Booting anyway would degrade
-    # Cross-Ref and Linguistic on every request; fail at boot instead. (The embedding and NLI
-    # preloads below only warn: they may download from the HF hub, which can fail transiently.)
-    logger.info("Preloading spaCy 'en_core_web_sm'...")
-    get_spacy_nlp()
-        
-    # 3. Preload SentenceTransformer embedding model
-    logger.info("Preloading embedding model...")
-    try:
-        generate_embedding("VeriFact AI pipeline warmup embedding.")
-    except Exception as exc:
-        logger.warning(f"Embedding model preload warning: {exc}")
-        
-    # 4. Preload NLI cross-encoder (source stance + cache equivalence)
-    logger.info("Preloading NLI model...")
-    try:
-        get_nli_model()
-    except Exception as exc:
-        logger.warning(f"NLI model preload warning: {exc}")
+    # 1-4. Bias ratings, spaCy, embedding model, NLI model (see app/services/warmup.py)
+    warm_models()
 
     # 5. Build the ADK verification workflow + Runner. Not wrapped: a graph-configuration
     # error must fail at boot, not on the first request.
