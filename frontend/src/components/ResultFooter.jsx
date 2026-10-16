@@ -37,13 +37,6 @@ export default function ResultFooter({
   let dateDisplay = null;
   if (fresh && cached) {
     dateDisplay = 'Cached result';
-  } else if (!fresh && createdAt) {
-    const formattedDate = new Date(createdAt).toLocaleDateString(undefined, {
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric',
-    });
-    dateDisplay = `Checked on ${formattedDate}`;
   } else if (createdAt) {
     const formattedDate = new Date(createdAt).toLocaleDateString(undefined, {
       year: 'numeric',

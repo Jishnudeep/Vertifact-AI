@@ -1,6 +1,7 @@
 import React from 'react';
 import { useParams, Link, useLocation } from 'react-router-dom';
 import { useResult } from '../hooks/useResult';
+import AppHeader from '../components/AppHeader';
 import ResultView from '../components/ResultView';
 import ErrorNotice from '../components/ErrorNotice';
 
@@ -14,22 +15,7 @@ export default function ResultPage() {
   return (
     <div className="min-h-screen bg-midnight text-porcelain flex flex-col">
       {/* Top Navigation */}
-      <header className="border-b border-slate-800 bg-midnight/90 backdrop-blur sticky top-0 z-20">
-        <div className="max-w-5xl mx-auto px-4 sm:px-6 py-4 flex items-center justify-between">
-          <Link
-            to="/"
-            className="text-lg font-extrabold tracking-tight hover:opacity-90 transition-opacity"
-          >
-            VeriFact AI
-          </Link>
-          <Link
-            to="/"
-            className="text-xs font-bold px-3.5 py-1.5 rounded-full bg-porcelain text-midnight hover:bg-white transition-colors"
-          >
-            New check
-          </Link>
-        </div>
-      </header>
+      <AppHeader />
 
       {/* Main Content */}
       <main className="flex-1 flex flex-col">
