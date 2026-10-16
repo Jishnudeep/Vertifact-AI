@@ -341,8 +341,8 @@ async def test_insert_cache_persists_refute_and_evidence_status():
 def test_cache_hit_uses_shared_formatter():
     from app.api.result_format import format_stored_result
     row = _servable_row(
-        id="res-1",
-        claim_id="res-1",
+        id="results-row-999",
+        claim_id="claim-uuid-111",
         c_total=0.85,
         s_fact=0.9,
         b_ling=0.1,
@@ -363,5 +363,6 @@ def test_cache_hit_uses_shared_formatter():
     from app.agents.orchestrator import _format_cached_response
     actual = _format_cached_response(row, claim)
     assert actual == expected
+    assert actual["id"] == "claim-uuid-111"
 
 

@@ -65,18 +65,30 @@ async def get_recent_results_endpoint(request: Request, limit: int = 10):
 
         items = []
         for r in data:
-            claims_data = r.get("claims") or {}
-            claim_text = claims_data.get("extracted_claim") or ""
-            items.append(RecentResultModel(
-                id=str(r.get("id")),
-                claim=claim_text,
-                c_total=r.get("c_total"),
-                evidence_status=r.get("evidence_status") or "unverified",
-                confidence_level=r.get("confidence_level"),
-                created_at=str(r.get("created_at")),
-            ))
+            try:
+                c_total = r.get("c_total")
+                confidence_level = r.get("confidence_level")
+                if c_total is None or confidence_level is None:
+                    continue
+                claims_data = r.get("claims") or {}
+                claim_text = claims_data.get("extracted_claim") or ""
+                items.append(RecentResultModel(
+                    id=str(r.get("id")),
+                    claim=claim_text,
+                    c_total=c_total,
+                    evidence_status=r.get("evidence_status") or "unverified",
+                    confidence_level=confidence_level,
+                    created_at=str(r.get("created_at")),
+                ))
+            except Exception as row_exc:
+                logger.warning(f"Skipping invalid recent result row {r.get('id')}: {row_exc}")
+                continue
         return items
     except Exception as exc:
+        err_msg = str(exc)
+        if "42703" in err_msg or "undefined_column" in err_msg.lower():
+            logger.warning(f"Featured column not available in results table (migration 07 pending): {exc}")
+            return []
         logger.error(f"Error retrieving recent results: {exc}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

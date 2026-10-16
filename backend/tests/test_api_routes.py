@@ -384,5 +384,79 @@ def test_recent_empty_list():
         assert response.json() == []
 
 
+def test_recent_undefined_column_returns_empty_list():
+    mock_supabase = MagicMock()
+    mock_supabase.table.return_value.select.return_value.eq.return_value.order.return_value.limit.return_value.execute.side_effect = Exception("column results.featured does not exist (PostgreSQL error 42703)")
+
+    with patch("app.api.routes.get_supabase", return_value=mock_supabase):
+        response = client.get("/api/results/recent")
+        assert response.status_code == 200
+        assert response.json() == []
+
+
+def test_recent_skips_bad_row():
+    bad_row = {
+        "id": "bad-row-1",
+        "c_total": None,  # invalid: None c_total
+        "evidence_status": "unverified",
+        "confidence_level": None,
+        "created_at": "2026-10-15T12:00:00Z",
+        "claims": {"extracted_claim": "Bad row claim"},
+    }
+    good_row = {
+        "id": "good-row-2",
+        "c_total": 0.75,
+        "evidence_status": "corroborated",
+        "confidence_level": "medium",
+        "created_at": "2026-10-15T12:00:00Z",
+        "claims": {"extracted_claim": "Good row claim"},
+    }
+    mock_supabase = MagicMock()
+    mock_supabase.table.return_value.select.return_value.eq.return_value.order.return_value.limit.return_value.execute.return_value = MagicMock(data=[bad_row, good_row])
+
+    with patch("app.api.routes.get_supabase", return_value=mock_supabase):
+        response = client.get("/api/results/recent")
+        assert response.status_code == 200
+        data = response.json()
+        assert len(data) == 1
+        assert data[0]["id"] == "good-row-2"
+        assert data[0]["c_total"] == 0.75
+
+
+def test_get_result_sanitizes_raw_degradation_warnings():
+    valid_uuid = "a1b2c3d4-e5f6-4a5b-8c9d-0e1f2a3b4c5d"
+    mock_row = {
+        "id": valid_uuid,
+        "c_total": 0.5,
+        "s_fact": 0.5,
+        "b_ling": 0.5,
+        "v_consensus": 0.5,
+        "v_refute": 0.0,
+        "weights": {"w1": 0.5, "w2": 0.2, "w3": 0.3},
+        "confidence_level": "medium",
+        "evidence_status": "corroborated",
+        "warnings": ["Linguistic agent degraded: Connection timeout to remote service"],
+        "processing_time_ms": 2000,
+        "agent_outputs": {
+            "linguistic": {
+                "degraded": True,
+                "error_details": {"code": "TIMEOUT"}
+            }
+        },
+        "claims": {"extracted_claim": "Some claim"}
+    }
+    mock_supabase = MagicMock()
+    mock_supabase.table.return_value.select.return_value.eq.return_value.execute.return_value = MagicMock(data=[mock_row])
+
+    with patch("app.api.routes.get_supabase", return_value=mock_supabase):
+        response = client.get(f"/api/results/{valid_uuid}")
+        assert response.status_code == 200
+        data = response.json()
+        warnings = data["confidence"]["warnings"]
+        assert not any("agent degraded:" in w for w in warnings)
+        assert "Linguistic check timed out" in warnings
+
+
+
 
 

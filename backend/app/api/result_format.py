@@ -1,4 +1,5 @@
 from typing import Dict, Any, List, Optional
+from app.utils.errors import degradation_message
 
 
 def format_stored_result(row: Dict[str, Any], claim_text: str, *, cached: bool) -> Dict[str, Any]:
@@ -32,12 +33,31 @@ def format_stored_result(row: Dict[str, Any], claim_text: str, *, cached: bool) 
         or agent_outputs.get("search_suggestions_html")
     )
 
+    # Sanitize stored warnings: drop raw exception strings matching " agent degraded:"
+    # and regenerate them from agent_outputs using degradation_message.
+    raw_warnings = row.get("warnings") or []
+    sanitized_warnings = [w for w in raw_warnings if " agent degraded:" not in w]
+    if len(sanitized_warnings) < len(raw_warnings):
+        agent_labels = {
+            "factcheck": "Fact-check",
+            "crossref": "Cross-reference",
+            "linguistic": "Linguistic",
+        }
+        for name, label in agent_labels.items():
+            agent_data = agent_outputs.get(name) or {}
+            if agent_data.get("degraded"):
+                err_details = agent_data.get("error_details") or {}
+                code = err_details.get("code") if isinstance(err_details, dict) else None
+                msg = degradation_message(label, code)
+                if msg not in sanitized_warnings:
+                    sanitized_warnings.append(msg)
+
     # Legacy warnings: scored before stance-aware consensus (evidence_status is None)
     legacy_warning = (
         [] if row.get("evidence_status")
         else ["Legacy result: scored before stance-aware consensus; treat corroboration as unverified"]
     )
-    warnings = (row.get("warnings") or []) + legacy_warning
+    warnings = sanitized_warnings + legacy_warning
 
     # Linguistic profile default fallback
     linguistic_profile = row.get("linguistic_profile") or {
@@ -50,10 +70,10 @@ def format_stored_result(row: Dict[str, Any], claim_text: str, *, cached: bool) 
     # Sources pass through with found_by left as stored
     sources = row.get("source_citations") or []
 
-    # Claim text fallback
-    claim = claim_text or row.get("extracted_claim") or "Historical Claim"
+    # Claim text fallback: prefer extracted_claim that was scored
+    claim = row.get("extracted_claim") or claim_text or "Historical Claim"
 
-    result_id = str(row.get("id") or row.get("claim_id") or "")
+    result_id = str(row.get("claim_id") or row.get("id") or "")
 
     return {
         "id": result_id,

@@ -196,7 +196,7 @@ AGENT_NODES = (
 @node(name="dispatch_agents", rerun_on_resume=True)
 async def dispatch_agents_node(ctx: Context, node_input: VerifyRequest) -> Dict[str, Any]:
     """Supervisor: run the three agents concurrently; a failed agent degrades, never the run."""
-    async def _timed_run(agent_node):
+    async def _timed_run(agent_node: Any) -> Tuple[Any, int]:
         t0 = time.monotonic()
         try:
             res = await ctx.run_node(agent_node, node_input)
@@ -362,6 +362,7 @@ async def run_verification_workflow(request: VerifyRequest) -> PipelineOutcome:
 
 
 def _format_cached_response(cached: Dict[str, Any], cleaned_text: str) -> Dict[str, Any]:
+    # Function-local import avoids circular dependency between routes and orchestrator
     from app.api.result_format import format_stored_result
     return format_stored_result(cached, cleaned_text, cached=True)
 

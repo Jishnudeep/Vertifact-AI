@@ -392,3 +392,33 @@ def test_c_total_unchanged_by_transparency():
         )
         expected = round(max(0.0, min(1.0, capped)), 3)
         assert res.c_total == expected
+
+
+def test_cap_rule_consistency_grid():
+    """
+    Grid regression test asserting that apply_confidence_capping and binding_cap_rule
+    always agree across inputs and boundaries.
+    """
+    import itertools
+    grid = [i / 10 for i in range(11)] + [0.33, 0.50, 0.55, 0.25]
+    sfacts = [0.0, 0.05, 0.1, 0.2, 0.25, 0.5, 0.75, 1.0]
+    caps = {"false_verdict": None, "disputed": 0.33, "partial_analysis": 0.50, "low_evidence": 0.55}
+
+    engine = ScoringEngine()
+    for s, b, vc in itertools.product(sfacts, grid, grid):
+        for vr in (0.0, 0.2, 0.35, 0.8):
+            for ag in (1, 2, 3):
+                for fc, vf in ((False, False), (True, False), (True, True)):
+                    r = engine.compute(
+                        s_fact=s, b_ling=b, v_consensus=vc,
+                        agents_succeeded=ag, fact_check_found=fc,
+                        verdict_found=vf, v_refute=vr,
+                    )
+                    if r.cap_rule is None:
+                        assert r.c_total == r.raw_c_total, f"Uncapped result has c_total != raw_c_total: {r}"
+                    else:
+                        exp = min(max(0, min(1, s)) + 0.15, 0.25) if r.cap_rule == "false_verdict" else caps[r.cap_rule]
+                        assert abs(r.c_total - round(exp, 3)) < 1e-6 and r.c_total < r.raw_c_total, (
+                            f"Cap rule inconsistency for rule {r.cap_rule}: raw={r.raw_c_total}, c_total={r.c_total}, exp={exp}"
+                        )
+
