@@ -6,7 +6,7 @@ import sys
 import time
 import uuid
 from dataclasses import dataclass, field
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Tuple
 
 # VeriFact does not use A2A. ADK's build_node() (called on EVERY ctx.run_node) tries
 # `from google.adk.agents.remote_a2a_agent import RemoteA2aAgent` inside try/except ImportError

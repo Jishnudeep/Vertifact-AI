@@ -118,7 +118,7 @@ def test_get_result_found():
         response = client.get(f"/api/results/{valid_uuid}")
         assert response.status_code == 200
         data = response.json()
-        assert data["id"] == valid_uuid
+        assert data["id"] == mock_row["claim_id"]
         assert data["claim"] == "Historical verified claim"
         assert data["trust_score"]["c_total"] == 0.88
 
