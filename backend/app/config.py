@@ -17,36 +17,12 @@ class Settings(BaseSettings):
     # Allowed CORS origins for frontend integration (Vite dev server default 5173)
     cors_origins: List[str] = ["http://localhost:5173", "http://localhost:3000"]
     
-    # Model ID comes from config as per CLAUDE.md §3, TDD §4.1, PRD §5 — never hardcoded in agents.
-    #
-    # Dev model: `groq/openai/gpt-oss-120b`. This deviates from the originally documented
-    # `groq/llama-3.1-8b-instant` because Groq no longer serves ANY Llama chat model on the
-    # developer tier — those moved to Enterprise-tier access (contact sales), they are not
-    # deprecated. Verified live 2026-09-10 against this project's Groq key:
-    #   groq/llama-3.1-8b-instant    -> 404 NotFoundError: GroqException - {"error":{"message":
-    #     "The model `llama-3.1-8b-instant` does not exist or you do not have access to it.",
-    #     "type":"invalid_request_error","code":"model_not_found"}}
-    #   groq/llama-3.3-70b-versatile -> 404, identical model_not_found body
-    #   groq/openai/gpt-oss-120b     -> 200, clean JSON on both the verdict-extraction and the
-    #                                   claim-alignment prompts (reasoning in a separate field)
-    # GET https://api.groq.com/openai/v1/models on the same key lists exactly:
-    #   allam-2-7b, groq/compound, groq/compound-mini, llama-prompt-guard-2-22m,
-    #   llama-prompt-guard-2-86m, openai/gpt-oss-120b, openai/gpt-oss-20b,
-    #   openai/gpt-oss-safeguard-20b, qwen/qwen3.6-27b, qwen/qwen3.8-27b, whisper-*
-    # — no Llama chat model, so no Llama-family fallback is reachable.
-    # Model card: https://console.groq.com/docs/models (gpt-oss-120b is a PRODUCTION model,
-    # ~500 tok/s, $0.15 / $0.60 per M input/output tokens).
-    # 120b over 20b: stronger adherence to the strict JSON contract on the alignment and
-    # verdict-extraction prompts, which is what the response parser depends on.
-    # It is a reasoning model, so max_tokens is 1024 in adk_helpers.py — 256 truncated the JSON
-    # body and forced the (injection-prone) regex fallback (R7.B1/R7.P4).
-    # Revisit when prod moves to vLLM (PRD §5).
-    model_id: str = "groq/openai/gpt-oss-120b"
-
-    # Plan 6: Gemini model for the `google_search` grounded-search agents (ADK's google_search
-    # tool only runs on Gemini models). UNVERIFIED: the Task 0 live probe was declined, so this
-    # id has not been confirmed against the project key — it is checked in the Task 9 live gate.
-    # Override with SEARCH_MODEL_ID.
+    # Model of every worker LlmAgent and of the grounded-search sub-agent (ADK's native Gemini,
+    # AI Studio key; never hardcoded in agent logic). Groq/gpt-oss is tabled for now.
+    # Override with MODEL_ID / SEARCH_MODEL_ID.
+    model_id: str = "gemini-3.1-flash-lite"
+    # Gemini model for the `google_search` grounded-search sub-agent (it can't be a tool of a
+    # model that also has function tools, so the search tools call it as a service).
     search_model_id: str = "gemini-3.1-flash-lite"
 
     # Model name for generating embeddings
@@ -68,10 +44,15 @@ class Settings(BaseSettings):
     cache_ttl_fact_checked_hours: int = 720
     cache_ttl_default_hours: int = 24
     
-    # H1: total wall-clock budget per /api/verify request (PRD §10: < 10 s end-to-end).
-    request_deadline_s: float = 9.5
-    
-    # Groq free tier for gpt-oss-120b = 1,000 requests/day; keep headroom for retries.
+    # H1: total wall-clock budget per /api/verify request. The PRD §10 "< 10 s" target and the
+    # 8 s per-agent limit are no longer design constraints: the agents are real ADK tool loops
+    # whose latency is unknown until measured. These are generous BACKSTOPS, to be replaced by
+    # the values the benchmark-then-optimize phase sets (eval/latency_bench.py).
+    request_deadline_s: float = 35.0
+    # Backstop for one worker agent (all of its LLM turns and tool calls). TBD from benchmarking.
+    agent_timeout_s: float = 30.0
+
+    # Daily cap on worker LLM turns (a tool loop is several turns per agent).
     llm_daily_call_budget: int = 900
     # Plan 6: Gemini grounded-search calls per UTC day (one per Fact-Check / Cross-Ref run).
     search_daily_call_budget: int = 50

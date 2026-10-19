@@ -1,7 +1,7 @@
 import pytest
 
-import app.agents.crossref_agent as crossref_agent
-import app.agents.factcheck_agent as factcheck_agent
+import app.agents.crossref_agent as crossref_tools
+import app.agents.factcheck_agent as factcheck_tools
 from eval.replay import (
     EvidenceReplay, ReplayMissError, excluding_domains,
     filter_factcheck_claims, filter_web_results,
@@ -33,13 +33,13 @@ async def test_live_errors_are_not_recorded(tmp_path, monkeypatch):
     async def failing(kind, claim):
         raise EvidenceAPIError("Gemini search failed", provider="gemini_search")
 
-    monkeypatch.setattr(crossref_agent, "grounded_search", failing)
-    monkeypatch.setattr(factcheck_agent, "grounded_search", failing)
+    monkeypatch.setattr(crossref_tools, "grounded_search", failing)
+    monkeypatch.setattr(factcheck_tools, "grounded_search", failing)
     replay = EvidenceReplay(tmp_path, "record")
     replay.install()
     try:
         with pytest.raises(EvidenceAPIError):
-            await crossref_agent.grounded_search("coverage", "claim")
+            await crossref_tools.grounded_search("coverage", "claim")
     finally:
         replay.uninstall()
     assert replay.recorded == 0
@@ -64,13 +64,13 @@ async def test_grounded_search_replayed_and_filtered(tmp_path, monkeypatch):
         calls["n"] += 1
         return sample_gs
 
-    monkeypatch.setattr(crossref_agent, "grounded_search", fake_grounded_search)
-    monkeypatch.setattr(factcheck_agent, "grounded_search", fake_grounded_search)
+    monkeypatch.setattr(crossref_tools, "grounded_search", fake_grounded_search)
+    monkeypatch.setattr(factcheck_tools, "grounded_search", fake_grounded_search)
 
     recorder = EvidenceReplay(tmp_path, "record")
     recorder.install()
     try:
-        first = await crossref_agent.grounded_search("coverage", "claim 1")
+        first = await crossref_tools.grounded_search("coverage", "claim 1")
     finally:
         recorder.uninstall()
     assert recorder.recorded == 1 and calls["n"] == 1
@@ -80,8 +80,8 @@ async def test_grounded_search_replayed_and_filtered(tmp_path, monkeypatch):
     player.install()
     try:
         with excluding_domains(["politifact.com"]):
-            filtered = await crossref_agent.grounded_search("coverage", "claim 1")
-        unfiltered = await crossref_agent.grounded_search("coverage", "claim 1")
+            filtered = await crossref_tools.grounded_search("coverage", "claim 1")
+        unfiltered = await crossref_tools.grounded_search("coverage", "claim 1")
     finally:
         player.uninstall()
 
@@ -102,14 +102,14 @@ async def test_page_fetch_replay_roundtrip_none(tmp_path, monkeypatch):
             return PageText(final_url=url, domain="reuters.com", title="Title", text="Text " * 50)
         return None
 
-    monkeypatch.setattr(crossref_agent, "fetch_page_text", fake_fetch)
-    monkeypatch.setattr(factcheck_agent, "fetch_page_text", fake_fetch)
+    monkeypatch.setattr(crossref_tools, "fetch_page_text", fake_fetch)
+    monkeypatch.setattr(factcheck_tools, "fetch_page_text", fake_fetch)
 
     recorder = EvidenceReplay(tmp_path, "record")
     recorder.install()
     try:
-        res_ok = await crossref_agent.fetch_page_text("https://reuters.com/news", "reuters.com")
-        res_none = await crossref_agent.fetch_page_text("https://broken.com", "broken.com")
+        res_ok = await crossref_tools.fetch_page_text("https://reuters.com/news", "reuters.com")
+        res_none = await crossref_tools.fetch_page_text("https://broken.com", "broken.com")
     finally:
         recorder.uninstall()
     assert recorder.recorded == 2 and calls["n"] == 2
@@ -118,8 +118,8 @@ async def test_page_fetch_replay_roundtrip_none(tmp_path, monkeypatch):
     player = EvidenceReplay(tmp_path, "replay")
     player.install()
     try:
-        rep_ok = await crossref_agent.fetch_page_text("https://reuters.com/news", "reuters.com")
-        rep_none = await crossref_agent.fetch_page_text("https://broken.com", "broken.com")
+        rep_ok = await crossref_tools.fetch_page_text("https://reuters.com/news", "reuters.com")
+        rep_none = await crossref_tools.fetch_page_text("https://broken.com", "broken.com")
     finally:
         player.uninstall()
 
@@ -134,7 +134,7 @@ async def test_replay_miss_raises_for_grounded_search(tmp_path, monkeypatch):
     player.install()
     try:
         with pytest.raises(ReplayMissError) as exc_info:
-            await factcheck_agent.grounded_search("factcheck", "unrecorded claim")
+            await factcheck_tools.grounded_search("factcheck", "unrecorded claim")
         assert exc_info.value.provider == "gemini_search"
     finally:
         player.uninstall()

@@ -3,7 +3,8 @@ Grounded web search on ADK's built-in `google_search` tool (Plan 6).
 
 Plan 6 decisions honoured here:
   D1  Gemini API with an AI Studio key (`settings.gemini_api_key`), never Vertex AI.
-  D2  The workflow calls a search agent directly, once per Fact-Check / Cross-Ref run.
+  D2  The worker agents' search TOOLS call a search agent (which cannot itself be a tool of a
+      model that also has function tools: `google_search` cannot be mixed with them).
   D4  Only the CITED SOURCES (uri, title, domain), the search queries and Google's
       search-suggestion HTML leave this module. The grounded answer text is never read.
   D5  `search_suggestions_html` is carried through so the frontend can display it.
@@ -165,9 +166,12 @@ def sources_from_metadata(md: Optional[types.GroundingMetadata]) -> List[Grounde
     return sources
 
 
-async def grounded_search(kind: SearchKind, claim: str) -> GroundedSearch:
+async def grounded_search(kind: SearchKind, query: str) -> GroundedSearch:
     """
-    Run the `kind` grounded-search agent once for `claim` and return only its citations.
+    Run the `kind` grounded-search agent once for `query` and return only its citations.
+
+    `query` is the text to search for. Since the tool-calling refactor it is the search query a
+    worker's LLM wrote, not necessarily the user's claim; it is fenced in <claim> tags either way.
 
     Raises:
         EvidenceAPIError(provider="gemini_search"): key missing, daily search budget exhausted
@@ -187,7 +191,7 @@ async def grounded_search(kind: SearchKind, claim: str) -> GroundedSearch:
         logger.error("Daily grounded-search budget exhausted; refusing search.")
         raise EvidenceBudgetExceeded("Daily grounded-search budget exhausted", provider=PROVIDER)
 
-    fenced = neutralize_for_prompt(claim[:MAX_CLAIM_CHARS]).translate(_FENCE_SAFE)
+    fenced = neutralize_for_prompt(query[:MAX_CLAIM_CHARS]).translate(_FENCE_SAFE)
     prompt = f"<claim>{fenced}</claim>"
 
     try:

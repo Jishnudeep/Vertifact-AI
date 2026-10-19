@@ -11,6 +11,8 @@ from app.agents.factcheck_agent import FactCheckResult, make_neutral_factcheck
 from app.agents.crossref_agent import CrossRefResult, make_neutral_crossref
 from app.agents.linguistic_agent import LinguisticResult, make_neutral_linguistic
 from app.services.errors import EvidenceAPIError
+from tests.agent_patches import patched_agents
+from tests.scripted_llm import call, final, install_script
 
 @pytest.mark.anyio
 async def test_verify_claim_cache_hit():
@@ -31,9 +33,10 @@ async def test_verify_claim_cache_hit():
         "linguistic_profile": {"clickbait_syntax": 0.0, "sensationalism": 0.0, "emotional_framing": 0.1, "informational_density": 0.9}
     }
 
+    mock_fc = AsyncMock()
     with patch("app.agents.orchestrator.generate_embedding", return_value=[0.1] * 384), \
          patch("app.agents.orchestrator.lookup_cache", return_value=mock_cached) as mock_lookup, \
-         patch("app.agents.factcheck_agent.run") as mock_fc:
+         patched_agents(fc=mock_fc):
          
         result = await verify_claim("The Earth orbits the Sun")
         
@@ -77,9 +80,8 @@ async def test_verify_claim_cache_miss_pipeline_success():
 
     with patch("app.agents.orchestrator.generate_embedding", return_value=[0.1] * 384), \
          patch("app.agents.orchestrator.lookup_cache", return_value=None), \
-         patch("app.agents.factcheck_agent.run", return_value=mock_fc), \
-         patch("app.agents.crossref_agent.run", return_value=mock_cr), \
-         patch("app.agents.linguistic_agent.run", return_value=mock_ling), \
+         patched_agents(fc=AsyncMock(return_value=mock_fc), cr=AsyncMock(return_value=mock_cr),
+                        ling=AsyncMock(return_value=mock_ling)), \
          patch("app.agents.orchestrator.insert_cache", return_value="new-claim-uuid-456") as mock_insert:
 
         result = await verify_claim("The Earth orbits the Sun")
@@ -104,9 +106,8 @@ async def test_verify_claim_all_agents_fail_raises_error():
 
     with patch("app.agents.orchestrator.generate_embedding", return_value=[0.1] * 384), \
          patch("app.agents.orchestrator.lookup_cache", return_value=None), \
-         patch("app.agents.factcheck_agent.run", return_value=mock_fc), \
-         patch("app.agents.crossref_agent.run", return_value=mock_cr), \
-         patch("app.agents.linguistic_agent.run", return_value=mock_ling):
+         patched_agents(fc=AsyncMock(return_value=mock_fc), cr=AsyncMock(return_value=mock_cr),
+                        ling=AsyncMock(return_value=mock_ling)):
 
         with pytest.raises(AllAgentsFailedError) as exc_info:
             await verify_claim("NASA launched a rocket yesterday")
@@ -123,9 +124,8 @@ async def test_verify_claim_partial_agent_degradation():
 
     with patch("app.agents.orchestrator.generate_embedding", return_value=[0.1] * 384), \
          patch("app.agents.orchestrator.lookup_cache", return_value=None), \
-         patch("app.agents.factcheck_agent.run", return_value=mock_fc), \
-         patch("app.agents.crossref_agent.run", return_value=mock_cr), \
-         patch("app.agents.linguistic_agent.run", return_value=mock_ling), \
+         patched_agents(fc=AsyncMock(return_value=mock_fc), cr=AsyncMock(return_value=mock_cr),
+                        ling=AsyncMock(return_value=mock_ling)), \
          patch("app.agents.orchestrator.insert_cache", return_value="partial-uuid-789"):
 
         result = await verify_claim("NASA launched a rocket yesterday")
@@ -141,13 +141,16 @@ async def test_evidence_api_outage_surfaces_partial_analysis_warning():
     'Partial analysis' flag instead of a confident-looking score.
     """
     outage = EvidenceAPIError("Gemini search returned HTTP 503")
+    none = final(evidence="none", source_id=None, relevant=False, opposite_polarity=False,
+                 rating="unproven", explanation="nothing")
 
-    with patch("app.agents.orchestrator.generate_embedding", return_value=[0.1] * 384), \
-         patch("app.agents.orchestrator.lookup_cache", return_value=None), \
-         patch("app.agents.factcheck_agent.search_factchecks", side_effect=EvidenceAPIError("Google Fact Check returned HTTP 503")), \
-         patch("app.agents.factcheck_agent.grounded_search", side_effect=outage), \
-         patch("app.agents.crossref_agent.grounded_search", side_effect=outage), \
-         patch("app.agents.orchestrator.insert_cache", return_value=None):
+    with patch("app.agents.orchestrator.generate_embedding", return_value=[0.1] * 384),          patch("app.agents.orchestrator.lookup_cache", return_value=None),          patch("app.agents.factcheck_agent.search_factchecks", side_effect=EvidenceAPIError("Google Fact Check returned HTTP 503")),          patch("app.agents.factcheck_agent.grounded_search", side_effect=outage),          patch("app.agents.crossref_agent.grounded_search", side_effect=outage),          patch("app.agents.orchestrator.insert_cache", return_value=None),          pytest.MonkeyPatch.context() as mp:
+        install_script(mp, routes={
+            "fact-check lookup agent": [call("search_fact_check_database", query="q"),
+                                        call("search_fact_check_sites", query="q"), none],
+            "cross-reference agent": [call("search_news_coverage", query="q"),
+                                      final(queries_rationale="x")],
+        })
 
         result = await verify_claim("NASA launched a rocket to Mars yesterday", bypass_cache=True)
 
@@ -155,6 +158,8 @@ async def test_evidence_api_outage_surfaces_partial_analysis_warning():
         assert result["confidence"]["level"] in {"low", "insufficient"}
         assert result["confidence"]["verdict_found"] is False
         assert result["trust_score"]["c_total"] <= 0.50
+        degraded = {a["name"] for a in result["agents"] if a["status"] == "degraded"}
+        assert degraded == {"factcheck", "crossref"}
 
 @pytest.mark.anyio
 async def test_verify_claim_rejects_empty_input():
@@ -199,9 +204,8 @@ async def test_no_verdict_never_yields_high_confidence():
 
     with patch("app.agents.orchestrator.generate_embedding", return_value=[0.1] * 384), \
          patch("app.agents.orchestrator.lookup_cache", return_value=None), \
-         patch("app.agents.factcheck_agent.run", return_value=mock_fc), \
-         patch("app.agents.crossref_agent.run", return_value=mock_cr), \
-         patch("app.agents.linguistic_agent.run", return_value=mock_ling), \
+         patched_agents(fc=AsyncMock(return_value=mock_fc), cr=AsyncMock(return_value=mock_cr),
+                        ling=AsyncMock(return_value=mock_ling)), \
          patch("app.agents.orchestrator.insert_cache", return_value=None):
 
         result = await verify_claim("SHOCKING SECRET revealed! You won't believe...", bypass_cache=True)
@@ -226,9 +230,8 @@ async def test_verify_claim_bypass_cache():
 
     with patch("app.agents.orchestrator.generate_embedding", return_value=[0.1] * 384), \
          patch("app.agents.orchestrator.lookup_cache", return_value=mock_cached) as mock_lookup, \
-         patch("app.agents.factcheck_agent.run", return_value=mock_fc), \
-         patch("app.agents.crossref_agent.run", return_value=mock_cr), \
-         patch("app.agents.linguistic_agent.run", return_value=mock_ling), \
+         patched_agents(fc=AsyncMock(return_value=mock_fc), cr=AsyncMock(return_value=mock_cr),
+                        ling=AsyncMock(return_value=mock_ling)), \
          patch("app.agents.orchestrator.insert_cache") as mock_insert:
 
         result = await verify_claim("NASA detected ice on Mars", bypass_cache=True)
@@ -260,9 +263,8 @@ async def test_disputed_claim_pipeline():
 
     with patch("app.agents.orchestrator.generate_embedding", return_value=[0.1] * 384), \
          patch("app.agents.orchestrator.lookup_cache", return_value=None), \
-         patch("app.agents.factcheck_agent.run", return_value=mock_fc), \
-         patch("app.agents.crossref_agent.run", return_value=mock_cr), \
-         patch("app.agents.linguistic_agent.run", return_value=mock_ling), \
+         patched_agents(fc=AsyncMock(return_value=mock_fc), cr=AsyncMock(return_value=mock_cr),
+                        ling=AsyncMock(return_value=mock_ling)), \
          patch("app.agents.orchestrator.insert_cache", return_value="disputed-uuid") as mock_insert:
 
         result = await verify_claim("Drinking bleach cures the flu")

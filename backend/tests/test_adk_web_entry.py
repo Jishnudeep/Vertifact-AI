@@ -15,6 +15,7 @@ from google.genai import types
 from app.agents.crossref_agent import CrossRefResult
 from app.agents.factcheck_agent import make_neutral_factcheck
 from app.agents.linguistic_agent import LinguisticResult
+from tests.agent_patches import patched_agents
 from app.agents.orchestrator import InvalidInputError, NonVerifiableClaimError, PipelineOutcome
 from app.services import warmup
 from verifact.agent import root_agent
@@ -59,9 +60,8 @@ async def _run(text: str, calls: list, embed: MagicMock) -> list:
         stack.enter_context(patch("verifact.agent.ensure_models_warm", side_effect=lambda: calls.append("warm")))
         stack.enter_context(patch("app.agents.orchestrator.generate_embedding", new=embed))
         stack.enter_context(patch("app.agents.orchestrator.lookup_cache", new=AsyncMock(return_value=None)))
-        stack.enter_context(patch("app.agents.factcheck_agent.run", new=AsyncMock(return_value=fc)))
-        stack.enter_context(patch("app.agents.crossref_agent.run", new=AsyncMock(return_value=cr)))
-        stack.enter_context(patch("app.agents.linguistic_agent.run", new=AsyncMock(return_value=ling)))
+        stack.enter_context(patched_agents(fc=AsyncMock(return_value=fc), cr=AsyncMock(return_value=cr),
+                                           ling=AsyncMock(return_value=ling)))
 
         runner = InMemoryRunner(app=App(name="verifact", root_agent=root_agent))
         await runner.session_service.create_session(app_name="verifact", user_id="u", session_id="s")

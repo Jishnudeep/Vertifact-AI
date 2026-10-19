@@ -59,7 +59,9 @@ def neutralize_for_prompt(text: str) -> str:
 
     Factual claims do not meaningfully need literal braces or `key:` JSON syntax, so this is
     lossless for the verification task. Layers 2 and 3 (the balanced-span parser and the
-    regex fallback in `adk_helpers`) are defence in depth behind this.
+    regex fallback in `adk_helpers`) are defence in depth behind this. Those parsers were
+    removed with the move to schema-validated tool-calling agents (`output_schema`); this
+    neutralisation, applied through `app.agents.common.fenced`, now stands as the first line.
     """
     if not text:
         return ""

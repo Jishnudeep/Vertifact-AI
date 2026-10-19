@@ -33,7 +33,6 @@ async def lifespan(app: FastAPI):
         name for name, value in (
             ("GEMINI_API_KEY", settings.gemini_api_key),
             ("GOOGLE_FACTCHECK_API_KEY", settings.google_fact_check_api_key),
-            ("GROQ_API_KEY", settings.groq_api_key),
         )
         if not value
     ]

@@ -43,7 +43,7 @@ flowchart TD
     S --> R
 ```
 
-Worker agents run **in parallel** under the orchestrator, each with an **8-second timeout**. A failed or timed-out agent degrades gracefully (neutral value + "Partial Analysis" flag) — it never crashes the pipeline or fabricates a score.
+Worker agents run **in parallel** under the orchestrator, each under a configured timeout (generous backstops for now; final values TBD from benchmarking). A failed or timed-out agent degrades gracefully (neutral value + "Partial Analysis" flag) — it never crashes the pipeline or fabricates a score.
 
 ### The trust score
 

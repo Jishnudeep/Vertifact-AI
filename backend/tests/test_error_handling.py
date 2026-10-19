@@ -1,5 +1,5 @@
 import asyncio
-from unittest.mock import AsyncMock, patch, MagicMock
+from unittest.mock import AsyncMock, patch
 import pytest
 import httpx
 
@@ -11,6 +11,7 @@ from app.utils.errors import (
 from app.services.errors import EvidenceAPIError
 from app.agents import factcheck_agent, crossref_agent, linguistic_agent
 from app.agents.orchestrator import verify_claim
+from tests.agent_patches import patched_agents
 
 try:
     import litellm
@@ -78,48 +79,6 @@ def test_classify_litellm_errors():
     assert details_nf.code == ProviderErrorCode.MODEL_NOT_FOUND
 
 @pytest.mark.anyio
-async def test_run_adk_agent_rate_limit_retry():
-    """Verify that run_adk_agent retries on RateLimitError and succeeds."""
-    if litellm is None:
-        pytest.skip("litellm not installed")
-
-    from app.utils.adk_helpers import run_adk_agent
-
-    mock_runner = MagicMock()
-    
-    # First attempt raises RateLimitError, second attempt yields a valid response
-    rl_exc = litellm.RateLimitError(
-        message="Rate limit reached. Please try again in 0.1s",
-        model="groq/openai/gpt-oss-20b",
-        llm_provider="groq"
-    )
-    rl_exc.retry_after = 0.05
-
-    event_success = MagicMock()
-    event_success.is_final_response.return_value = True
-    part_mock = MagicMock()
-    part_mock.text = '{"rating": "true", "explanation": "test"}'
-    part_mock.thought = False
-    event_success.content.parts = [part_mock]
-
-    attempts = 0
-    async def fake_run_async(*args, **kwargs):
-        nonlocal attempts
-        attempts += 1
-        if attempts == 1:
-            raise rl_exc
-        yield event_success
-
-    mock_runner.run_async = fake_run_async
-
-    with patch("app.utils.adk_helpers.get_adk_runner", return_value=mock_runner):
-        with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
-            res = await run_adk_agent("test_agent", "instruction", "prompt", "test-app")
-            assert '{"rating": "true"' in res
-            assert attempts == 2
-            mock_sleep.assert_awaited_once_with(0.05)
-
-@pytest.mark.anyio
 async def test_orchestrator_enriches_warnings_with_provider_error():
     """Verify that orchestrator surfaces specific provider degradation warnings."""
     # Mock factcheck to succeed
@@ -154,9 +113,8 @@ async def test_orchestrator_enriches_warnings_with_provider_error():
         degraded=False
     )
 
-    with patch("app.agents.factcheck_agent.run", new_callable=AsyncMock, return_value=fc_ok), \
-         patch("app.agents.crossref_agent.run", new_callable=AsyncMock, return_value=cr_degraded), \
-         patch("app.agents.linguistic_agent.run", new_callable=AsyncMock, return_value=ling_ok), \
+    with patched_agents(fc=AsyncMock(return_value=fc_ok), cr=AsyncMock(return_value=cr_degraded),
+                        ling=AsyncMock(return_value=ling_ok)), \
          patch("app.agents.orchestrator.lookup_cache", new_callable=AsyncMock, return_value=None), \
          patch("app.agents.orchestrator.insert_cache", new_callable=AsyncMock, return_value="mock-id-123"):
         

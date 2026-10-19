@@ -20,7 +20,7 @@ column (1 → 2 → 4 → 3 → 5). Each plan's Task 0 checks its prerequisites.
 | 5th | Plan 5 | [doc-sync](2026-09-23-doc-sync.md) | Medium drift, H5, H6: error codes, rating map, docs, skills | Plans 1–4 | completed 2026-09-28 (Antigravity) |
 | 6th | Plan 6 | [google-search-grounding](2026-10-14-google-search-grounding.md) | Google Search grounding replaces Tavily | Plans 1–5 | completed |
 | 7th | Plan 7 | [frontend-mvp](2026-10-15-frontend-mvp.md) | Frontend MVP, text input end to end (Midnight Transit Diagram), plus API additions: per-agent status, cap fields, `found_by`, stored-result parity, `Retry-After`, featured recent results | Plan 6 | completed |
-| 8th | Plan 9 | (not written yet) | Evals: valid baseline, DeepEval guardrail, ADK eval over traces, latency and cache metrics | Plan 7 | to be designed in its own brainstorm |
+| 8th | Plan 9 | [evals](2026-10-16-evals.md) | Evals: valid baseline, DeepEval guardrail, ADK eval over traces, latency and cache metrics | Plan 7 | designed, revised after stress test 2026-10-16; open decisions D1–D6 (spec §6) before execution |
 | 9th | Plan 10 | (not written yet) | Governance, observability, deployment | Plan 9 | to be designed in its own brainstorm |
 | 10th (last) | Plan 8 | [url-and-screenshot-input](2026-10-15-url-and-screenshot-input.md) | URL scraper, Surya OCR, `/api/verify/image`, frontend input | Plans 7, 9, 10 | not started; runs last by decision (2026-10-15) |
 
