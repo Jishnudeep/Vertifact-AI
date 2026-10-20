@@ -35,6 +35,8 @@ from eval.metrics.bias_leakage import evaluate_bias_leakage
 from eval.metrics.bucketed_accuracy import compute_bucketed_accuracy
 from eval.metrics.segments import compute_segment_metrics
 from eval.replay import EvidenceReplay, ReplayMode, excluding_domains
+from eval.trace_eval import audit_trace, make_eval_case
+from collections import defaultdict
 
 DEFAULT_CACHE_DIR = BASE_DIR / "eval" / "results" / "evidence_cache"
 
@@ -64,6 +66,7 @@ def assess_run_validity(
     bridging_violations: List[str],
     adversarial_results: List[Dict[str, Any]],
     replay_misses: int = 0,
+    trace_failures_by_check: Optional[Dict[str, int]] = None,
 ) -> Tuple[str, List[str]]:
     """
     Decide whether a run may be published, as a PURE function of its measurements.
@@ -105,6 +108,18 @@ def assess_run_validity(
         if res.get("confidence") == "high":
             guardrail_reasons.append(
                 f"INJECTION: adversarial claim [{res.get('id')}] produced confidence='high'"
+            )
+
+    if trace_failures_by_check:
+        bias_trace_fail = trace_failures_by_check.get("bias_from_allsides", 0)
+        if bias_trace_fail > 0:
+            guardrail_reasons.append(
+                f"TRACE AUDIT: bias_from_allsides check failed on {bias_trace_fail} case(s)"
+            )
+        adv_trace_fail = trace_failures_by_check.get("adversarial_no_verdict", 0)
+        if adv_trace_fail > 0:
+            guardrail_reasons.append(
+                f"TRACE AUDIT: adversarial_no_verdict check failed on {adv_trace_fail} case(s)"
             )
 
     # --- Invalid measurement ---
@@ -199,6 +214,10 @@ async def run_evaluation(
 
         eval_results: List[Dict[str, Any]] = []
         adversarial_results: List[Dict[str, Any]] = []
+        traces_dir = BASE_DIR / "eval" / "results" / "traces"
+        traces_dir.mkdir(parents=True, exist_ok=True)
+        trace_audit_cases = 0
+        trace_failures_by_check: Dict[str, int] = defaultdict(int)
         start_time = time.time()
 
         print("\n" + "=" * 80)
@@ -252,6 +271,14 @@ async def run_evaluation(
                     )
                     if adversarial_safe:
                         adversarial_handled += 1
+                    audit = audit_trace(res, claim_type="adversarial")
+                    trace_audit_cases += 1
+                    for f_check in audit.failures:
+                        trace_failures_by_check[f_check] += 1
+                    trace_case = make_eval_case(cid, text, "adversarial", res)
+                    with open(traces_dir / f"{cid}.json", "w", encoding="utf-8") as tf:
+                        json.dump({"eval_cases": [trace_case]}, tf, indent=2)
+
                     adv_result = {
                         "id": cid,
                         "claim": text,
@@ -262,7 +289,12 @@ async def run_evaluation(
                         "verdict_found": verdict_found,
                         "warnings": res["confidence"].get("warnings", []),
                         "adversarial_safe": adversarial_safe,
-                        "status": "PASS" if adversarial_safe else "FAIL"
+                        "status": "PASS" if adversarial_safe else "FAIL",
+                        "trace_audit": {
+                            "passed": audit.passed,
+                            "failures": audit.failures,
+                            "checks": audit.checks,
+                        },
                     }
                     adversarial_results.append(adv_result)
                     eval_results.append(adv_result)
@@ -316,6 +348,14 @@ async def run_evaluation(
                     "ground_truth": gt_score,
                 })
 
+                audit = audit_trace(res, claim_type="verifiable")
+                trace_audit_cases += 1
+                for f_check in audit.failures:
+                    trace_failures_by_check[f_check] += 1
+                trace_case = make_eval_case(cid, text, "verifiable", res)
+                with open(traces_dir / f"{cid}.json", "w", encoding="utf-8") as tf:
+                    json.dump({"eval_cases": [trace_case]}, tf, indent=2)
+
                 eval_results.append({
                     "id": cid,
                     "claim": text,
@@ -329,7 +369,12 @@ async def run_evaluation(
                     "evidence_status": evidence_status,
                     "source_dataset": item.get("source_dataset", "curated"),
                     "sources_count": len(sources),
-                    "status": "PASS"
+                    "status": "PASS",
+                    "trace_audit": {
+                        "passed": audit.passed,
+                        "failures": audit.failures,
+                        "checks": audit.checks,
+                    },
                 })
             except Exception as exc:
                 logger.error(f"Error evaluating claim [{cid}]: {exc}")
@@ -389,6 +434,7 @@ async def run_evaluation(
             bridging_violations=bridging_violations,
             adversarial_results=adversarial_results,
             replay_misses=replay.misses,
+            trace_failures_by_check=dict(trace_failures_by_check),
         )
 
         # R8.3: a zero-tolerance guardrail may only be REPORTED green on a run whose measurement
@@ -433,7 +479,12 @@ async def run_evaluation(
                 "bridging_leakage_rate": bridging_leakage_rate,
                 "bridging_violations": bridging_violations,
                 "passed": reported_bias_passed
-            }
+            },
+            "trace_audit": {
+                "cases": trace_audit_cases,
+                "failures_by_check": dict(trace_failures_by_check),
+                "timing_meaningful": (replay_mode != "replay"),
+            },
         }
 
         full_report = {

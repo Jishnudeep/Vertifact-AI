@@ -76,6 +76,8 @@ eval/results/*.json
 !eval/results/.gitkeep
 eval/metrics/*.png
 eval/results/evidence_cache/
+eval/results/traces/
+eval/results/*.jsonl
 eval/datasets/raw/
 calibration_*.png
 
