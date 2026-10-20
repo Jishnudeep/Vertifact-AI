@@ -187,17 +187,21 @@ def build_tools(claim: str, cov: Coverage) -> list:
             logger.error("search_news_coverage: provider already down this run, failing fast")
             raise cov.outage
         cov.calls += 1
+        t_start = time.monotonic()
         try:
             search = await grounded_search("coverage", query)
         except EvidenceAPIError as exc:
             cov.outage = exc
-            logger.error("search_news_coverage #%d query=%r: OUTAGE (%s)", cov.calls, clip(query), exc)
+            search_ms = int((time.monotonic() - t_start) * 1000)
+            logger.error("search_news_coverage #%d query=%r: OUTAGE (%s) after %dms", cov.calls, clip(query), exc, search_ms)
             return {"error": "The news search is unavailable right now."}
+        t_search = time.monotonic()
         cov.suggestions = cov.suggestions or search.search_suggestions_html
 
         # D3: stance is read from the publisher's own page, never from the search answer.
         to_fetch = [s for s in search.sources if s.domain not in _CLAIMREVIEW_DOMAIN_SET]
         fetched = await asyncio.gather(*(fetch_page_text(s.url, expected_domain=s.domain) for s in to_fetch))
+        t_fetch = time.monotonic()
         pages: Dict[str, Optional[PageText]] = {s.domain: p for s, p in zip(to_fetch, fetched)}
 
         scored = [(d, p) for d, p in pages.items() if p is not None]
@@ -205,10 +209,12 @@ def build_tools(claim: str, cov: Coverage) -> list:
             nli = await asyncio.to_thread(classify_pairs, [(_premise(p), claim) for _, p in scored]) if scored else []
         except Exception as exc:  # noqa: BLE001
             # Without stance, coverage cannot be read as agreement: finalize() degrades the agent.
-            logger.error("search_news_coverage: stance (NLI) model failed on %d page(s): %s: %s",
-                         len(scored), type(exc).__name__, str(exc)[:200])
+            nli_ms = int((time.monotonic() - t_fetch) * 1000)
+            logger.error("search_news_coverage: stance (NLI) model failed after %dms on %d page(s): %s: %s",
+                         nli_ms, len(scored), type(exc).__name__, str(exc)[:200])
             cov.nli_error = exc
             return {"error": "The stance model is unavailable."}
+        t_nli = time.monotonic()
         cov.answered += 1
         scores = {d: s for (d, _), s in zip(scored, nli)}
 
@@ -233,6 +239,16 @@ def build_tools(claim: str, cov: Coverage) -> list:
         count = lambda s: sum(1 for x in shown if x["stance"] == s)  # noqa: E731
         counts = {"sources": len(shown), "supports": count("supports"), "refutes": count("refutes"),
                   "neutral": count("neutral"), "unread": count(None)}
+
+        t_end = time.monotonic()
+        search_ms = int((t_search - t_start) * 1000)
+        fetch_ms = int((t_fetch - t_search) * 1000)
+        nli_ms = int((t_nli - t_fetch) * 1000)
+        total_ms = int((t_end - t_start) * 1000)
+        logger.info(
+            "search_news_coverage #%d timing: total=%dms, search=%dms, fetch=%dms, nli=%dms",
+            cov.calls, total_ms, search_ms, fetch_ms, nli_ms,
+        )
         logger.info(
             "search_news_coverage #%d query=%r: %d cited, %d page(s) read, supports=%d refutes=%d neutral=%d unread=%d",
             cov.calls, clip(query), counts["sources"], len(scored), counts["supports"], counts["refutes"],
