@@ -231,3 +231,128 @@ async def test_leaf_transcript_recorded_in_replay_mode(tmp_path, monkeypatch):
         recorder.uninstall()
 
 
+
+
+@pytest.mark.anyio
+async def test_record_missing_uses_cache_when_present_and_records_when_missing(tmp_path, monkeypatch):
+    from app.services.grounded_search import GroundedSearch, GroundedSource
+    calls = {"n": 0}
+    sample_gs = GroundedSearch(
+        sources=[GroundedSource(url="https://www.reuters.com/y", title="Reuters Y", domain="reuters.com")],
+        queries=["q1"],
+        search_suggestions_html="<div>sugg</div>",
+    )
+
+    async def fake_grounded_search(kind, claim):
+        calls["n"] += 1
+        return sample_gs
+
+    monkeypatch.setattr(crossref_tools, "grounded_search", fake_grounded_search)
+    monkeypatch.setattr(factcheck_tools, "grounded_search", fake_grounded_search)
+
+    # First run in record-missing mode with empty cache -> live call made and cached
+    rm_replay = EvidenceReplay(tmp_path, "record-missing")
+    rm_replay.install()
+    try:
+        first = await crossref_tools.grounded_search("coverage", "claim 1")
+    finally:
+        rm_replay.uninstall()
+
+    assert calls["n"] == 1
+    assert rm_replay.recorded == 1
+    assert first == sample_gs
+
+    # Second run in record-missing mode for same claim -> served from cache, live call NOT made
+    rm_replay2 = EvidenceReplay(tmp_path, "record-missing")
+    rm_replay2.install()
+    try:
+        second = await crossref_tools.grounded_search("coverage", "claim 1")
+        assert calls["n"] == 1  # No new live call!
+        assert rm_replay2.recorded == 0
+
+        # Query a new claim that is not cached -> calls live and records
+        third = await crossref_tools.grounded_search("coverage", "claim 2")
+        assert calls["n"] == 2  # Live call made for uncached claim!
+        assert rm_replay2.recorded == 1
+    finally:
+        rm_replay2.uninstall()
+
+    assert second == sample_gs
+    assert third == sample_gs
+
+
+@pytest.mark.anyio
+async def test_record_missing_failed_calls_stay_unrecorded(tmp_path, monkeypatch):
+    async def failing(kind, claim):
+        raise EvidenceAPIError("Search failure", provider="gemini_search")
+
+    monkeypatch.setattr(crossref_tools, "grounded_search", failing)
+    replay = EvidenceReplay(tmp_path, "record-missing")
+    replay.install()
+    try:
+        with pytest.raises(EvidenceAPIError):
+            await crossref_tools.grounded_search("coverage", "claim")
+        assert replay.calls_by_provider["search"] == 0
+        assert replay.recorded == 0
+        assert list(tmp_path.iterdir()) == []
+    finally:
+        replay.uninstall()
+
+
+@pytest.mark.anyio
+async def test_record_missing_llm_uses_cache_and_records_missing(tmp_path, monkeypatch):
+    import app.agents.common as common
+    from google.adk.models.base_llm import BaseLlm
+    from google.adk.models.llm_request import LlmRequest
+    from google.adk.models.llm_response import LlmResponse
+    from google.genai import types
+
+    llm_calls = {"n": 0}
+
+    class CountingLlm(BaseLlm):
+        model: str = "dummy"
+        async def generate_content_async(self, llm_request, stream=False):
+            llm_calls["n"] += 1
+            yield LlmResponse(content=types.Content(role="model", parts=[types.Part(text='{"rating": "mostly_true"}')]))
+
+    monkeypatch.setattr(common, "get_model", lambda: CountingLlm())
+
+    rm_replay = EvidenceReplay(tmp_path, "record-missing")
+    rm_replay.install()
+    try:
+        model = common.get_model()
+        req1 = LlmRequest(
+            model="dummy",
+            contents=[types.Content(role="user", parts=[types.Part(text="Prompt 1")])],
+            config=types.GenerateContentConfig(system_instruction="You are a judge."),
+        )
+        responses1 = [r async for r in model.generate_content_async(req1)]
+        assert len(responses1) == 1
+        assert llm_calls["n"] == 1
+        assert rm_replay.recorded == 1
+
+        # Second call with same request in record-missing -> should hit cache, NOT call inner model
+        responses2 = [r async for r in model.generate_content_async(req1)]
+        assert len(responses2) == 1
+        assert llm_calls["n"] == 1  # Unchanged!
+
+        # Call with different prompt -> should invoke inner model
+        req2 = LlmRequest(
+            model="dummy",
+            contents=[types.Content(role="user", parts=[types.Part(text="Prompt 2")])],
+            config=types.GenerateContentConfig(system_instruction="You are a judge."),
+        )
+        responses3 = [r async for r in model.generate_content_async(req2)]
+        assert len(responses3) == 1
+        assert llm_calls["n"] == 2
+        assert rm_replay.recorded == 2
+    finally:
+        rm_replay.uninstall()
+
+
+def test_run_eval_cli_args_parsing():
+    from eval.run_eval import _parse_args
+    args = _parse_args(["--replay", "record-missing", "--limit", "10", "--offset", "5"])
+    assert args.replay == "record-missing"
+    assert args.limit == 10
+    assert args.offset == 5

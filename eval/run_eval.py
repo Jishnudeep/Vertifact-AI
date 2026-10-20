@@ -180,6 +180,8 @@ async def run_evaluation(
     replay_mode: ReplayMode = "replay",
     cache_dir: Path = DEFAULT_CACHE_DIR,
     claim_delay_s: float = 0.0,
+    limit: Optional[int] = None,
+    offset: int = 0,
 ) -> Dict[str, Any]:
     """
     Run the evaluation harness over one or more EvalClaim JSON datasets.
@@ -196,6 +198,10 @@ async def run_evaluation(
         logger.info(f"Loading evaluation dataset from {path}...")
         with open(path, "r", encoding="utf-8") as f:
             claims_data.extend(EvalClaim(**raw).model_dump() for raw in json.load(f))
+
+    if offset > 0 or limit is not None:
+        end = (offset + limit) if limit is not None else len(claims_data)
+        claims_data = claims_data[offset:end]
 
     if replay_mode == "live" and any(c.get("origin_domain") for c in claims_data):
         raise ValueError("Leave-source-out needs --replay record or replay; refusing a live run "
@@ -634,8 +640,12 @@ def _parse_args(argv=None):
     parser = argparse.ArgumentParser(description="VeriFact eval harness")
     parser.add_argument("--dataset", action="append", type=Path,
                         help="EvalClaim JSON file; repeatable. Default: curated seed.")
-    parser.add_argument("--replay", choices=["record", "replay", "live"], default="replay",
+    parser.add_argument("--replay", choices=["record", "replay", "live", "record-missing"], default="replay",
                         help="record once (costs quota), then replay (free, reproducible).")
+    parser.add_argument("--limit", type=int, default=None,
+                        help="limit number of claims to evaluate")
+    parser.add_argument("--offset", type=int, default=0,
+                        help="offset into dataset claims")
     parser.add_argument("--output", type=Path, default=BASE_DIR / "eval" / "results" / "baseline_run.json")
     parser.add_argument("--claim-delay", type=float, default=0.0,
                         help="seconds between claims (use ~2.0 when recording on Groq free tier)")
@@ -647,5 +657,6 @@ if __name__ == "__main__":
     report = asyncio.run(run_evaluation(
         dataset_paths=args.dataset, output_path=args.output,
         replay_mode=args.replay, claim_delay_s=args.claim_delay,
+        limit=args.limit, offset=args.offset,
     ))
     sys.exit(0 if report["summary"]["run_status"] == STATUS_OK else 1)

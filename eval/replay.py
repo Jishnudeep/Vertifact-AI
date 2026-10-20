@@ -40,7 +40,7 @@ from app.services.grounded_search import GroundedSearch, GroundedSource, SearchK
 from app.services.page_fetch import PageText
 from app.utils.text_processing import extract_domain
 
-ReplayMode = Literal["record", "replay", "live"]
+ReplayMode = Literal["record", "replay", "live", "record-missing"]
 
 _excluded: contextvars.ContextVar[frozenset] = contextvars.ContextVar("eval_excluded_domains", default=frozenset())
 
@@ -128,7 +128,7 @@ class EvidenceReplay:
         }
         alias = provider_alias_map.get(provider, provider)
 
-        if self.mode == "replay":
+        if self.mode == "replay" or (self.mode == "record-missing" and path.exists()):
             if not path.exists():
                 self.misses += 1
                 raise ReplayMissError(f"No recorded {provider} response (key {key[:12]})", provider=provider)
@@ -138,7 +138,7 @@ class EvidenceReplay:
 
         result = await live_call()  # errors propagate and are never recorded
         self._record_provider_call(alias)
-        if self.mode == "record":
+        if self.mode in ("record", "record-missing"):
             self.cache_dir.mkdir(parents=True, exist_ok=True)
             if hasattr(result, "to_dict"):
                 serializable = result.to_dict()
@@ -319,7 +319,7 @@ class ReplayLlm(BaseLlm):
         replay: EvidenceReplay = self.replay                # type: ignore[assignment]
         key = request_key(llm_request)
         path = replay._path(key)
-        if replay.mode == "replay":
+        if replay.mode == "replay" or (replay.mode == "record-missing" and path.exists()):
             if not path.exists():
                 replay.misses += 1
                 raise ReplayMissError(f"No recorded llm response (key {key[:12]})", provider="llm")
@@ -338,7 +338,7 @@ class ReplayLlm(BaseLlm):
             yield response
         replay._record_provider_call("llm")
         self._record_leaf_transcript(llm_request, responses)
-        if replay.mode == "record":
+        if replay.mode in ("record", "record-missing"):
             replay.cache_dir.mkdir(parents=True, exist_ok=True)
             path.write_text(
                 json.dumps([r.model_dump(mode="json", exclude_none=True) for r in responses], ensure_ascii=False),
