@@ -54,6 +54,17 @@ class Settings(BaseSettings):
     # when its module is imported. TBD from benchmarking.
     agent_timeout_s: float = 30.0
 
+    # Thinking levels for Gemini 3.1 models (MINIMAL, LOW, MEDIUM, HIGH).
+    # Spec: docs/superpowers/specs/2026-10-20-latency-thinking-budgets.md
+    factcheck_thinking_level: str = "LOW"
+    crossref_thinking_level: str = "LOW"
+    grounded_search_thinking_level: str = "MINIMAL"
+
+    # Per-agent model turn caps derived from worst legitimate paths + 1-turn headroom.
+    # Exceeding the cap raises AgentTurnLimitExceeded and degrades the agent gracefully.
+    factcheck_max_turns: int = 5
+    crossref_max_turns: int = 4
+
     # Daily cap on worker LLM turns (a tool loop is several turns per agent).
     llm_daily_call_budget: int = 900
     # Plan 6: Gemini grounded-search calls per UTC day. One uncached request spends up to 3: one

@@ -19,6 +19,14 @@ except ImportError:
 from app.services.budget import LLMBudgetExceeded
 from app.services.errors import EvidenceBudgetExceeded
 
+class AgentTurnLimitExceeded(RuntimeError):
+    """Raised when an ADK agent hits its configured maximum LLM turns."""
+
+    def __init__(self, agent_name: str, max_turns: int):
+        self.agent_name = agent_name
+        self.max_turns = max_turns
+        super().__init__(f"Agent '{agent_name}' exceeded maximum turn limit of {max_turns}")
+
 class ProviderErrorCode(str, Enum):
     RATE_LIMIT = "RATE_LIMIT"
     QUOTA_EXHAUSTED = "QUOTA_EXHAUSTED"
@@ -129,6 +137,13 @@ def classify_provider_error(exc: Exception, provider: str = "unknown") -> AgentE
     # Extract provider or status_code if attached to exception
     prov = getattr(exc, "provider", None) or provider
     status_code = getattr(exc, "status_code", None)
+
+    if isinstance(exc, AgentTurnLimitExceeded):
+        return AgentErrorDetails(
+            code=ProviderErrorCode.TIMEOUT,
+            provider=prov,
+            message=str(exc)
+        )
 
     # Our own daily spend guards (TDD §11): refused before calling the provider.
     if isinstance(exc, (EvidenceBudgetExceeded, LLMBudgetExceeded)):
