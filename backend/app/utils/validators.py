@@ -58,10 +58,10 @@ def neutralize_for_prompt(text: str) -> str:
         no longer form a JSON (or bare) key/value pair for any key the agents read.
 
     Factual claims do not meaningfully need literal braces or `key:` JSON syntax, so this is
-    lossless for the verification task. Layers 2 and 3 (the balanced-span parser and the
-    regex fallback in `adk_helpers`) are defence in depth behind this. Those parsers were
-    removed with the move to schema-validated tool-calling agents (`output_schema`); this
-    neutralisation, applied through `app.agents.common.fenced`, now stands as the first line.
+    lossless for the verification task. The worker agents return schema-validated JSON
+    (`output_schema`) rather than free text that has to be parsed, so there is no answer-parsing
+    layer behind this. It is applied through `app.agents.common.fenced` / `fenced_attr`, and
+    schema validation plus recorded-evidence scoring are the later defences.
     """
     if not text:
         return ""

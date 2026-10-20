@@ -12,13 +12,6 @@ import re
 import uuid
 from typing import Any, Dict, Literal, Optional
 
-try:
-    import litellm
-    litellm.suppress_debug_info = True
-    litellm.set_verbose = False
-except Exception:
-    litellm = None
-
 from google.adk.agents import LlmAgent
 from google.adk.runners import InMemoryRunner
 from google.adk.tools import google_search
