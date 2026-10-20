@@ -12,7 +12,7 @@
 
 Misinformation spreads 6x faster than factual corrections on social media. Existing fact-checking tools are either (a) academic-grade text reports that nobody reads on their phone, or (b) chatbot wrappers around a single LLM that hallucinate confidence without citing sources.
 
-VeriFact AI solves a specific problem: **a user encounters a suspicious claim on social media, and within 8-10 seconds, gets a visual, source-backed credibility assessment they can act on.** Not a 2,000-word report. Not "according to my training data." A visual dashboard backed by verifiable external sources with transparent scoring.
+VeriFact AI solves a specific problem: **a user encounters a suspicious claim on social media, and within seconds (target to be re-baselined after `eval/latency_bench.py`; the earlier 8-10 s figure predates the tool-calling agents), gets a visual, source-backed credibility assessment they can act on.** Not a 2,000-word report. Not "according to my training data." A visual dashboard backed by verifiable external sources with transparent scoring.
 
 ### What We Are Not Building
 
@@ -291,7 +291,7 @@ Cloud GPU for eval runs (RunPod A10G): ~$0.50/hr × ~10 hrs/month = **$5/month w
 
 | Metric | Target | Measurement |
 |--------|--------|-------------|
-| End-to-end latency (text input) | < 10 seconds (cold), < 500ms (cache hit) | P95 measured in FastAPI middleware |
+| End-to-end latency (text input) | < 10 seconds (cold; **to be re-baselined** after `eval/latency_bench.py` measures the tool-calling agents), < 500ms (cache hit) | P95 measured in FastAPI middleware |
 | Selective bucketed accuracy (answered claims: evidence_status ≠ unverified) | ≥ 70% on the curated set | Eval harness `segments.selective` |
 | Coverage (share of verifiable claims answered, not "unverified") | Reported; no target until a live baseline exists | Eval harness `segments.selective.coverage` |
 | MAE of C_total, per dataset | ≤ 0.20 on curated `fact_checked`; others reported | Eval harness `segments.by_dataset` / `by_evidence_status` |
