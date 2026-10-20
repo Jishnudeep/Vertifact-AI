@@ -139,3 +139,95 @@ async def test_replay_miss_raises_for_grounded_search(tmp_path, monkeypatch):
     finally:
         player.uninstall()
 
+
+@pytest.mark.anyio
+async def test_provider_calls_tallies(tmp_path, monkeypatch):
+    from app.services.grounded_search import GroundedSearch, GroundedSource
+    from app.services.page_fetch import PageText
+
+    async def fake_search(kind, claim):
+        return GroundedSearch([], [], None)
+
+    async def fake_fetch(url, expected_domain=None):
+        return PageText(final_url=url, domain="example.com", title="T", text="Content")
+
+    async def fake_factchecks(query, api_key):
+        return []
+
+    monkeypatch.setattr(crossref_tools, "grounded_search", fake_search)
+    monkeypatch.setattr(crossref_tools, "fetch_page_text", fake_fetch)
+    monkeypatch.setattr(factcheck_tools, "search_factchecks", fake_factchecks)
+
+    replay = EvidenceReplay(tmp_path, "record")
+    replay.install()
+    try:
+        assert replay.calls_by_provider == {"search": 0, "fetch": 0, "factcheck_api": 0, "llm": 0}
+        assert replay.claim_counts() == {"search": 0, "fetch": 0, "factcheck_api": 0, "llm": 0}
+
+        await crossref_tools.grounded_search("coverage", "claim 1")
+        await crossref_tools.fetch_page_text("https://example.com/1", "example.com")
+        await factcheck_tools.search_factchecks("claim 1", "test-key")
+
+        assert replay.calls_by_provider == {"search": 1, "fetch": 1, "factcheck_api": 1, "llm": 0}
+        assert replay.claim_counts() == {"search": 1, "fetch": 1, "factcheck_api": 1, "llm": 0}
+
+        replay.reset_claim_counts()
+        assert replay.claim_counts() == {"search": 0, "fetch": 0, "factcheck_api": 0, "llm": 0}
+        assert replay.calls_by_provider == {"search": 1, "fetch": 1, "factcheck_api": 1, "llm": 0}
+    finally:
+        replay.uninstall()
+
+
+@pytest.mark.anyio
+async def test_failed_calls_do_not_increment_tallies(tmp_path, monkeypatch):
+    async def failing(kind, claim):
+        raise EvidenceAPIError("Search failure", provider="gemini_search")
+
+    monkeypatch.setattr(crossref_tools, "grounded_search", failing)
+    replay = EvidenceReplay(tmp_path, "record")
+    replay.install()
+    try:
+        with pytest.raises(EvidenceAPIError):
+            await crossref_tools.grounded_search("coverage", "claim")
+        assert replay.calls_by_provider["search"] == 0
+        assert replay.claim_counts()["search"] == 0
+    finally:
+        replay.uninstall()
+
+
+@pytest.mark.anyio
+async def test_leaf_transcript_recorded_in_replay_mode(tmp_path, monkeypatch):
+    import app.agents.common as common
+    from google.adk.models.base_llm import BaseLlm
+    from google.adk.models.llm_request import LlmRequest
+    from google.adk.models.llm_response import LlmResponse
+    from google.genai import types
+
+    class DummyLlm(BaseLlm):
+        model: str = "dummy"
+        async def generate_content_async(self, llm_request, stream=False):
+            yield LlmResponse(content=types.Content(role="model", parts=[types.Part(text='{"rating": "false", "explanation": "untrue"}')]))
+
+    monkeypatch.setattr(common, "get_model", lambda: DummyLlm())
+
+    recorder = EvidenceReplay(tmp_path, "record")
+    recorder.install()
+    try:
+        model = common.get_model()
+        req = LlmRequest(
+            model="dummy",
+            contents=[types.Content(role="user", parts=[types.Part(text="Check this claim")])],
+            config=types.GenerateContentConfig(system_instruction="You are a Fact-Check judge agent."),
+        )
+        responses = [r async for r in model.generate_content_async(req)]
+        assert len(responses) == 1
+        assert len(recorder.leaf_transcript) == 1
+        entry = recorder.leaf_transcript[0]
+        assert entry["name"] == "factcheck_judge"
+        assert "Check this claim" in entry["prompt"]
+        assert entry["response"] == {"rating": "false", "explanation": "untrue"}
+        assert recorder.calls_by_provider["llm"] == 1
+    finally:
+        recorder.uninstall()
+
+

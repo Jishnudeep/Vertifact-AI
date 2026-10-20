@@ -43,6 +43,17 @@ DEFAULT_CACHE_DIR = BASE_DIR / "eval" / "results" / "evidence_cache"
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger("eval_harness")
 
+
+class RateLimitCounter(logging.Handler):
+    def __init__(self):
+        super().__init__()
+        self.count = 0
+
+    def emit(self, record):
+        msg = record.getMessage()
+        if "429" in msg or "Rate limit" in msg or "RESOURCE_EXHAUSTED" in msg:
+            self.count += 1
+
 # Run-validity thresholds (R7.B3): a run whose evidence layer was dead measures the outage,
 # not the scorer, and must never be published as a baseline.
 MAX_ZERO_SOURCE_RATE = 0.5
@@ -197,6 +208,9 @@ async def run_evaluation(
     load_bias_ratings()
     segment_records: List[Dict[str, Any]] = []
 
+    rate_limit_counter = RateLimitCounter()
+    logging.getLogger().addHandler(rate_limit_counter)
+
     try:
         verifiable_preds: List[float] = []
         verifiable_targets: List[float] = []
@@ -218,6 +232,8 @@ async def run_evaluation(
         traces_dir.mkdir(parents=True, exist_ok=True)
         trace_audit_cases = 0
         trace_failures_by_check: Dict[str, int] = defaultdict(int)
+        verifiable_latencies: List[float] = []
+        verifiable_calls: List[int] = []
         start_time = time.time()
 
         print("\n" + "=" * 80)
@@ -225,6 +241,7 @@ async def run_evaluation(
         print("=" * 80)
 
         for item in claims_data:
+            replay.reset_claim_counts()
             cid = item["id"]
             text = item["claim_text"]
             c_type = item.get("claim_type", "verifiable")
@@ -279,6 +296,9 @@ async def run_evaluation(
                     with open(traces_dir / f"{cid}.json", "w", encoding="utf-8") as tf:
                         json.dump({"eval_cases": [trace_case]}, tf, indent=2)
 
+                    claim_calls = replay.claim_counts()
+                    proc_time = res.get("processing_time_ms", 0.0)
+
                     adv_result = {
                         "id": cid,
                         "claim": text,
@@ -289,6 +309,8 @@ async def run_evaluation(
                         "verdict_found": verdict_found,
                         "warnings": res["confidence"].get("warnings", []),
                         "adversarial_safe": adversarial_safe,
+                        "external_calls": claim_calls,
+                        "processing_time_ms": proc_time,
                         "status": "PASS" if adversarial_safe else "FAIL",
                         "trace_audit": {
                             "passed": audit.passed,
@@ -356,6 +378,11 @@ async def run_evaluation(
                 with open(traces_dir / f"{cid}.json", "w", encoding="utf-8") as tf:
                     json.dump({"eval_cases": [trace_case]}, tf, indent=2)
 
+                claim_calls = replay.claim_counts()
+                proc_time = res.get("processing_time_ms", 0.0)
+                verifiable_latencies.append(proc_time)
+                verifiable_calls.append(sum(claim_calls.values()))
+
                 eval_results.append({
                     "id": cid,
                     "claim": text,
@@ -369,6 +396,8 @@ async def run_evaluation(
                     "evidence_status": evidence_status,
                     "source_dataset": item.get("source_dataset", "curated"),
                     "sources_count": len(sources),
+                    "external_calls": claim_calls,
+                    "processing_time_ms": proc_time,
                     "status": "PASS",
                     "trace_audit": {
                         "passed": audit.passed,
@@ -389,6 +418,54 @@ async def run_evaluation(
                 })
 
         total_time = round(time.time() - start_time, 2)
+
+        # Write leaf transcript (E4)
+        leaf_transcript_path = BASE_DIR / "eval" / "results" / "leaf_transcript.jsonl"
+        leaf_transcript_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(leaf_transcript_path, "w", encoding="utf-8") as ltf:
+            for entry in replay.leaf_transcript:
+                ltf.write(json.dumps(entry) + "\n")
+
+        # Compute latency summary (live only per Plan 9 Task 4 Step 3)
+        if replay_mode != "replay":
+            if len(verifiable_latencies) >= 2:
+                q_lat = statistics.quantiles(verifiable_latencies, n=100, method="inclusive")
+                p50_ms = round(q_lat[49], 2)
+                p95_ms = round(q_lat[94], 2)
+            elif len(verifiable_latencies) == 1:
+                p50_ms = round(verifiable_latencies[0], 2)
+                p95_ms = round(verifiable_latencies[0], 2)
+            else:
+                p50_ms = None
+                p95_ms = None
+
+            latency_summary: Dict[str, Any] = {
+                "mode": replay_mode,
+                "p50_ms": p50_ms,
+                "p95_ms": p95_ms,
+                "n": len(verifiable_latencies),
+                "rate_limited_retries": rate_limit_counter.count,
+            }
+        else:
+            latency_summary = {
+                "mode": "replay",
+                "note": "not measured: replay timings",
+            }
+
+        # Compute external calls per claim summary
+        if len(verifiable_calls) >= 2:
+            q_calls = statistics.quantiles(verifiable_calls, n=100, method="inclusive")
+            calls_p50 = round(q_calls[49], 2)
+        elif len(verifiable_calls) == 1:
+            calls_p50 = float(verifiable_calls[0])
+        else:
+            calls_p50 = 0.0
+
+        calls_summary: Dict[str, Any] = {
+            "mean": round(statistics.mean(verifiable_calls), 2) if verifiable_calls else 0.0,
+            "p50": calls_p50,
+            "max": max(verifiable_calls) if verifiable_calls else 0,
+        }
 
         # 1. Compute MAE
         mae = compute_mae(verifiable_preds, verifiable_targets)
@@ -467,6 +544,9 @@ async def run_evaluation(
             "calibration_bins": calib["bins"],
             "segments": compute_segment_metrics(segment_records),
             "replay": {"mode": replay_mode, "misses": replay.misses, "recorded": replay.recorded},
+            "latency": latency_summary,
+            "external_calls_per_claim": calls_summary,
+            "calls_by_provider": replay.calls_by_provider,
             "leave_source_out": "sources filtered; grounded answer text unused (D4)",
             "opinion_rejection_rate": (opinion_rejections / total_opinions) if total_opinions > 0 else 1.0,
             "adversarial_handling_rate": (adversarial_handled / total_adversarial) if total_adversarial > 0 else 1.0,
@@ -516,6 +596,11 @@ async def run_evaluation(
         for ds, m in summary["segments"]["by_dataset"].items():
             print(f"  • [{ds}] n={m['n']} MAE={fmt(m['mae'])} bucketed={fmt(m['bucketed_accuracy'])}")
         print(f"  • Replay:                      mode={replay_mode} misses={replay.misses} recorded={replay.recorded}")
+        if replay_mode != "replay":
+            print(f"  • Latency (verifiable n={len(verifiable_latencies)}): p50={fmt(latency_summary.get('p50_ms'), '{:.1f}')}ms p95={fmt(latency_summary.get('p95_ms'), '{:.1f}')}ms (429 retries: {rate_limit_counter.count})")
+        else:
+            print(f"  • Latency:                     not measured (replay timings)")
+        print(f"  • External Calls / Claim:      mean={calls_summary['mean']:.1f} p50={calls_summary['p50']:.1f} max={calls_summary['max']} (by provider: {replay.calls_by_provider})")
         print(f"  • Calibration Monotonic:       {calib['monotonic'] if calib['monotonic'] is not None else 'not evaluable (too few populated bins)'}")
         print(f"  • Opinion Rejection Rate:      {summary['opinion_rejection_rate']*100:.1f}% ({opinion_rejections}/{total_opinions})")
         print(f"  • Adversarial Defense Rate:    {summary['adversarial_handling_rate']*100:.1f}% ({adversarial_handled}/{total_adversarial}, errors: {adversarial_errors})")
@@ -541,6 +626,7 @@ async def run_evaluation(
 
         return full_report
     finally:
+        logging.getLogger().removeHandler(rate_limit_counter)
         replay.uninstall()
 
 

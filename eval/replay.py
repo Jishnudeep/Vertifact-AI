@@ -83,6 +83,35 @@ class EvidenceReplay:
         self.misses = 0
         self.recorded = 0
         self._originals: List[Tuple[Any, str, Callable]] = []
+        self.calls_by_provider: Dict[str, int] = {
+            "search": 0,
+            "fetch": 0,
+            "factcheck_api": 0,
+            "llm": 0,
+        }
+        self._current_claim_calls: Dict[str, int] = {
+            "search": 0,
+            "fetch": 0,
+            "factcheck_api": 0,
+            "llm": 0,
+        }
+        self.leaf_transcript: List[Dict[str, Any]] = []
+
+    def reset_claim_counts(self) -> None:
+        self._current_claim_calls = {
+            "search": 0,
+            "fetch": 0,
+            "factcheck_api": 0,
+            "llm": 0,
+        }
+
+    def claim_counts(self) -> Dict[str, int]:
+        return dict(self._current_claim_calls)
+
+    def _record_provider_call(self, provider_alias: str) -> None:
+        if provider_alias in self.calls_by_provider:
+            self.calls_by_provider[provider_alias] += 1
+            self._current_claim_calls[provider_alias] += 1
 
     # --- cache plumbing -------------------------------------------------
     def _path(self, key: str) -> Path:
@@ -91,12 +120,24 @@ class EvidenceReplay:
     async def _through_cache(self, provider: str, payload: Dict[str, Any], live_call):
         key = _key(provider, payload)
         path = self._path(key)
+        provider_alias_map = {
+            "gemini_search": "search",
+            "page_fetch": "fetch",
+            "google_factcheck": "factcheck_api",
+            "llm": "llm",
+        }
+        alias = provider_alias_map.get(provider, provider)
+
         if self.mode == "replay":
             if not path.exists():
                 self.misses += 1
                 raise ReplayMissError(f"No recorded {provider} response (key {key[:12]})", provider=provider)
-            return json.loads(path.read_text(encoding="utf-8"))
+            res = json.loads(path.read_text(encoding="utf-8"))
+            self._record_provider_call(alias)
+            return res
+
         result = await live_call()  # errors propagate and are never recorded
+        self._record_provider_call(alias)
         if self.mode == "record":
             self.cache_dir.mkdir(parents=True, exist_ok=True)
             if hasattr(result, "to_dict"):
@@ -225,6 +266,55 @@ class ReplayLlm(BaseLlm):
     def capabilities(self) -> LlmCapabilities:
         return self.inner.capabilities                      # same structured-output path as the real model
 
+    def _record_leaf_transcript(self, llm_request: LlmRequest, responses: List[LlmResponse]) -> None:
+        replay: EvidenceReplay = self.replay  # type: ignore[assignment]
+        config = getattr(llm_request, "config", None)
+        system = getattr(config, "system_instruction", "") or ""
+        if isinstance(system, str):
+            sys_str = system
+        elif hasattr(system, "parts"):
+            sys_str = " ".join(getattr(p, "text", "") or "" for p in system.parts)
+        else:
+            sys_str = str(system)
+
+        sys_lower = sys_str.lower()
+        if "factcheck" in sys_lower or "fact-check" in sys_lower:
+            agent_name = "factcheck_judge"
+        elif "crossref" in sys_lower or "cross-reference" in sys_lower:
+            agent_name = "crossref_searcher"
+        else:
+            agent_name = getattr(self.inner, "model", "llm_agent")
+
+        prompt_parts = []
+        for c in (llm_request.contents or []):
+            for p in (getattr(c, "parts", []) or []):
+                if getattr(p, "text", None):
+                    prompt_parts.append(p.text)
+                elif getattr(p, "function_response", None):
+                    prompt_parts.append(json.dumps(p.function_response.response))
+        prompt_text = "\n".join(prompt_parts) if prompt_parts else json.dumps(
+            [c.model_dump(mode="json", exclude_none=True) for c in (llm_request.contents or [])]
+        )
+
+        resp_texts = []
+        for r in responses:
+            for p in (getattr(getattr(r, "content", None), "parts", []) or []):
+                if getattr(p, "text", None):
+                    resp_texts.append(p.text)
+                elif getattr(p, "function_call", None):
+                    resp_texts.append(f"call:{p.function_call.name}({json.dumps(p.function_call.args)})")
+        combined_resp = "\n".join(resp_texts)
+        try:
+            resp_payload = json.loads(combined_resp)
+        except Exception:
+            resp_payload = combined_resp
+
+        replay.leaf_transcript.append({
+            "name": agent_name,
+            "prompt": prompt_text,
+            "response": resp_payload,
+        })
+
     async def generate_content_async(self, llm_request: LlmRequest, stream: bool = False):
         replay: EvidenceReplay = self.replay                # type: ignore[assignment]
         key = request_key(llm_request)
@@ -233,14 +323,21 @@ class ReplayLlm(BaseLlm):
             if not path.exists():
                 replay.misses += 1
                 raise ReplayMissError(f"No recorded llm response (key {key[:12]})", provider="llm")
+            responses: List[LlmResponse] = []
             for item in json.loads(path.read_text(encoding="utf-8")):
-                yield LlmResponse.model_validate(item)
+                r = LlmResponse.model_validate(item)
+                responses.append(r)
+                yield r
+            replay._record_provider_call("llm")
+            self._record_leaf_transcript(llm_request, responses)
             return
 
-        responses: List[LlmResponse] = []
+        responses = []
         async for response in self.inner.generate_content_async(llm_request, stream=stream):
             responses.append(response)
             yield response
+        replay._record_provider_call("llm")
+        self._record_leaf_transcript(llm_request, responses)
         if replay.mode == "record":
             replay.cache_dir.mkdir(parents=True, exist_ok=True)
             path.write_text(
