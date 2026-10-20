@@ -142,7 +142,7 @@ class FactCheckDecision(BaseModel):
     explanation: str = Field(description="One or two sentences explaining the choice.")
 
 
-INSTRUCTION = """\
+BASE_INSTRUCTION = """\
 You are the fact-check lookup agent of a claim-verification pipeline. You decide whether a published
 fact-check already answers the claim inside <claim> tags, using your two tools.
 
@@ -164,6 +164,15 @@ Procedure:
 If nothing relevant was found: evidence 'none', rating 'unproven', relevant false. Never guess a verdict
 from your own knowledge.
 """
+
+
+def get_instruction(today: Optional[str] = None) -> str:
+    """Build the instruction with today's UTC date injected (Task A.2)."""
+    today_str = today or common.get_today_utc()
+    return f"Today's date is {today_str} (UTC). Published fact-checks before this date are past events.\n\n{BASE_INSTRUCTION}"
+
+
+INSTRUCTION = get_instruction()
 
 
 # --- tools (closures over this run's evidence) --------------------------------------------------
@@ -413,7 +422,7 @@ async def analyze(ctx: Context, claim: str) -> FactCheckResult:
         name="factcheck_judge",
         description="Looks up published fact-checks and selects the one that answers the claim.",
         model=common.get_model(),
-        instruction=INSTRUCTION,
+        instruction=get_instruction(),
         tools=build_tools(claim, ev),
         output_schema=FactCheckDecision,
         **common.agent_kwargs(),

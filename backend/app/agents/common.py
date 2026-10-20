@@ -1,4 +1,5 @@
 """Small shared pieces for the worker agents: the model seam, the budget callback, prompt fencing, log helpers."""
+import datetime
 import logging
 from typing import Any, Dict, Optional
 
@@ -33,6 +34,11 @@ def get_model() -> Any:
     transient errors itself). This is the one seam tests and the eval replay patch.
     """
     return settings.model_id
+
+
+def get_today_utc() -> str:
+    """Current UTC date in YYYY-MM-DD format. The date is supplied by the app (datetime), never inferred by the model."""
+    return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
 
 
 def charge_llm_budget(callback_context: CallbackContext, llm_request: LlmRequest) -> Optional[LlmResponse]:

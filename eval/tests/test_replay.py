@@ -4,8 +4,10 @@ import app.agents.crossref_agent as crossref_tools
 import app.agents.factcheck_agent as factcheck_tools
 from eval.replay import (
     EvidenceReplay, ReplayMissError, excluding_domains,
-    filter_factcheck_claims, filter_web_results,
+    filter_factcheck_claims, filter_web_results, request_key,
 )
+from google.adk.models.llm_request import LlmRequest
+from google.genai import types
 from app.services.errors import EvidenceAPIError
 
 
@@ -139,3 +141,25 @@ async def test_replay_miss_raises_for_grounded_search(tmp_path, monkeypatch):
     finally:
         player.uninstall()
 
+
+
+def test_replay_request_key_stable_across_dates():
+    """Different injected dates must not break the replay cache key (Task A.2)."""
+    req1 = LlmRequest(
+        model="gemini-3.1-flash-lite",
+        config=types.GenerateContentConfig(
+            system_instruction="Today's date is 2026-10-20 (UTC). Base instruction text.",
+        ),
+        contents=[types.Content(role="user", parts=[types.Part.from_text(text="test")])],
+    )
+    req2 = LlmRequest(
+        model="gemini-3.1-flash-lite",
+        config=types.GenerateContentConfig(
+            system_instruction="Today's date is 2026-10-21 (UTC). Base instruction text.",
+        ),
+        contents=[types.Content(role="user", parts=[types.Part.from_text(text="test")])],
+    )
+
+    key1 = request_key(req1)
+    key2 = request_key(req2)
+    assert key1 == key2, "Date differences in system instruction must be normalized in replay request_key"
