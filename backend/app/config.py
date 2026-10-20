@@ -74,6 +74,10 @@ class Settings(BaseSettings):
     
     # Linguistic agent LLM sensationalism flag (Build Order 1.2 default is False: heuristics only)
     enable_llm_sensationalism: bool = False
+
+    # Model for DeepEval LLM-as-a-judge evaluation (Task 5 / Gate D6). When None, the runner
+    # refuses to run and prompts for decision D6.
+    eval_judge_model: str | None = Field(default=None, validation_alias=AliasChoices("EVAL_JUDGE_MODEL"))
     
     model_config = SettingsConfigDict(
         env_file=(
