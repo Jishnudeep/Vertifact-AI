@@ -44,20 +44,22 @@ class Settings(BaseSettings):
     cache_ttl_fact_checked_hours: int = 720
     cache_ttl_default_hours: int = 24
     
-    # H1: total wall-clock budget per /api/verify request. The PRD §10 "< 10 s" target and the
+    # H1: deadline stamped on each /api/verify request. It only bounds how long the response waits
+    # for the persistence write; it does not cut off the agents. The PRD §10 "< 10 s" target and the
     # 8 s per-agent limit are no longer design constraints: the agents are real ADK tool loops
     # whose latency is unknown until measured. These are generous BACKSTOPS, to be replaced by
     # the values the benchmark-then-optimize phase sets (eval/latency_bench.py).
     request_deadline_s: float = 35.0
-    # Backstop for one worker agent (all of its LLM turns and tool calls). TBD from benchmarking.
+    # Backstop for one worker agent (all of its LLM turns and tool calls), bound to each agent node
+    # when its module is imported. TBD from benchmarking.
     agent_timeout_s: float = 30.0
 
     # Daily cap on worker LLM turns (a tool loop is several turns per agent).
     llm_daily_call_budget: int = 900
     # Plan 6: Gemini grounded-search calls per UTC day. One uncached request spends up to 3: one
     # Fact-Check web search plus up to two Cross-Ref coverage searches. 150 therefore allows about
-    # 50 uncached requests a day at worst. TBD from benchmarking (eval/latency_bench.py reports the
-    # real searches per request) and from the provider's actual grounding quota.
+    # 50 uncached requests a day at worst. TBD from benchmarking (eval/latency_bench.py records the
+    # tool calls per request) and from the provider's actual grounding quota.
     search_daily_call_budget: int = 150
 
     # Plan 6 / TDD §11: overall wall-clock budget for fetching one cited page (all hops).

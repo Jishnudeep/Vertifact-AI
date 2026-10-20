@@ -309,7 +309,9 @@ async def analyze(ctx: Context, claim: str) -> CrossRefResult:
         # answer that fails its schema must not throw that evidence away. Anything else (timeout,
         # budget, provider error) is a real failure and propagates.
         wrapped = getattr(exc, "error", None)       # ADK wraps a child node's error as DynamicNodeFailError
-        if not isinstance(wrapped if isinstance(wrapped, Exception) else exc, ValidationError):
+        cause = wrapped if isinstance(wrapped, Exception) else exc
+        # Only OUR schema's failure: a ValidationError from any other model is a real error.
+        if not (isinstance(cause, ValidationError) and cause.title == CoverageSummary.__name__):
             raise
         logger.warning("Cross-reference: the final answer failed its schema; scoring from recorded evidence.")
     return finalize(entities, cov)

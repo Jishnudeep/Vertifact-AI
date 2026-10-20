@@ -240,7 +240,7 @@ def build_tools(claim: str, ev: Evidence) -> list:
                 "publisher": fenced(review["publisher"][:100]),
                 "rating": fenced(review["rating"][:150]),
                 "normalized_rating": review["normalized_rating"],
-                "url": fenced_attr(review["url"][:500]) if review["url"] else None,
+                "url": fenced_attr(str(review["url"])[:500]) if review["url"] else None,
                 "review_date": fenced_attr(str(review["review_date"])[:40]) if review["review_date"] else None,
                 "similarity": review["similarity"],
             })
