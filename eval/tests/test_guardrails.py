@@ -7,9 +7,9 @@ from app.services.bias_lookup import (
     UNRATED_BRIDGING_DOMAINS,
 )
 from app.scoring import ScoringEngine
-from app.agents.crossref_agent import make_neutral_crossref, run as run_crossref
-from app.agents.factcheck_agent import make_neutral_factcheck, run as run_factcheck
-from app.agents.linguistic_agent import make_neutral_linguistic, run as run_linguistic
+from app.agents.crossref_agent import make_neutral_crossref
+from app.agents.factcheck_agent import make_neutral_factcheck
+from app.agents.linguistic_agent import make_neutral_linguistic
 
 @pytest.fixture(autouse=True)
 def setup_bias_data():
@@ -153,6 +153,12 @@ class TestConfidenceCappingGuardrails:
         from app.agents.crossref_agent import CrossRefResult
         from app.agents.linguistic_agent import LinguisticResult
 
+        def _returning(result):
+            # The agents are ADK nodes: replace the body, keep the real node/timeout machinery.
+            async def fake(ctx, claim):
+                return result
+            return fake
+
         mock_fc = FactCheckResult(
             matches_found=5,
             verdict_found=False,
@@ -170,9 +176,9 @@ class TestConfidenceCappingGuardrails:
 
         with patch("app.agents.orchestrator.generate_embedding", return_value=[0.1] * 384), \
              patch("app.agents.orchestrator.lookup_cache", return_value=None), \
-             patch("app.agents.factcheck_agent.run", return_value=mock_fc), \
-             patch("app.agents.crossref_agent.run", return_value=mock_cr), \
-             patch("app.agents.linguistic_agent.run", return_value=mock_ling), \
+             patch("app.agents.factcheck_agent.analyze", new=_returning(mock_fc)), \
+             patch("app.agents.crossref_agent.analyze", new=_returning(mock_cr)), \
+             patch("app.agents.linguistic_agent.analyze", new=_returning(mock_ling)), \
              patch("app.agents.orchestrator.insert_cache", return_value=None):
 
             res = await verify_claim("SHOCKING SECRET revealed! You won't believe...", bypass_cache=True)
@@ -246,3 +252,15 @@ def test_disputed_cap_holds_across_matched_reviews_and_partial_runs():
                             assert result.confidence_level != "high", case
                             assert result.evidence_status == "disputed", case
 
+
+
+class TestBiasLabelsAreNeverModelOutput:
+    """Zero tolerance (CLAUDE.md §4.6): no LLM output schema can carry a political bias label."""
+
+    def test_no_worker_output_schema_has_a_bias_field(self):
+        from app.agents.crossref_agent import CoverageSummary
+        from app.agents.factcheck_agent import FactCheckDecision
+        from app.agents.linguistic_agent import SensationalismJudgment
+
+        for schema in (CoverageSummary, FactCheckDecision, SensationalismJudgment):
+            assert not any("bias" in name.lower() for name in schema.model_fields), schema.__name__

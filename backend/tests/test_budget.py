@@ -1,5 +1,4 @@
 from datetime import datetime, timedelta, timezone
-from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -37,13 +36,10 @@ def test_zero_limit_disables_guard():
     assert all(b.try_charge(100) for _ in range(5))
 
 
-@pytest.mark.anyio
-async def test_exhausted_llm_budget_raises_before_calling_the_model(monkeypatch):
-    from app.utils import adk_helpers
-    exhausted = DailyBudget("llm", limit=1, clock=Clock())
-    exhausted.try_charge()
-    monkeypatch.setattr(budget_mod, "get_llm_budget", lambda: exhausted)
-    with patch.object(adk_helpers, "get_adk_runner") as runner:
-        with pytest.raises(LLMBudgetExceeded):
-            await adk_helpers.run_adk_agent("n", "i", "p", "app")
-    runner.return_value.run_async.assert_not_called()
+def test_charge_llm_budget_callback_charges_per_turn_and_refuses_when_exhausted(monkeypatch):
+    from app.agents.common import charge_llm_budget
+    b = DailyBudget("llm", limit=2, clock=Clock())
+    monkeypatch.setattr(budget_mod, "get_llm_budget", lambda: b)
+    assert charge_llm_budget(None, None) is None and charge_llm_budget(None, None) is None
+    with pytest.raises(LLMBudgetExceeded):
+        charge_llm_budget(None, None)

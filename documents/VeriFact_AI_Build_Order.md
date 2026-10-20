@@ -153,7 +153,7 @@ Build each agent independently, test it independently, then wire them together. 
 3. Implement orchestrator flow:
    - Input → sanitize → embed → cache check
    - Cache miss → parallel dispatch agents via ADK
-   - Collect results with per-agent timeout (8s)
+   - Collect results with a per-agent timeout (`settings.agent_timeout_s`; the original 8 s is dropped, values TBD from benchmarking)
    - Handle individual agent failures gracefully
    - Pass to scoring engine
    - Persist result to database

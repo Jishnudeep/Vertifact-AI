@@ -7,6 +7,14 @@ Never imported by the backend. run_eval.py installs it around a run:
   live:   call live, store nothing
 Cached payloads are RAW results. Domain exclusion is applied on the way out, so one cache
 serves runs with and without leave-source-out.
+
+Two seams are patched, both where the worker agents look the dependency up:
+  * the services the agents' TOOLS call (`app.agents.factcheck_agent` / `crossref_agent`:
+    grounded_search, fetch_page_text, search_factchecks), and
+  * the single model seam `app.agents.common.get_model`, which is wrapped in a `ReplayLlm`
+    keyed on a hash of the serialized LlmRequest (system instruction, contents, tool declarations).
+Replay is deterministic only as long as the agents' prompts and tool declarations do not change; a
+changed prompt is a new key, i.e. a replay miss that invalidates the run (see run_eval).
 """
 import contextlib
 import contextvars
@@ -16,9 +24,16 @@ import json
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Literal, Optional, Tuple
 
+from google.adk.models._capabilities import LlmCapabilities
+from google.adk.models.base_llm import BaseLlm
+from google.adk.models.llm_request import LlmRequest
+from google.adk.models.google_llm import Gemini
+from google.adk.models.llm_response import LlmResponse
+from pydantic import ConfigDict
+
+import app.agents.common as common
 import app.agents.crossref_agent as crossref_agent
 import app.agents.factcheck_agent as factcheck_agent
-import app.agents.linguistic_agent as linguistic_agent
 from app.config import settings
 from app.services.errors import EvidenceAPIError
 from app.services.grounded_search import GroundedSearch, GroundedSource, SearchKind
@@ -96,11 +111,13 @@ class EvidenceReplay:
 
     # --- wrappers ---------------------------------------------------------
     def _wrap_grounded_search(self, original):
-        async def grounded_search(kind: SearchKind, claim: str):
-            payload = {"kind": kind, "claim": claim, "model": settings.search_model_id}
+        async def grounded_search(kind: SearchKind, query: str):
+            # The payload key stays "claim": entries recorded before the tool-calling refactor
+            # (where the query WAS the claim) keep hitting.
+            payload = {"kind": kind, "claim": query, "model": settings.search_model_id}
             cached = await self._through_cache(
                 "gemini_search", payload,
-                lambda: original(kind=kind, claim=claim),
+                lambda: original(kind, query),
             )
             gs = cached if isinstance(cached, GroundedSearch) else GroundedSearch.from_dict(cached)
             excluded = _excluded.get()
@@ -136,14 +153,13 @@ class EvidenceReplay:
             return filter_factcheck_claims(claims, _excluded.get())
         return search_factchecks
 
-    def _wrap_run_adk_agent(self, original):
-        async def run_adk_agent(name, instruction, prompt, app_name):
-            payload = {"model": settings.model_id, "name": name, "instruction": instruction,
-                       "prompt": prompt, "app_name": app_name}
-            return await self._through_cache(
-                "llm", payload, lambda: original(name, instruction, prompt, app_name)
-            )
-        return run_adk_agent
+    def _wrap_get_model(self, original):
+        def get_model() -> BaseLlm:
+            inner = original()
+            if isinstance(inner, str):
+                inner = Gemini(model=inner)
+            return ReplayLlm(model=inner.model, inner=inner, replay=self)
+        return get_model
 
     # --- install / uninstall ----------------------------------------------
     def _patch(self, module, attr: str, wrapper_factory) -> None:
@@ -159,10 +175,76 @@ class EvidenceReplay:
         self._patch(crossref_agent, "fetch_page_text", self._wrap_fetch_page_text)
         self._patch(factcheck_agent, "fetch_page_text", self._wrap_fetch_page_text)
         self._patch(factcheck_agent, "search_factchecks", self._wrap_search_factchecks)
-        self._patch(factcheck_agent, "run_adk_agent", self._wrap_run_adk_agent)
-        self._patch(linguistic_agent, "run_adk_agent", self._wrap_run_adk_agent)
+        self._patch(common, "get_model", self._wrap_get_model)
 
     def uninstall(self) -> None:
         while self._originals:
             module, attr, original = self._originals.pop()
             setattr(module, attr, original)
+
+
+# --- model-level replay -------------------------------------------------------------------------
+
+def _without_ids(node):
+    """Function call/response ids are random per run; they must not reach the replay key."""
+    if isinstance(node, dict):
+        return {k: _without_ids(v) for k, v in node.items()
+                if not (k == "id" and ("name" in node) and ("args" in node or "response" in node))}
+    if isinstance(node, list):
+        return [_without_ids(v) for v in node]
+    return node
+
+
+def request_key(llm_request: LlmRequest) -> str:
+    """Hash of what the model is actually shown: system instruction, contents, tool declarations."""
+    config = llm_request.config
+    system = getattr(config, "system_instruction", None)
+    canonical = {
+        "model": llm_request.model,
+        "system_instruction": system if isinstance(system, str) or system is None
+        else system.model_dump(mode="json", exclude_none=True),
+        "contents": [_without_ids(c.model_dump(mode="json", exclude_none=True)) for c in llm_request.contents],
+        "tools": [t.model_dump(mode="json", exclude_none=True) for t in (getattr(config, "tools", None) or [])],
+    }
+    return _key("llm", canonical)
+
+
+class ReplayLlm(BaseLlm):
+    """
+    Wraps the real worker model (`get_model()`) and serves/records each turn's LlmResponses by
+    `request_key`. In replay mode the inner model is never called; a missing entry raises
+    ReplayMissError (an outage: the agent degrades and the run is invalidated).
+    """
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    model: str = "replay"
+    inner: object
+    replay: object
+
+    @property
+    def capabilities(self) -> LlmCapabilities:
+        return self.inner.capabilities                      # same structured-output path as the real model
+
+    async def generate_content_async(self, llm_request: LlmRequest, stream: bool = False):
+        replay: EvidenceReplay = self.replay                # type: ignore[assignment]
+        key = request_key(llm_request)
+        path = replay._path(key)
+        if replay.mode == "replay":
+            if not path.exists():
+                replay.misses += 1
+                raise ReplayMissError(f"No recorded llm response (key {key[:12]})", provider="llm")
+            for item in json.loads(path.read_text(encoding="utf-8")):
+                yield LlmResponse.model_validate(item)
+            return
+
+        responses: List[LlmResponse] = []
+        async for response in self.inner.generate_content_async(llm_request, stream=stream):
+            responses.append(response)
+            yield response
+        if replay.mode == "record":
+            replay.cache_dir.mkdir(parents=True, exist_ok=True)
+            path.write_text(
+                json.dumps([r.model_dump(mode="json", exclude_none=True) for r in responses], ensure_ascii=False),
+                encoding="utf-8",
+            )
+            replay.recorded += 1

@@ -39,7 +39,7 @@ def build_agent() -> LlmAgent:
     """Construct the smoke-test agent. Model id comes from config (LiteLLM-routed)."""
     return LlmAgent(
         name="verifact_smoke",
-        model=LiteLlm(model=settings.model_id, api_key=settings.groq_api_key),
+        model=settings.model_id,
         description="Throwaway agent to verify ADK + LiteLLM + Groq wiring.",
         instruction=(
             "You are a concise assistant. Answer the user's question directly "

@@ -10,15 +10,14 @@ from contextlib import ExitStack
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from google.adk.workflow import FunctionNode
-
-from app.agents import orchestrator
+from app.agents import factcheck_agent, orchestrator
 from app.agents.crossref_agent import CrossRefResult, make_neutral_crossref
 from app.agents.factcheck_agent import make_neutral_factcheck
 from app.agents.linguistic_agent import LinguisticResult, make_neutral_linguistic
 from app.agents.orchestrator import AllAgentsFailedError, verify_claim
 from app.config import settings
 from app.utils.errors import ProviderErrorCode
+from tests.agent_patches import patched_agents
 
 CLAIM = "The Earth orbits the Sun"
 
@@ -37,9 +36,8 @@ def _patches(stack: ExitStack, fc_run, cr_run, ling_run, cached=None):
     stack.enter_context(patch("app.agents.orchestrator.generate_embedding", return_value=[0.1] * 384))
     stack.enter_context(patch("app.agents.orchestrator.lookup_cache", new=AsyncMock(return_value=cached)))
     stack.enter_context(patch("app.agents.orchestrator.insert_cache", new=AsyncMock(return_value="id-1")))
-    stack.enter_context(patch("app.agents.factcheck_agent.run", new=fc_run))
-    stack.enter_context(patch("app.agents.crossref_agent.run", new=cr_run))
-    stack.enter_context(patch("app.agents.linguistic_agent.run", new=ling_run))
+    # The agents are ADK nodes: their bodies are replaced, the node machinery around them is real.
+    stack.enter_context(patched_agents(fc_run, cr_run, ling_run))
 
 
 def test_graph_builds_with_expected_nodes():
@@ -60,10 +58,10 @@ async def test_one_agent_raising_does_not_cancel_its_siblings():
         finished.append(name)
         return result
 
-    async def cr_run(claim, timeout=None):
+    async def cr_run(claim):
         return await slow_ok(cr, "crossref")
 
-    async def ling_run(claim, timeout=None):
+    async def ling_run(claim):
         return await slow_ok(ling, "linguistic")
 
     with ExitStack() as stack:
@@ -78,18 +76,14 @@ async def test_one_agent_raising_does_not_cancel_its_siblings():
 
 
 @pytest.mark.anyio
-async def test_agent_ignoring_its_budget_hits_the_adk_node_backstop(monkeypatch):
-    """An agent that never honours its own timeout is cut off by the ADK node timeout."""
+async def test_agent_exceeding_its_node_timeout_degrades_as_a_timeout(monkeypatch):
+    """The agent node's `timeout=` cuts off a hung agent; ADK's NodeTimeoutError still classifies as TIMEOUT."""
     fc, cr, ling = _ok_results()
 
-    async def hung(claim, timeout=None):
+    async def hung(claim):
         await asyncio.sleep(30)
 
-    nodes = list(orchestrator.AGENT_NODES)
-    _, provider, make_neutral = nodes[0]
-    nodes[0] = (FunctionNode(func=orchestrator._factcheck, name="factcheck", timeout=0.1), provider, make_neutral)
-    monkeypatch.setattr(orchestrator, "AGENT_NODES", tuple(nodes))
-
+    monkeypatch.setattr(factcheck_agent.factcheck_node, "timeout", 0.1)
     with ExitStack() as stack:
         _patches(stack, hung, AsyncMock(return_value=cr), AsyncMock(return_value=ling))
         result = await asyncio.wait_for(verify_claim(CLAIM), timeout=5)
@@ -98,29 +92,8 @@ async def test_agent_ignoring_its_budget_hits_the_adk_node_backstop(monkeypatch)
     warnings = result["confidence"]["warnings"]
     assert any("Partial analysis: 2/3" in w for w in warnings)
     assert any(w == "Fact-check check timed out" for w in warnings)
-    # ADK's NodeTimeoutError is not a TimeoutError subclass; it must still classify as TIMEOUT.
     fc_out = insert.call_args.kwargs["agent_outputs"]["factcheck"]
     assert fc_out["error_details"]["code"] == ProviderErrorCode.TIMEOUT.value
-
-
-@pytest.mark.anyio
-async def test_agent_ignoring_its_budget_is_cut_off_at_the_request_budget(monkeypatch):
-    """The per-request backstop follows the deadline, not the fixed 9 s node guard."""
-    monkeypatch.setattr(settings, "request_deadline_s", 2.0)   # -> agent budget 1.0 s
-    fc, cr, ling = _ok_results()
-
-    async def hung(claim, timeout=None):
-        await asyncio.sleep(30)
-
-    start = time.perf_counter()
-    with ExitStack() as stack:
-        _patches(stack, hung, AsyncMock(return_value=cr), AsyncMock(return_value=ling))
-        result = await verify_claim(CLAIM)
-    elapsed = time.perf_counter() - start
-
-    assert elapsed < 1.0 + orchestrator.AGENT_GRACE_S + 1.0
-    assert any(w == "Fact-check check timed out"
-               for w in result["confidence"]["warnings"])
 
 
 @pytest.mark.anyio
@@ -128,7 +101,7 @@ async def test_client_disconnect_cancels_agents_and_leaks_no_session():
     started, cancelled = asyncio.Event(), []
 
     def tracking(name):
-        async def run(claim, timeout=None):
+        async def run(claim):
             started.set()
             try:
                 await asyncio.sleep(30)
