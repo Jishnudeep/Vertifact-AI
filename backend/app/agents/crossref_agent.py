@@ -19,7 +19,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from google.adk.agents import LlmAgent
 from google.adk.agents.context import Context
 from google.adk.workflow import node
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from app.agents import common
 from app.agents.common import clip, fenced
@@ -165,6 +165,11 @@ def build_tools(claim: str, cov: Coverage) -> list:
         Args:
             query: Short search query for news coverage of the claim.
         """
+        query = (query or "").strip()[:300]
+        if not query:
+            # Costs nothing: no search, and no use of the call cap.
+            logger.info("search_news_coverage: empty query, refused")
+            return {"error": "The query is empty. Call again with a short search query."}
         if cov.calls >= 2:
             logger.info("search_news_coverage: call limit reached, refused")
             return {"error": "Call limit reached for this tool. Use the results you already have."}
@@ -173,7 +178,6 @@ def build_tools(claim: str, cov: Coverage) -> list:
             logger.error("search_news_coverage: provider already down this run, failing fast")
             raise cov.outage
         cov.calls += 1
-        query = (query or "").strip()[:300]
         try:
             search = await grounded_search("coverage", query)
         except EvidenceAPIError as exc:
@@ -296,8 +300,20 @@ async def analyze(ctx: Context, claim: str) -> CrossRefResult:
         **common.agent_kwargs(),
     )
     hints = ", ".join(fenced(e[:80]) for e in entities[:8]) or "none"
-    output = await ctx.run_node(agent, f"<claim>{fenced(claim[:500])}</claim>\nEntity hints: {hints}")
-    logger.info("Cross-reference queries: %s", CoverageSummary.model_validate(output).queries_rationale[:300])
+    try:
+        output = await ctx.run_node(agent, f"<claim>{fenced(claim[:500])}</claim>\nEntity hints: {hints}")
+        rationale = CoverageSummary.model_validate(output).queries_rationale
+        logger.info("Cross-reference queries: %s", rationale[:300])
+    except Exception as exc:  # noqa: BLE001
+        # The rationale is only logged; the scores come from the tool's recorded evidence. A final
+        # answer that fails its schema must not throw that evidence away. Anything else (timeout,
+        # budget, provider error) is a real failure and propagates.
+        wrapped = getattr(exc, "error", None)       # ADK wraps a child node's error as DynamicNodeFailError
+        cause = wrapped if isinstance(wrapped, Exception) else exc
+        # Only OUR schema's failure: a ValidationError from any other model is a real error.
+        if not (isinstance(cause, ValidationError) and cause.title == CoverageSummary.__name__):
+            raise
+        logger.warning("Cross-reference: the final answer failed its schema; scoring from recorded evidence.")
     return finalize(entities, cov)
 
 

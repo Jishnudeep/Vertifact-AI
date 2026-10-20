@@ -1,26 +1,22 @@
-"""Minimal ADK + LiteLLM + Groq smoke test.
+"""Minimal ADK + Gemini smoke test.
 
 A throwaway "does the wiring work?" agent — NOT a VeriFact verification agent.
-It exists to confirm three things end-to-end before we build the real pipeline:
+It exists to confirm three things end-to-end:
 
   1. google-adk can construct an LlmAgent.
-  2. LiteLlm routes that agent to Groq (Llama 3.1 8B) using the key from config.
+  2. The agent reaches Gemini (`settings.model_id`) with the key from config.
   3. The ADK Runner can drive a turn and return a final response.
 
 Run it:
     cd backend
     uv run python -m app.agents.smoke_agent
 
-Note on the model: Groq does not serve a 3B Llama. The project default
-(`settings.model_id`) is `groq/llama-3.1-8b-instant`, and per the project rule the
-model id always comes from config — never hardcoded in agent logic.
+Per the project rule the model id always comes from config — never hardcoded in agent logic.
 """
 
 import asyncio
-import os
 
 from google.adk.agents import LlmAgent
-from google.adk.models.lite_llm import LiteLlm
 from google.adk.runners import Runner
 from google.adk.sessions import InMemorySessionService
 from google.genai import types
@@ -29,18 +25,13 @@ from app.config import settings
 
 APP_NAME = "verifact-smoke"
 
-# LiteLLM reads the provider key from the process environment. pydantic-settings
-# loads it into `settings` but not into os.environ, so export it here. We also pass
-# api_key explicitly to LiteLlm as a belt-and-suspenders measure.
-os.environ.setdefault("GROQ_API_KEY", settings.groq_api_key)
-
 
 def build_agent() -> LlmAgent:
-    """Construct the smoke-test agent. Model id comes from config (LiteLLM-routed)."""
+    """Construct the smoke-test agent. Model id comes from config."""
     return LlmAgent(
         name="verifact_smoke",
         model=settings.model_id,
-        description="Throwaway agent to verify ADK + LiteLLM + Groq wiring.",
+        description="Throwaway agent to verify ADK + Gemini wiring.",
         instruction=(
             "You are a concise assistant. Answer the user's question directly "
             "in a single short sentence. Do not elaborate."
@@ -86,7 +77,7 @@ async def _main() -> None:
         raise
 
     print(f"Response: {answer}")
-    print("\nADK + LiteLLM + Groq wiring OK." if answer else "\nNo response text returned.")
+    print("\nADK + Gemini wiring OK." if answer else "\nNo response text returned.")
 
 
 if __name__ == "__main__":

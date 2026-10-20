@@ -9,18 +9,23 @@ from typing import Optional
 from unittest.mock import AsyncMock
 
 import pytest
+from google.genai import types
+from pydantic import BaseModel, ValidationError
 
 from app.agents import crossref_agent as cr
 from app.agents.crossref_agent import (
     CITED_RELEVANCE, PREMISE_MAX_CHARS, STANCE_MIN_PROB, CoverageSummary, compute_consensus,
     crossref_node, label_stance, make_neutral_crossref,
 )
+from app.services import budget as budget_mod
 from app.services.bias_lookup import get_bias_label, load_bias_ratings
+from app.services.budget import DailyBudget, LLMBudgetExceeded
 from app.services.errors import EvidenceAPIError
 from app.services.grounded_search import GroundedSearch, GroundedSource
 from app.services.nli import NLIScores
 from app.services.page_fetch import PageText
 from tests.scripted_llm import call, final, install_script, run_node
+from tests.test_budget import Clock
 
 pytestmark = pytest.mark.anyio
 
@@ -195,6 +200,67 @@ async def test_a_domain_unread_in_the_first_search_keeps_its_later_stance(monkey
     result = await run("NASA announces Mars landing", monkeypatch,
                        call(COVERAGE, query="a"), call(COVERAGE, query="b"), DONE)
     assert len(result.sources_found) == 1 and result.sources_found[0]["stance"] == "supports"
+
+
+@pytest.mark.parametrize("blank", ["", "   ", "\n"])
+async def test_blank_query_is_a_tool_error_that_costs_nothing(monkeypatch, services, blank):
+    llm = install_script(monkeypatch, call(COVERAGE, query=blank), call(COVERAGE, query="a"),
+                         call(COVERAGE, query="b"), DONE)
+    await run_node(crossref_node, "NASA announces Mars landing")
+    assert services.search.await_count == 2               # blank neither searched nor used a cap slot
+    responses = [p.function_response.response for c in llm.seen[-1].contents for p in (c.parts or [])
+                 if p.function_response]
+    assert "error" in responses[0] and "empty" in responses[0]["error"].lower()
+
+
+async def test_only_blank_queries_is_a_failed_run(monkeypatch, services):
+    with pytest.raises(RuntimeError, match="no news search"):
+        await run("NASA announces Mars landing", monkeypatch, call(COVERAGE, query=" "), DONE)
+    services.search.assert_not_awaited()
+
+
+async def test_a_malformed_final_answer_does_not_discard_the_evidence(monkeypatch, services):
+    result = await run("NASA announces Mars landing", monkeypatch,
+                       call(COVERAGE, query="a"), final(queries_rationale=["not", "a", "string"]))
+    assert not result.degraded and result.v_consensus_score == 0.2
+
+
+async def test_malformed_final_answer_without_any_search_still_raises(monkeypatch, services):
+    with pytest.raises(RuntimeError, match="no news search"):
+        await run("NASA announces Mars landing", monkeypatch, final(queries_rationale=["x"]))
+
+
+async def test_malformed_final_answer_after_an_outage_still_raises(monkeypatch, services):
+    services.search.side_effect = EvidenceAPIError("HTTP 503", provider="gemini_search")
+    with pytest.raises(EvidenceAPIError):
+        await run("NASA announces Mars landing", monkeypatch,
+                  call(COVERAGE, query="a"), final(queries_rationale=["x"]))
+
+
+async def test_a_final_answer_that_is_not_json_scores_from_the_evidence(monkeypatch, services):
+    result = await run("NASA announces Mars landing", monkeypatch,
+                       call(COVERAGE, query="a"), [types.Part(text="Sorry, here is some prose.")])
+    assert not result.degraded and result.v_consensus_score == 0.2
+
+
+async def test_a_validation_error_from_another_model_is_not_swallowed(monkeypatch, services):
+    class Other(BaseModel):
+        title: str
+
+    try:
+        Other.model_validate({})
+    except ValidationError as foreign:
+        error = foreign                                       # raised by the scripted model turn below
+    with pytest.raises(ValidationError) as caught:
+        await run("NASA announces Mars landing", monkeypatch, call(COVERAGE, query="a"), error)
+    assert caught.value.title == "Other"
+
+
+async def test_llm_budget_exhaustion_before_the_final_answer_still_propagates(monkeypatch, services):
+    tight = DailyBudget("llm", limit=1, clock=Clock())        # the tool-call turn fits; the answer turn does not
+    monkeypatch.setattr(budget_mod, "get_llm_budget", lambda: tight)
+    with pytest.raises(LLMBudgetExceeded):
+        await run("NASA announces Mars landing", monkeypatch, call(COVERAGE, query="a"), DONE)
 
 
 # --- failures raise; the supervisor degrades ------------------------------------------------------

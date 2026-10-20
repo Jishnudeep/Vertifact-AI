@@ -182,6 +182,7 @@ class Evidence:
 
 
 _REFUSED = {"error": "Call limit reached for this tool. Use the results you already have."}
+_EMPTY_QUERY = {"error": "The query is empty. Call again with a short search query."}
 
 
 def build_tools(claim: str, ev: Evidence) -> list:
@@ -198,11 +199,14 @@ def build_tools(claim: str, ev: Evidence) -> list:
         Args:
             query: Short search query.
         """
+        query = (query or "").strip()[:300]
+        if not query:
+            logger.info("search_fact_check_database: empty query, refused")
+            return _EMPTY_QUERY                                      # no API call, no cap slot used
         if ev.calls["db"] >= 2:
             logger.info("search_fact_check_database: call limit reached, refused")
             return _REFUSED
         ev.calls["db"] += 1
-        query = (query or "").strip()[:300]
         ev.queries.append(query)
         try:
             results = await search_factchecks(query, settings.google_fact_check_api_key)
@@ -236,8 +240,8 @@ def build_tools(claim: str, ev: Evidence) -> list:
                 "publisher": fenced(review["publisher"][:100]),
                 "rating": fenced(review["rating"][:150]),
                 "normalized_rating": review["normalized_rating"],
-                "url": review["url"],
-                "review_date": review["review_date"],
+                "url": fenced_attr(str(review["url"])[:500]) if review["url"] else None,
+                "review_date": fenced_attr(str(review["review_date"])[:40]) if review["review_date"] else None,
                 "similarity": review["similarity"],
             })
         logger.info(
@@ -257,11 +261,14 @@ def build_tools(claim: str, ev: Evidence) -> list:
         Args:
             query: Short search query naming the claim and asking for fact-checks.
         """
+        query = (query or "").strip()[:300]
+        if not query:
+            logger.info("search_fact_check_sites: empty query, refused")
+            return _EMPTY_QUERY                                      # no search, no cap slot used
         if ev.calls["web"] >= 1:
             logger.info("search_fact_check_sites: call limit reached, refused")
             return _REFUSED
         ev.calls["web"] += 1
-        query = (query or "").strip()[:300]
         ev.queries.append(query)
         try:
             search = await grounded_search("factcheck", query)

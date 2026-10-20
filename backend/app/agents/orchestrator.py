@@ -50,8 +50,9 @@ class AllAgentsFailedError(RuntimeError):
     """Raised when all verification agents fail or time out (HTTP 500)."""
     pass
 
-# Timeouts are generous config backstops (settings.agent_timeout_s on each agent node,
-# settings.request_deadline_s for the request); the benchmark-then-optimize phase sets the real values.
+# Timeouts are generous config backstops; the benchmark-then-optimize phase sets the real values.
+# Each agent node has a fixed `timeout=settings.agent_timeout_s` (read at import). The request has no
+# overall timeout: `request.deadline` (settings.request_deadline_s) only bounds the persistence wait.
 CACHE_LOOKUP_TIMEOUT_S = 1.5   # pgvector round-trip + up to 3 NLI equivalence checks
 PERSIST_MIN_WAIT_S = 0.25
 
@@ -166,8 +167,9 @@ async def dispatch_agents_node(ctx: Context, node_input: VerifyRequest) -> Dict[
             dur_ms = int((time.monotonic() - t0) * 1000)
             return exc, dur_ms
 
-    logger.info("dispatch_agents: running %s in parallel (agent timeout %ss)",
-                ", ".join(n.name for n, _, _, _ in AGENT_NODES), settings.agent_timeout_s)
+    # The timeout is fixed on each node when its module is imported, so log the node's own value.
+    logger.info("dispatch_agents: running in parallel: %s",
+                ", ".join(f"{n.name} (timeout {n.timeout}s)" for n, _, _, _ in AGENT_NODES))
     results = await asyncio.gather(
         *(_timed_run(node_, rtype) for node_, _, _, rtype in AGENT_NODES),
         return_exceptions=True,

@@ -97,6 +97,21 @@ async def test_agent_exceeding_its_node_timeout_degrades_as_a_timeout(monkeypatc
 
 
 @pytest.mark.anyio
+async def test_dispatch_log_reports_each_nodes_actual_timeout(monkeypatch, caplog):
+    """The timeout is bound to the node at import; the log must show that, not today's settings value."""
+    fc, cr, ling = _ok_results()
+    monkeypatch.setattr(factcheck_agent.factcheck_node, "timeout", 12.5)
+    monkeypatch.setattr(settings, "agent_timeout_s", 999.0)
+    with caplog.at_level("INFO", logger="app.agents.orchestrator"), ExitStack() as stack:
+        _patches(stack, AsyncMock(return_value=fc), AsyncMock(return_value=cr), AsyncMock(return_value=ling))
+        await verify_claim(CLAIM)
+
+    line = next(r.getMessage() for r in caplog.records if r.getMessage().startswith("dispatch_agents: running"))
+    assert "factcheck (timeout 12.5s)" in line
+    assert "999" not in line
+
+
+@pytest.mark.anyio
 async def test_client_disconnect_cancels_agents_and_leaks_no_session():
     started, cancelled = asyncio.Event(), []
 

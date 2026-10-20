@@ -284,7 +284,7 @@ claim-review domain (see §7). It is the flag that gates `level: "high"`.
 - `500` — All agents failed
 - `503` — LLM provider unavailable
 
-Every response carries `X-Process-Time-Ms`. The pipeline runs under a request deadline (`settings.request_deadline_s`). Each agent node has its own `settings.agent_timeout_s`. Both values are generous config backstops (defaults 35 s and 30 s) and the old "8 s per agent / under 10 s end to end" limits are no longer design constraints: the agents are real ADK tool loops whose latency is measured first (`eval/latency_bench.py`) and the final values are **TBD from benchmarking**. A slow DB write returns the result with `id: null` while the write completes in the background; on shutdown the app waits up to 5 s for such writes. The header is listed in CORS `expose_headers` so the cross-origin frontend can read it.
+Every response carries `X-Process-Time-Ms`. Each agent node carries a fixed `timeout=settings.agent_timeout_s`, read once when the module is imported (there is no end-to-end pipeline timeout and no per-request budget). `settings.request_deadline_s` is stamped on the request in `prepare_verify_request`, but the only thing it bounds is how long the response waits for the persistence write (§3.1 `id: null`). Both values are generous config backstops (defaults 30 s per agent, and 35 s from request start for the persistence wait, which gets whatever remains of it, at least 0.25 s) and the old "8 s per agent / under 10 s end to end" limits are no longer design constraints: the agents are real ADK tool loops whose latency is measured first (`eval/latency_bench.py`) and the final values are **TBD from benchmarking**. A slow DB write returns the result with `id: null` while the write completes in the background; on shutdown the app waits up to 5 s for such writes. The header is listed in CORS `expose_headers` so the cross-origin frontend can read it.
 
 ### 3.2 POST /api/verify/image
 
@@ -368,8 +368,9 @@ START ─► cache_lookup ─┬─ "hit"  ─► format_cached
                                       └─ ctx.run_node(linguistic) ┘
 ```
 
-- `cache_lookup` fails closed (timeout or error → `"miss"`) and computes the per-agent budget
-  from what is left of the request deadline (§3.1).
+- `cache_lookup` fails closed (timeout or error → `"miss"`). It is bounded by its own
+  `CACHE_LOOKUP_TIMEOUT_S` (1.5 s); it does not compute or pass on any per-agent budget. Each agent
+  node's timeout is the fixed `settings.agent_timeout_s` (§3.1).
 - `dispatch_agents` is a **dynamic supervisor** (adk.dev/graphs/dynamic). It runs the three
   agents as dynamic child nodes. A child that raises or exceeds its ADK node `timeout` surfaces
   as a catchable `DynamicNodeFailError` and becomes that agent's degraded neutral result; the
@@ -438,7 +439,7 @@ Model: `settings.model_id` (`gemini-3.1-flash-lite`; Groq is tabled). It is neve
 10. Persist to database
 11. Return response
 
-**Timeout handling:** Each worker node has a timeout from `settings.agent_timeout_s` and the request has `settings.request_deadline_s`; the shipped values are generous backstops, not targets. If an agent times out or fails, the supervisor substitutes its neutral value with `degraded=True` and the result is flagged "Partial Analysis." The final timeout values are set by the benchmark-then-optimize phase (`eval/latency_bench.py`), not decided here.
+**Timeout handling:** Each worker node has a fixed `timeout=settings.agent_timeout_s` (read at import); `settings.request_deadline_s` only bounds the wait for the persistence write (§3.1). The shipped values are generous backstops, not targets. If an agent times out or fails, the supervisor substitutes its neutral value with `degraded=True` and the result is flagged "Partial Analysis." The final timeout values are set by the benchmark-then-optimize phase (`eval/latency_bench.py`), not decided here.
 
 ### 4.2 Fact-Check Lookup Agent
 
@@ -523,10 +524,16 @@ class CrossRefResult:
 
 **Degradation (CLAUDE.md §4.3):** a search returning zero results means "no corroboration found"
 (`degraded=False`). A search that could **not run** — grounded search raising `EvidenceAPIError`
-(API failure/network outage) on **every** search the model ran — is an outage (an outage on one of two searches is not): the worker raises and the supervisor returns the neutral result with `degraded=True`, so
+(API failure/network outage) on **every** search the model ran — is an outage (an outage on the second of two searches, after the first returned, is not): the worker raises and the supervisor returns the neutral result with `degraded=True`, so
 Rule 1 caps the score and the response carries the "Partial analysis" warning. The same split applies
 to the Fact-Check agent across both of its evidence layers. If the NLI model fails, the agent returns the neutral
 result with `degraded=True`. It never falls back to counting coverage.
+
+**Fail-fast on an outage:** the tool does not retry a provider that is already down. If the first
+search was an outage, a second call raises that outage immediately (`search_news_coverage`, when
+`outage` is set and no search has answered), which ends the agent run and degrades it. So an outage on
+search 1 always degrades, whether or not the model would have tried again. Only an outage on the second
+search, after the first answered, leaves the agent un-degraded.
 
 ### 4.4 Linguistic Analysis Agent
 
@@ -1109,7 +1116,7 @@ queries the DB), or accept a resume delay before demos.
 
 - **Input sanitization:** strip `<script>`/HTML, tracking parameters (utm_*, fbclid, …) and JSON-answer syntax; limit input to 2000 characters. Only the sanitized text is persisted.
 - **Rate limiting:** 10 requests/minute per client IP (slowapi). The key is `app/api/client_ip.py`: behind `TRUSTED_PROXY_HOPS` proxies it takes the N-th `X-Forwarded-For` entry from the right; with 0 hops it uses the socket peer. Set `TRUSTED_PROXY_HOPS=1` on Render/Railway/Fly.
-- **Spend budgets:** per-UTC-day ceilings on Google search grounding calls (`SEARCH_DAILY_CALL_BUDGET`, default 1500; Plan 6 replaces Tavily) and LLM calls (`LLM_DAILY_CALL_BUDGET`, default 900). When a budget is exhausted, the call raises an outage error, the agent degrades and the response carries "Partial analysis". It never returns a confident score. The counters are in-process (single instance). Two deliberate exceptions:
+- **Spend budgets:** per-UTC-day ceilings on Google search grounding calls (`SEARCH_DAILY_CALL_BUDGET`, default 150: an uncached request spends up to 3, one Fact-Check web search plus up to two Cross-Ref coverage searches; **TBD from benchmarking**; Plan 6 replaces Tavily) and LLM calls (`LLM_DAILY_CALL_BUDGET`, default 900). When a budget is exhausted, the call raises an outage error, the agent degrades and the response carries "Partial analysis". It never returns a confident score. The counters are in-process (single instance). Two deliberate exceptions:
   - The optional LLM sensationalism rating (`ENABLE_LLM_SENSATIONALISM`, off by default) falls back to the heuristic score instead of degrading the Linguistic agent. Known issue: that path still reports `sensationalism_source="llm"`.
   - When Google Fact Check answers (even with no match) and only search grounding is refused, the Fact-Check agent reports "no fact-checks found" rather than degrading (R7.B4: degrade only when both layers are down). The Cross-Ref agent is refused by the search budget and degrades, so the response still carries "Partial analysis" and is not served from cache.
 - **SSRF protection on cited page fetching (D4):** `app/services/page_fetch.py` applies the same strict IP and host validation as URL inputs before fetching any cited page discovered through search grounding.
