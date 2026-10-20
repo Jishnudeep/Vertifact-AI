@@ -54,8 +54,11 @@ class Settings(BaseSettings):
 
     # Daily cap on worker LLM turns (a tool loop is several turns per agent).
     llm_daily_call_budget: int = 900
-    # Plan 6: Gemini grounded-search calls per UTC day (one per Fact-Check / Cross-Ref run).
-    search_daily_call_budget: int = 50
+    # Plan 6: Gemini grounded-search calls per UTC day. One uncached request spends up to 3: one
+    # Fact-Check web search plus up to two Cross-Ref coverage searches. 150 therefore allows about
+    # 50 uncached requests a day at worst. TBD from benchmarking (eval/latency_bench.py reports the
+    # real searches per request) and from the provider's actual grounding quota.
+    search_daily_call_budget: int = 150
 
     # Plan 6 / TDD §11: overall wall-clock budget for fetching one cited page (all hops).
     page_fetch_timeout_s: float = 2.0
