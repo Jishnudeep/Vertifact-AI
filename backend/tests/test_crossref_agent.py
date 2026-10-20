@@ -197,6 +197,29 @@ async def test_a_domain_unread_in_the_first_search_keeps_its_later_stance(monkey
     assert len(result.sources_found) == 1 and result.sources_found[0]["stance"] == "supports"
 
 
+@pytest.mark.parametrize("blank", ["", "   ", "\n"])
+async def test_blank_query_is_a_tool_error_that_costs_nothing(monkeypatch, services, blank):
+    llm = install_script(monkeypatch, call(COVERAGE, query=blank), call(COVERAGE, query="a"),
+                         call(COVERAGE, query="b"), DONE)
+    await run_node(crossref_node, "NASA announces Mars landing")
+    assert services.search.await_count == 2               # blank neither searched nor used a cap slot
+    responses = [p.function_response.response for c in llm.seen[-1].contents for p in (c.parts or [])
+                 if p.function_response]
+    assert "error" in responses[0] and "empty" in responses[0]["error"].lower()
+
+
+async def test_only_blank_queries_is_a_failed_run(monkeypatch, services):
+    with pytest.raises(RuntimeError, match="no news search"):
+        await run("NASA announces Mars landing", monkeypatch, call(COVERAGE, query=" "), DONE)
+    services.search.assert_not_awaited()
+
+
+async def test_a_malformed_final_answer_does_not_discard_the_evidence(monkeypatch, services):
+    result = await run("NASA announces Mars landing", monkeypatch,
+                       call(COVERAGE, query="a"), final(queries_rationale=["not", "a", "string"]))
+    assert not result.degraded and result.v_consensus_score == 0.2
+
+
 # --- failures raise; the supervisor degrades ------------------------------------------------------
 
 async def test_outage_on_every_search_raises(monkeypatch, services):
