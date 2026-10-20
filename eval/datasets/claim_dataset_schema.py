@@ -16,3 +16,14 @@ class EvalClaim(BaseModel):
     # from this domain is filtered out while the claim is evaluated, so the system cannot
     # grade a claim with the labeller's own article.
     origin_domain: Optional[str] = None
+    # E2 label provenance: primary source URL or citation for verifiable claims
+    label_source: Optional[str] = None
+    label_note: Optional[str] = None
+
+
+def load_claims(path) -> List[EvalClaim]:
+    import json
+    from pathlib import Path
+    p = Path(path)
+    data = json.loads(p.read_text(encoding="utf-8"))
+    return [EvalClaim.model_validate(c) for c in data]

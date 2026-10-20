@@ -67,3 +67,20 @@ def test_build_fever_maps_labels_without_origin(tmp_path):
         claim = EvalClaim(**r)
         assert claim.source_dataset == "fever" and claim.origin_domain is None
 
+
+def test_dataset_size_and_type_counts():
+    raw = json.loads(SEED.read_text(encoding="utf-8"))
+    claims = [EvalClaim.model_validate(c) for c in raw]
+    assert len(claims) >= 60, f"expected >= 60 total, got {len(claims)}"
+    verifiable = [c for c in claims if c.claim_type == "verifiable"]
+    assert len(verifiable) >= 50, f"expected >= 50 verifiable, got {len(verifiable)}"
+
+
+def test_all_new_verifiable_claims_have_label_source():
+    raw = json.loads(SEED.read_text(encoding="utf-8"))
+    claims = [EvalClaim.model_validate(c) for c in raw]
+    new_claims = [c for c in claims if int(c.id.split("-")[1]) >= 26]
+    for c in new_claims:
+        if c.claim_type == "verifiable":
+            assert c.label_source, f"{c.id} missing label_source"
+
