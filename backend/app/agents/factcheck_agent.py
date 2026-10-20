@@ -18,6 +18,7 @@ from typing import Any, Dict, List, Literal, Optional
 from google.adk.agents import LlmAgent
 from google.adk.agents.context import Context
 from google.adk.workflow import node
+from google.genai import types
 from pydantic import BaseModel, Field
 
 from app.agents import common
@@ -425,6 +426,11 @@ async def analyze(ctx: Context, claim: str) -> FactCheckResult:
         instruction=get_instruction(),
         tools=build_tools(claim, ev),
         output_schema=FactCheckDecision,
+        generate_content_config=types.GenerateContentConfig(
+            thinking_config=types.ThinkingConfig(
+                thinking_level=settings.factcheck_thinking_level
+            )
+        ),
         **common.agent_kwargs(),
     )
     decision = await ctx.run_node(agent, f"<claim>{fenced(claim[:500])}</claim>")

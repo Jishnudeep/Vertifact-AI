@@ -9,6 +9,7 @@ from google.adk.models.llm_response import LlmResponse
 
 from app.config import settings
 from app.services import budget
+from app.utils.errors import AgentTurnLimitExceeded
 from app.utils.validators import neutralize_for_prompt
 
 logger = logging.getLogger(__name__)
@@ -62,6 +63,35 @@ def log_model_turn(callback_context: CallbackContext, llm_request: LlmRequest) -
     return None
 
 
+def get_agent_max_turns(agent_name: Optional[str]) -> Optional[int]:
+    """Returns configured max turns based on agent name substring, or None if unconstrained."""
+    if not agent_name:
+        return None
+    name = agent_name.lower()
+    if "factcheck" in name:
+        return settings.factcheck_max_turns
+    if "crossref" in name:
+        return settings.crossref_max_turns
+    return None
+
+
+def enforce_turn_cap(callback_context: CallbackContext, llm_request: LlmRequest) -> Optional[LlmResponse]:
+    """before_model_callback: raises AgentTurnLimitExceeded if model turn exceeds the per-agent cap."""
+    agent_name = getattr(callback_context, "agent_name", None) or "unknown"
+    max_turns = get_agent_max_turns(agent_name)
+    if max_turns is None:
+        return None
+    contents = getattr(llm_request, "contents", None) or []
+    turn = 1 + sum(1 for c in contents if getattr(c, "role", None) == "model")
+    if turn > max_turns:
+        logger.warning(
+            "%s: exceeded maximum turn cap (%d > %d); aborting turn with AgentTurnLimitExceeded",
+            agent_name, turn, max_turns
+        )
+        raise AgentTurnLimitExceeded(agent_name=agent_name, max_turns=max_turns)
+    return None
+
+
 def log_model_response(callback_context: CallbackContext, llm_response: LlmResponse) -> Optional[LlmResponse]:
     """after_model_callback: what the turn produced (tool calls / final answer / error). Never the text."""
     if getattr(llm_response, "partial", None):
@@ -83,6 +113,6 @@ def log_model_response(callback_context: CallbackContext, llm_response: LlmRespo
 def agent_kwargs() -> Dict[str, Any]:
     """Callbacks every worker LlmAgent is built with (the latency bench wraps this to time tools)."""
     return {
-        "before_model_callback": [log_model_turn, charge_llm_budget],
+        "before_model_callback": [log_model_turn, enforce_turn_cap, charge_llm_budget],
         "after_model_callback": log_model_response,
     }

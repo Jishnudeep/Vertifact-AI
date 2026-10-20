@@ -48,16 +48,22 @@ def get_grounded_runner(kind: SearchKind, instruction: str) -> InMemoryRunner:
     `app.config` (Plan 6 D1).
     """
     model_id = settings.search_model_id
-    cache_key = f"{kind}:{model_id}:{instruction}"
+    thinking_level = settings.grounded_search_thinking_level
+    cache_key = f"{kind}:{model_id}:{thinking_level}:{instruction}"
     runner = _grounded_runner_cache.get(cache_key)
     if runner is None:
-        logger.info(f"Creating grounded-search ADK runner for kind '{kind}' (model: {model_id})")
+        logger.info(f"Creating grounded-search ADK runner for kind '{kind}' (model: {model_id}, thinking: {thinking_level})")
         agent = LlmAgent(
             name=f"{kind}_search",
             model=model_id,
             description=f"Grounded Google Search agent ({kind})",
             instruction=instruction,
             tools=[google_search],
+            generate_content_config=types.GenerateContentConfig(
+                thinking_config=types.ThinkingConfig(
+                    thinking_level=thinking_level
+                )
+            ),
         )
         runner = InMemoryRunner(agent=agent, app_name=f"verifact_{kind}_search")
         _grounded_runner_cache[cache_key] = runner

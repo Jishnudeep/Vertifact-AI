@@ -19,6 +19,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from google.adk.agents import LlmAgent
 from google.adk.agents.context import Context
 from google.adk.workflow import node
+from google.genai import types
 from pydantic import BaseModel, Field, ValidationError
 
 from app.agents import common
@@ -322,6 +323,11 @@ async def analyze(ctx: Context, claim: str) -> CrossRefResult:
         instruction=get_instruction(),
         tools=build_tools(claim, cov),
         output_schema=CoverageSummary,
+        generate_content_config=types.GenerateContentConfig(
+            thinking_config=types.ThinkingConfig(
+                thinking_level=settings.crossref_thinking_level
+            )
+        ),
         **common.agent_kwargs(),
     )
     hints = ", ".join(fenced(e[:80]) for e in entities[:8]) or "none"
