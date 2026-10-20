@@ -25,6 +25,7 @@ os.environ.setdefault("SEARCH_DAILY_CALL_BUDGET", "0")
 os.environ.setdefault("LLM_DAILY_CALL_BUDGET", "0")
 
 import argparse
+from app.config import settings
 from app.agents.orchestrator import verify_claim, NonVerifiableClaimError
 from app.utils.validators import is_verifiable_claim
 from app.services.bias_lookup import load_bias_ratings, get_bias_label, UNRATED_BRIDGING_DOMAINS
@@ -182,6 +183,8 @@ async def run_evaluation(
     claim_delay_s: float = 0.0,
     limit: Optional[int] = None,
     offset: int = 0,
+    agent_timeout_s: Optional[float] = None,
+    request_deadline_s: Optional[float] = None,
 ) -> Dict[str, Any]:
     """
     Run the evaluation harness over one or more EvalClaim JSON datasets.
@@ -192,6 +195,11 @@ async def run_evaluation(
     - summary["segments"]: metrics per source_dataset and per evidence_status, plus
       selective accuracy/coverage treating evidence_status "unverified" as an abstention.
     """
+    if agent_timeout_s is not None:
+        settings.agent_timeout_s = agent_timeout_s
+    if request_deadline_s is not None:
+        settings.request_deadline_s = request_deadline_s
+
     dataset_paths = dataset_paths or [BASE_DIR / "eval" / "datasets" / "curated_claims_seed.json"]
     claims_data: List[Dict[str, Any]] = []
     for path in dataset_paths:
@@ -531,6 +539,8 @@ async def run_evaluation(
         summary = {
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "run_status": run_status,
+            "agent_timeout_s": settings.agent_timeout_s,
+            "request_deadline_s": settings.request_deadline_s,
             "run_status_reasons": run_status_reasons,
             # Kept for backward compatibility with existing baseline_run.json consumers
             "invalid_reasons": run_status_reasons,
@@ -601,6 +611,7 @@ async def run_evaluation(
         print(f"  • Selective Bucketed Acc.:     {fmt(seg['bucketed_accuracy'])} on answered claims (coverage {fmt(seg['coverage'], '{:.0%}')})")
         for ds, m in summary["segments"]["by_dataset"].items():
             print(f"  • [{ds}] n={m['n']} MAE={fmt(m['mae'])} bucketed={fmt(m['bucketed_accuracy'])}")
+        print(f"  • Timeouts:                    agent={settings.agent_timeout_s}s request_deadline={settings.request_deadline_s}s")
         print(f"  • Replay:                      mode={replay_mode} misses={replay.misses} recorded={replay.recorded}")
         if replay_mode != "replay":
             print(f"  • Latency (verifiable n={len(verifiable_latencies)}): p50={fmt(latency_summary.get('p50_ms'), '{:.1f}')}ms p95={fmt(latency_summary.get('p95_ms'), '{:.1f}')}ms (429 retries: {rate_limit_counter.count})")
@@ -646,6 +657,10 @@ def _parse_args(argv=None):
                         help="limit number of claims to evaluate")
     parser.add_argument("--offset", type=int, default=0,
                         help="offset into dataset claims")
+    parser.add_argument("--agent-timeout", type=float, default=None,
+                        help="pin agent_timeout_s for this eval run")
+    parser.add_argument("--request-deadline", type=float, default=None,
+                        help="pin request_deadline_s for this eval run")
     parser.add_argument("--output", type=Path, default=BASE_DIR / "eval" / "results" / "baseline_run.json")
     parser.add_argument("--claim-delay", type=float, default=0.0,
                         help="seconds between claims (use ~2.0 when recording on Groq free tier)")
@@ -658,5 +673,7 @@ if __name__ == "__main__":
         dataset_paths=args.dataset, output_path=args.output,
         replay_mode=args.replay, claim_delay_s=args.claim_delay,
         limit=args.limit, offset=args.offset,
+        agent_timeout_s=args.agent_timeout,
+        request_deadline_s=args.request_deadline,
     ))
     sys.exit(0 if report["summary"]["run_status"] == STATUS_OK else 1)
