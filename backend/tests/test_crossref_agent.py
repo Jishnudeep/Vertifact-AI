@@ -325,3 +325,10 @@ def test_compute_consensus():
 def test_neutral_degraded_result_is_zero():
     neutral = make_neutral_crossref(degraded=True)
     assert neutral.v_consensus_score == 0.0 and neutral.v_refute_score == 0.0
+
+
+def test_crossref_instruction_prioritizes_single_search_wording():
+    """Cross-Ref instruction must prioritize a single search; second search only if zero reputable sources."""
+    instruction = cr.BASE_INSTRUCTION
+    assert "If and only if the first search returned zero reputable sources" in instruction
+    assert "few sources or only one side" not in instruction
