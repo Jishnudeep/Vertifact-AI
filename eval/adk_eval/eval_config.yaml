@@ -1,5 +1,5 @@
 # Run from the repo root so the inline functions can import `eval` and `app`:
-#   agents-cli eval grade --traces eval/results/traces/ --config eval/adk_eval/eval_config.yaml
+#   agents-cli eval grade --traces eval/results/traces/<run stem>/ --config eval/adk_eval/eval_config.yaml
 # The grader passes prompt / response / agent_data only; see eval/adk_eval/metrics.py.
 metrics_to_run:
   - all_nodes_present
