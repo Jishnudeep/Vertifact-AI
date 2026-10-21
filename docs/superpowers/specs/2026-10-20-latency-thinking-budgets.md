@@ -170,4 +170,10 @@ Separately, a Cross-Ref LLM turn reasoned that *"the current date is 2024, makin
    - One commit per change with TDD.
 
 5. **Measurement (A.4):**
-   Run exactly one live bench (`eval/latency_bench.py --n 4 --delay 6`). Report before and after p50/p95 faithfully without claiming 10 s unless measured.
+   - **Request Volume Estimate:** Each cold claim makes ~8 Gemini requests:
+     - Fact-Check Agent: ~4 requests (judge LLM turns + inner grounded search runner calls).
+     - Cross-Ref Agent: ~4 requests (searcher LLM turns + inner grounded search runner calls).
+     - For `n=4` claims, total volume is ~32 to 35 requests (corrected from previous 12–15 estimate).
+   - **Per-minute impact against 15 RPM with `--delay 6`:**
+     Each claim executes in ~20–25s. With `--delay 6`, a claim cycle takes ~26–31s. In a 60-second window, 2 claims trigger ~16 requests (8 req/claim × 2 claims), which borders or slightly exceeds the 15 RPM free-tier limit, creating risk of HTTP 429 rate limits if claims finish faster. Using `--delay 8` to `--delay 10` (or ~10s inter-claim pacing) guarantees staying comfortably below 15 RPM (~12–14 req/min).
+   - Run exactly one live bench (`eval/latency_bench.py --n 4 --delay 6`). Report before and after p50/p95 faithfully without claiming 10 s unless measured.
