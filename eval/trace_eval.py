@@ -1,3 +1,4 @@
+import json
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 from app.config import settings
@@ -11,6 +12,18 @@ AGENT_LABELS = {
 }
 
 EXPECTED_AGENTS = {"factcheck", "crossref", "linguistic"}
+
+# Per-run executed-call caps enforced inside the worker tools (factcheck_agent.py, crossref_agent.py).
+TOOL_CAPS = {
+    "search_fact_check_database": 2,
+    "search_fact_check_sites": 1,
+    "search_news_coverage": 2,
+}
+# A tool answers a refused or empty call with one of these; neither used a cap slot.
+_NOT_EXECUTED = ("Call limit reached", "The query is empty")
+
+# Rule 1 of the confidence cap: any degraded agent holds C_total at or below this.
+PARTIAL_ANALYSIS_CAP = 0.50
 
 
 @dataclass
@@ -36,18 +49,21 @@ def check_deadline(response: Dict[str, Any], deadline_ms: Optional[float] = None
 
 
 def check_degradation_flagged(response: Dict[str, Any]) -> bool:
+    """Every non-ok agent has its warning, and the score is held at the partial-analysis cap."""
     agents = response.get("agents") or []
     confidence = response.get("confidence") or {}
     warnings = confidence.get("warnings") or []
 
-    for agent in agents:
-        if agent.get("status") == "degraded":
-            name = agent.get("name")
-            label = AGENT_LABELS.get(name, name)
-            error_code = agent.get("error_code")
-            expected_msg = degradation_message(label, error_code)
-            if expected_msg not in warnings:
-                return False
+    degraded = [a for a in agents if isinstance(a, dict) and a.get("status") != "ok"]
+    for agent in degraded:
+        name = agent.get("name")
+        label = AGENT_LABELS.get(name, name)
+        if degradation_message(label, agent.get("error_code")) not in warnings:
+            return False
+    if degraded:
+        c_total = (response.get("trust_score") or {}).get("c_total")
+        if c_total is None or c_total > PARTIAL_ANALYSIS_CAP or confidence.get("level") == "high":
+            return False
     return True
 
 
@@ -67,12 +83,42 @@ def check_bias_from_allsides(response: Dict[str, Any]) -> bool:
 
 
 def check_adversarial_no_verdict(response: Dict[str, Any]) -> bool:
+    """Fails closed: the response must say explicitly that no verdict was found, at a non-high level."""
     confidence = response.get("confidence") or {}
-    verdict_found = confidence.get("verdict_found", False)
-    level = confidence.get("level", "")
-    if verdict_found is not False or level == "high":
+    if confidence.get("verdict_found") is not False:
         return False
-    return True
+    level = confidence.get("level")
+    return bool(level) and level != "high"
+
+
+def tool_call_counts(entries: List[Dict[str, Any]], claim_id: str) -> Dict[str, int]:
+    """
+    Executed tool calls for one claim, from the leaf transcript. Each model turn carries every tool
+    response shown so far, so the fullest turn of each agent is that agent's complete trajectory.
+    Refused and empty-query calls are not counted (they used no cap slot).
+    """
+    fullest: Dict[str, List[Dict[str, Any]]] = {}
+    for entry in entries:
+        if entry.get("claim_id") != claim_id:
+            continue
+        responses = entry.get("tool_responses") or []
+        agent = entry.get("name", "")
+        if len(responses) >= len(fullest.get(agent, [])):
+            fullest[agent] = responses
+
+    counts: Dict[str, int] = {}
+    for responses in fullest.values():
+        for tr in responses:
+            body = tr.get("response")
+            error = body.get("error") if isinstance(body, dict) else None
+            if isinstance(error, str) and error.startswith(_NOT_EXECUTED):
+                continue
+            counts[tr.get("name", "")] = counts.get(tr.get("name", ""), 0) + 1
+    return counts
+
+
+def check_tool_caps(counts: Dict[str, int]) -> bool:
+    return all(n <= TOOL_CAPS[tool] for tool, n in counts.items() if tool in TOOL_CAPS)
 
 
 def audit_trace(
@@ -80,50 +126,25 @@ def audit_trace(
     claim_type: str = "verifiable",
     *,
     deadline_ms: Optional[float] = None,
+    tool_calls: Optional[Dict[str, int]] = None,
 ) -> TraceAuditReport:
-    checks: Dict[str, bool] = {}
-    failures: List[str] = []
-
-    # 1. all_nodes_present
-    nodes_ok = check_all_nodes_present(response)
-    checks["all_nodes_present"] = nodes_ok
-    if not nodes_ok:
-        failures.append("all_nodes_present")
-
-    # 2. deadline
-    deadline_ok = check_deadline(response, deadline_ms=deadline_ms)
-    checks["deadline"] = deadline_ok
-    if not deadline_ok:
-        failures.append("deadline")
-
-    # 3. degradation_flagged
-    degraded_ok = check_degradation_flagged(response)
-    checks["degradation_flagged"] = degraded_ok
-    if not degraded_ok:
-        failures.append("degradation_flagged")
-
-    # 4. bias_from_allsides
-    bias_ok = check_bias_from_allsides(response)
-    checks["bias_from_allsides"] = bias_ok
-    if not bias_ok:
-        failures.append("bias_from_allsides")
-
-    # 5. adversarial_no_verdict (adversarial only)
+    """`tool_calls` (from tool_call_counts) is optional; the tool_caps check is only reported when given."""
+    checks: Dict[str, bool] = {
+        "all_nodes_present": check_all_nodes_present(response),
+        "deadline": check_deadline(response, deadline_ms=deadline_ms),
+        "degradation_flagged": check_degradation_flagged(response),
+        "bias_from_allsides": check_bias_from_allsides(response),
+    }
+    if tool_calls is not None:
+        checks["tool_caps"] = check_tool_caps(tool_calls)
     if claim_type == "adversarial":
-        adv_ok = check_adversarial_no_verdict(response)
-        checks["adversarial_no_verdict"] = adv_ok
-        if not adv_ok:
-            failures.append("adversarial_no_verdict")
+        checks["adversarial_no_verdict"] = check_adversarial_no_verdict(response)
 
-    return TraceAuditReport(
-        passed=len(failures) == 0,
-        failures=failures,
-        checks=checks,
-    )
+    failures = [name for name, ok in checks.items() if not ok]
+    return TraceAuditReport(passed=not failures, failures=failures, checks=checks)
 
 
 def make_eval_case(claim_id: str, claim_text: str, claim_type: str, response: Dict[str, Any]) -> Dict[str, Any]:
-    import json
     events = []
     for agent in response.get("agents", []):
         events.append({
@@ -134,6 +155,8 @@ def make_eval_case(claim_id: str, claim_text: str, claim_type: str, response: Di
             }
         })
 
+    # The grader only forwards prompt / response / agent_data, so the claim type rides in the response.
+    graded_response = {**response, "_claim_type": claim_type}
     return {
         "eval_case_id": claim_id,
         "prompt": {
@@ -144,7 +167,7 @@ def make_eval_case(claim_id: str, claim_text: str, claim_type: str, response: Di
             {
                 "response": {
                     "role": "model",
-                    "parts": [{"text": json.dumps(response)}]
+                    "parts": [{"text": json.dumps(graded_response)}]
                 }
             }
         ],

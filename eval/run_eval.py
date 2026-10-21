@@ -26,7 +26,7 @@ os.environ.setdefault("LLM_DAILY_CALL_BUDGET", "0")
 
 import argparse
 from app.config import settings
-from app.agents.orchestrator import verify_claim, NonVerifiableClaimError
+from app.agents.orchestrator import AGENT_NODES, verify_claim, NonVerifiableClaimError
 from app.utils.validators import is_verifiable_claim
 from app.services.bias_lookup import load_bias_ratings, get_bias_label, UNRATED_BRIDGING_DOMAINS
 from eval.datasets.claim_dataset_schema import EvalClaim
@@ -36,8 +36,9 @@ from eval.metrics.bias_leakage import evaluate_bias_leakage
 from eval.metrics.bucketed_accuracy import compute_bucketed_accuracy
 from eval.metrics.segments import compute_segment_metrics
 from eval.replay import EvidenceReplay, ReplayMode, excluding_domains
-from eval.trace_eval import audit_trace, make_eval_case
+from eval.trace_eval import audit_trace, make_eval_case, tool_call_counts
 from collections import defaultdict
+import hashlib
 
 DEFAULT_CACHE_DIR = BASE_DIR / "eval" / "results" / "evidence_cache"
 
@@ -123,16 +124,10 @@ def assess_run_validity(
             )
 
     if trace_failures_by_check:
-        bias_trace_fail = trace_failures_by_check.get("bias_from_allsides", 0)
-        if bias_trace_fail > 0:
-            guardrail_reasons.append(
-                f"TRACE AUDIT: bias_from_allsides check failed on {bias_trace_fail} case(s)"
-            )
-        adv_trace_fail = trace_failures_by_check.get("adversarial_no_verdict", 0)
-        if adv_trace_fail > 0:
-            guardrail_reasons.append(
-                f"TRACE AUDIT: adversarial_no_verdict check failed on {adv_trace_fail} case(s)"
-            )
+        for check in ("bias_from_allsides", "adversarial_no_verdict", "degradation_flagged", "tool_caps"):
+            failed = trace_failures_by_check.get(check, 0)
+            if failed > 0:
+                guardrail_reasons.append(f"TRACE AUDIT: {check} check failed on {failed} case(s)")
 
     # --- Invalid measurement ---
     verifiable_count = len(verifiable_preds)
@@ -175,6 +170,13 @@ def assess_run_validity(
     return STATUS_OK, []
 
 
+def _tool_calls(replay: EvidenceReplay, claim_id: str) -> Optional[Dict[str, int]]:
+    """Executed tool calls per tool for this claim, or None when no transcript is kept (live mode)."""
+    if replay.mode == "live":
+        return None
+    return tool_call_counts(replay.leaf_transcript, claim_id)
+
+
 async def run_evaluation(
     dataset_paths: Optional[List[Path]] = None,
     output_path: Path = BASE_DIR / "eval" / "results" / "baseline_run.json",
@@ -195,15 +197,20 @@ async def run_evaluation(
     - summary["segments"]: metrics per source_dataset and per evidence_status, plus
       selective accuracy/coverage treating evidence_status "unverified" as an abstention.
     """
+    timeouts_pinned = agent_timeout_s is not None and request_deadline_s is not None
+    if replay_mode in ("record", "record-missing") and not timeouts_pinned:
+        logger.warning("Recording without --agent-timeout/--request-deadline: the run inherits the "
+                       "environment's timeouts (backend/app/.env). Pin both for a recorded baseline.")
     if agent_timeout_s is not None:
         settings.agent_timeout_s = agent_timeout_s
     if request_deadline_s is not None:
         settings.request_deadline_s = request_deadline_s
-
     dataset_paths = dataset_paths or [BASE_DIR / "eval" / "datasets" / "curated_claims_seed.json"]
     claims_data: List[Dict[str, Any]] = []
+    dataset_hash = hashlib.sha256()
     for path in dataset_paths:
         logger.info(f"Loading evaluation dataset from {path}...")
+        dataset_hash.update(Path(path).read_bytes())
         with open(path, "r", encoding="utf-8") as f:
             claims_data.extend(EvalClaim(**raw).model_dump() for raw in json.load(f))
 
@@ -225,6 +232,13 @@ async def run_evaluation(
     rate_limit_counter = RateLimitCounter()
     logging.getLogger().addHandler(rate_limit_counter)
 
+    # Each agent node's timeout is fixed when its module is imported, so changing settings alone would
+    # record a value that was never applied. Set it on the nodes too, and restore it afterwards.
+    original_node_timeouts = [(n, n.timeout) for n, _, _, _ in AGENT_NODES]
+    if agent_timeout_s is not None:
+        for agent_node, _ in original_node_timeouts:
+            agent_node.timeout = agent_timeout_s
+
     try:
         verifiable_preds: List[float] = []
         verifiable_targets: List[float] = []
@@ -242,8 +256,11 @@ async def run_evaluation(
 
         eval_results: List[Dict[str, Any]] = []
         adversarial_results: List[Dict[str, Any]] = []
-        traces_dir = BASE_DIR / "eval" / "results" / "traces"
+        # Per-run artifacts live next to the run's output, and last run's traces never survive into this one.
+        traces_dir = Path(output_path).parent / "traces"
         traces_dir.mkdir(parents=True, exist_ok=True)
+        for stale in traces_dir.glob("*.json"):
+            stale.unlink()
         trace_audit_cases = 0
         trace_failures_by_check: Dict[str, int] = defaultdict(int)
         verifiable_latencies: List[float] = []
@@ -255,8 +272,8 @@ async def run_evaluation(
         print("=" * 80)
 
         for item in claims_data:
-            replay.reset_claim_counts()
             cid = item["id"]
+            replay.reset_claim_counts(cid)
             text = item["claim_text"]
             c_type = item.get("claim_type", "verifiable")
             gt_score = float(item.get("ground_truth_score", 0.5))
@@ -302,7 +319,7 @@ async def run_evaluation(
                     )
                     if adversarial_safe:
                         adversarial_handled += 1
-                    audit = audit_trace(res, claim_type="adversarial")
+                    audit = audit_trace(res, claim_type="adversarial", tool_calls=_tool_calls(replay, cid))
                     trace_audit_cases += 1
                     for f_check in audit.failures:
                         trace_failures_by_check[f_check] += 1
@@ -384,7 +401,7 @@ async def run_evaluation(
                     "ground_truth": gt_score,
                 })
 
-                audit = audit_trace(res, claim_type="verifiable")
+                audit = audit_trace(res, claim_type="verifiable", tool_calls=_tool_calls(replay, cid))
                 trace_audit_cases += 1
                 for f_check in audit.failures:
                     trace_failures_by_check[f_check] += 1
@@ -434,11 +451,7 @@ async def run_evaluation(
         total_time = round(time.time() - start_time, 2)
 
         # Write leaf transcript (E4)
-        leaf_transcript_path = BASE_DIR / "eval" / "results" / "leaf_transcript.jsonl"
-        leaf_transcript_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(leaf_transcript_path, "w", encoding="utf-8") as ltf:
-            for entry in replay.leaf_transcript:
-                ltf.write(json.dumps(entry) + "\n")
+        replay.write_leaf_transcript(Path(output_path).parent / "leaf_transcript.jsonl")
 
         # Compute latency summary (live only per Plan 9 Task 4 Step 3)
         if replay_mode != "replay":
@@ -541,12 +554,20 @@ async def run_evaluation(
             "run_status": run_status,
             "agent_timeout_s": settings.agent_timeout_s,
             "request_deadline_s": settings.request_deadline_s,
+            "settings": {
+                "model_id": settings.model_id,
+                "enable_llm_sensationalism": settings.enable_llm_sensationalism,
+                "node_timeouts": {n.name: n.timeout for n, _, _, _ in AGENT_NODES},
+                "timeouts_pinned": timeouts_pinned,
+            },
+            "dataset_sha256": dataset_hash.hexdigest(),
             "run_status_reasons": run_status_reasons,
             # Kept for backward compatibility with existing baseline_run.json consumers
             "invalid_reasons": run_status_reasons,
             "total_claims": total_claims,
             "elapsed_seconds": total_time,
             "verifiable_claims": verifiable_count,
+            "scored_verifiable_claims": len(verifiable_preds),
             "verifiable_errors": verifiable_errors,
             "error_rate": error_rate,
             "zero_source_claims": zero_source_claims,
@@ -644,6 +665,8 @@ async def run_evaluation(
         return full_report
     finally:
         logging.getLogger().removeHandler(rate_limit_counter)
+        for agent_node, original_timeout in original_node_timeouts:
+            agent_node.timeout = original_timeout
         replay.uninstall()
 
 

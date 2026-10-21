@@ -1,3 +1,6 @@
+# Run from the repo root so the inline functions can import `eval` and `app`:
+#   agents-cli eval grade --traces eval/results/traces/ --config eval/adk_eval/eval_config.yaml
+# The grader passes prompt / response / agent_data only; see eval/adk_eval/metrics.py.
 metrics_to_run:
   - all_nodes_present
   - deadline_respected
@@ -9,29 +12,49 @@ custom_metrics:
   - name: all_nodes_present
     custom_function: |
       def evaluate(instance):
+          import os, sys
+          for p in (os.getcwd(), os.path.join(os.getcwd(), "backend")):
+              if p not in sys.path:
+                  sys.path.insert(0, p)
           from eval.adk_eval.metrics import metric_all_nodes_present
           return metric_all_nodes_present(instance)
 
   - name: deadline_respected
     custom_function: |
       def evaluate(instance):
+          import os, sys
+          for p in (os.getcwd(), os.path.join(os.getcwd(), "backend")):
+              if p not in sys.path:
+                  sys.path.insert(0, p)
           from eval.adk_eval.metrics import metric_deadline_respected
           return metric_deadline_respected(instance)
 
   - name: degradation_flagged
     custom_function: |
       def evaluate(instance):
+          import os, sys
+          for p in (os.getcwd(), os.path.join(os.getcwd(), "backend")):
+              if p not in sys.path:
+                  sys.path.insert(0, p)
           from eval.adk_eval.metrics import metric_degradation_flagged
           return metric_degradation_flagged(instance)
 
   - name: bias_from_allsides
     custom_function: |
       def evaluate(instance):
+          import os, sys
+          for p in (os.getcwd(), os.path.join(os.getcwd(), "backend")):
+              if p not in sys.path:
+                  sys.path.insert(0, p)
           from eval.adk_eval.metrics import metric_bias_from_allsides
           return metric_bias_from_allsides(instance)
 
   - name: adversarial_no_verdict
     custom_function: |
       def evaluate(instance):
+          import os, sys
+          for p in (os.getcwd(), os.path.join(os.getcwd(), "backend")):
+              if p not in sys.path:
+                  sys.path.insert(0, p)
           from eval.adk_eval.metrics import metric_adversarial_no_verdict
           return metric_adversarial_no_verdict(instance)

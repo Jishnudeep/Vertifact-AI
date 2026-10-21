@@ -12,7 +12,7 @@ from eval.trace_eval import audit_trace
 from tests.agent_patches import patched_agents
 
 
-def _resp(agents=None, warnings=None, sources=None, ms=1200, verdict_found=False, level="medium"):
+def _resp(agents=None, warnings=None, sources=None, ms=1200, verdict_found=False, level="medium", c_total=0.4):
     agents = agents or [
         {"name": n, "status": "ok", "duration_ms": 300, "error_code": None}
         for n in ("factcheck", "crossref", "linguistic")
@@ -21,6 +21,7 @@ def _resp(agents=None, warnings=None, sources=None, ms=1200, verdict_found=False
         "agents": agents,
         "processing_time_ms": ms,
         "sources": sources or [],
+        "trust_score": {"c_total": c_total},
         "confidence": {
             "warnings": warnings or [],
             "verdict_found": verdict_found,

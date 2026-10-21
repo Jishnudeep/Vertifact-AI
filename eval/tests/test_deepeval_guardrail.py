@@ -159,6 +159,19 @@ from eval import deepeval_runner
 from eval.deepeval_runner import is_flagged
 
 
+@pytest.fixture
+def fake_deepeval(monkeypatch):
+    """A stand-in `deepeval` so these tests do not need the optional `eval` dependency group."""
+    import types
+
+    pkg, metrics, test_case = types.ModuleType("deepeval"), types.ModuleType("deepeval.metrics"), types.ModuleType("deepeval.test_case")
+    test_case.LLMTestCase = lambda **kwargs: kwargs
+    pkg.metrics, pkg.test_case = metrics, test_case
+    for name, module in (("deepeval", pkg), ("deepeval.metrics", metrics), ("deepeval.test_case", test_case)):
+        monkeypatch.setitem(sys.modules, name, module)
+    return metrics
+
+
 def _poisoned_item():
     return {"id": "p1", "claim": "c", "source_snippets": ["s"], "is_hallucinated": True,
             "output": {"rating": "false", "explanation": "e"}}
@@ -214,8 +227,8 @@ def test_empty_input_reports_no_rate_rather_than_a_perfect_one():
     assert leaf["groundedness_rate"] is None and leaf["mean_faithfulness"] is None
 
 
-def test_faithfulness_metric_penalizes_ambiguous_claims_and_hallucination_skips_reasons(monkeypatch):
-    import deepeval.metrics as dm
+def test_faithfulness_metric_penalizes_ambiguous_claims_and_hallucination_skips_reasons(monkeypatch, fake_deepeval):
+    dm = fake_deepeval
 
     built = {}
 
@@ -227,8 +240,8 @@ def test_faithfulness_metric_penalizes_ambiguous_claims_and_hallucination_skips_
         def measure(self, test_case):
             return self.score
 
-    monkeypatch.setattr(dm, "FaithfulnessMetric", lambda **kw: Recorder("faithfulness", **kw))
-    monkeypatch.setattr(dm, "HallucinationMetric", lambda **kw: Recorder("hallucination", **kw))
+    monkeypatch.setattr(dm, "FaithfulnessMetric", lambda **kw: Recorder("faithfulness", **kw), raising=False)
+    monkeypatch.setattr(dm, "HallucinationMetric", lambda **kw: Recorder("hallucination", **kw), raising=False)
     score_guardrail([_poisoned_item()], judge=object())
     assert built["faithfulness"]["penalize_ambiguous_claims"] is True
     assert built["hallucination"]["include_reason"] is False
@@ -241,7 +254,7 @@ def test_quota_starved_judge_models_are_refused(monkeypatch, model):
         get_judge_model()
 
 
-def test_result_discloses_pipeline_model_and_self_judging(monkeypatch):
+def test_result_discloses_pipeline_model_and_self_judging(monkeypatch, fake_deepeval):
     monkeypatch.setattr(settings, "model_id", "gemini-3.1-flash-lite")
 
     class Judge:
@@ -254,9 +267,9 @@ def test_result_discloses_pipeline_model_and_self_judging(monkeypatch):
         def measure(self, test_case):
             return 1.0
 
-    import deepeval.metrics as dm
-    monkeypatch.setattr(dm, "FaithfulnessMetric", FakeMetric)
-    monkeypatch.setattr(dm, "HallucinationMetric", FakeMetric)
+    dm = fake_deepeval
+    monkeypatch.setattr(dm, "FaithfulnessMetric", FakeMetric, raising=False)
+    monkeypatch.setattr(dm, "HallucinationMetric", FakeMetric, raising=False)
     res = score_guardrail([_poisoned_item()], judge=Judge())
     assert res["pipeline_model"] == "gemini-3.1-flash-lite"
     assert res["self_judging"] is True
