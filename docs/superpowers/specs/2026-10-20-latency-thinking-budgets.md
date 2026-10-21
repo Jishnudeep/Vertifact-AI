@@ -114,9 +114,9 @@ Separately, a Cross-Ref LLM turn reasoned that *"the current date is 2024, makin
 2. **Loss of Reactive Querying:** Cross-Ref's second query is explicitly designed to be conditional on the first: *"If it found few sources or only one side, you MAY call it once more with a differently angled query"*. Concurrently firing two queries in turn 1 destroys this adaptation, generating speculative queries blindly.
 3. **Double Fetch Overhead:** Concurrently querying two searches forces up to 10 web page fetches and 10 NLI inferences, saturating HTTP bandwidth and CPU even when query 1 yielded sufficient reputable coverage.
 4. **Coverage Impact & Measurement:**
-   Cross-Ref will prioritize a single focused query by default, falling back to a second search only when necessary.
+   The Cross-Ref prompt is unchanged: the optional second search (few sources, one side, or contradicting coverage) stays. A "single search by default" rewrite was tried and reverted because it was never measured and removes the search for the other side, which feeds `V_refute`. Cross-Ref still issues up to 2 sequential searches.
    - *Risk:* On multi-faceted claims, single searches might yield coverage focused on one entity.
-   - *Measurement:* We track `sources_found` count and `v_consensus_score` / `v_refute_score` in the latency bench to verify that coverage saturation (5 reputable sources) is maintained while shaving ~8 s off the critical path.
+   - *Measurement:* a valid latency bench (healthy grounded search) and a recorded replay run must show `sources_found`, `v_consensus_score` and `v_refute_score` unchanged before any claim that the 8 s search cost was reduced.
 
 ---
 
@@ -159,12 +159,12 @@ Separately, a Cross-Ref LLM turn reasoned that *"the current date is 2024, makin
    Log `search_news_coverage` breakdown: `search=...ms, fetch=...ms, nli=...ms, total=...ms`.
 
 3. **Thinking Config & Turn Cap Wiring:**
-   - Pass `generate_content_config` with `ThinkingConfig` to `factcheck_judge`, `crossref_searcher`, and `run_grounded_agent`.
+   - Pass `generate_content_config` with `ThinkingConfig` to `factcheck_judge`, `crossref_searcher`, and the grounded-search runner, **only when the model id matches `(^|/)gemini-3`** (`thinking_content_config()` in `adk_helpers.py`). Gemini 2.5 models reject `thinking_level` with HTTP 400, so they get no thinking config and run at the provider default (Gemini 2.5 Flash thinks dynamically by default, so the latency intent is NOT met on it). Levels are typed `Literal[MINIMAL|LOW|MEDIUM|HIGH]`, so a typo fails at boot. Unverified: whether every Gemini 3 model accepts every level (Gemini 3 Pro may accept only LOW/HIGH).
    - Install `enforce_turn_cap` callback raising `AgentTurnLimitExceeded` on cap hit.
 
 4. **Invariants (Strict):**
    - Scoring engine (`backend/app/scoring/`) remains untouched and deterministic.
-   - Wall-clock timeouts (`agent_timeout_s=30`, `request_deadline_s=35`) remain as backstops.
+   - Wall-clock timeouts remain as backstops (code defaults `agent_timeout_s=30`, `request_deadline_s=35`). The A.4 bench ran with the local `.env` overrides of 600 s / 610 s, which is why a 176 s p95 was possible.
    - Tool call caps (DB 2, Sites 1, News 2) remain enforced.
    - Bias ratings come ONLY from AllSides static data; unknown → `"Unrated"`.
    - One commit per change with TDD.
@@ -184,14 +184,14 @@ Separately, a Cross-Ref LLM turn reasoned that *"the current date is 2024, makin
 
    | Metric | Baseline (2026-10-20) | Measured After (2026-10-21) | Target (< 10s) | Status |
    |---|---|---|---|---|
-   | **Request End-to-End p50** | **27,520 ms** (27.5 s) | **7,848 ms** (7.8 s) | < 10,000 ms | **PASS (Met)** |
-   | **Request End-to-End p95** | **33,239 ms** (33.2 s) | **176,291 ms** (176.3 s) | < 10,000 ms | **MISSED (+166.3 s)** |
-   | **Cross-Ref Agent p50** | **27,483 ms** (27.5 s) | **7,687 ms** (7.7 s) | < 10,000 ms | **PASS (Met)** |
-   | **Cross-Ref Agent p95** | **33,187 ms** (33.2 s) | **176,250 ms** (176.3 s) | < 10,000 ms | **MISSED** |
-   | **Fact-Check Agent p50** | **7,969 ms** (8.0 s) | **3,468 ms** (3.5 s) | < 10,000 ms | **PASS (Met)** |
+   | **Request End-to-End p50** | **27,520 ms** (27.5 s) | **7,848 ms** (7.8 s) | < 10,000 ms | INVALID (search outage) |
+   | **Request End-to-End p95** | **33,239 ms** (33.2 s) | **176,291 ms** (176.3 s) | < 10,000 ms | INVALID (503 retries, 600 s backstop) |
+   | **Cross-Ref Agent p50** | **27,483 ms** (27.5 s) | **7,687 ms** (7.7 s) | < 10,000 ms | INVALID (search outage) |
+   | **Cross-Ref Agent p95** | **33,187 ms** (33.2 s) | **176,250 ms** (176.3 s) | < 10,000 ms | INVALID |
+   | **Fact-Check Agent p50** | **7,969 ms** (8.0 s) | **3,468 ms** (3.5 s) | < 10,000 ms | INVALID (search outage) |
    | **Fact-Check Agent p95** | **16,108 ms** (16.1 s) | **91,969 ms** (92.0 s) | - | - |
-   | **Linguistic Agent p50** | **219 ms** | **156 ms** | - | **PASS** |
-   | **Linguistic Agent p95** | **672 ms** | **593 ms** | - | **PASS** |
+   | **Linguistic Agent p50** | **219 ms** | **156 ms** | - | not comparable |
+   | **Linguistic Agent p95** | **672 ms** | **593 ms** | - | not comparable |
    | **LLM Turn Fact-Check p50** | ~7,500 ms | **10,525 ms** (p95: 40,522 ms) | - | - |
    | **LLM Turn Cross-Ref p50** | ~10,000 ms | **3,717 ms** (p95: 114,404 ms) | - | - |
    | **`search_news_coverage` p50** | ~8,000 ms | **650 ms** (p95: 842 ms) | - | Outage (HTTP 400) |
@@ -204,8 +204,8 @@ Separately, a Cross-Ref LLM turn reasoned that *"the current date is 2024, makin
    - **Tokens Spent:** 15,988 prompt tokens, 482 completion tokens.
    - **Rate Limit 429 Retries:** **0** (no rate-limit retries triggered).
    - **Turn Cap Hits:** **0** (Fact-Check max turns was 4/5, Cross-Ref max turns was 2/4).
-   - **Second Search Execution:** **0/4 claims** executed a second search. The tightened single-search instruction was strictly honored.
+   - **Second Search Execution:** **0/4 claims** executed a second search, but this says nothing about the instruction: every first search failed with HTTP 400 and the tool fails fast on a retry, so the model had no real choice to make.
    - **Degradation & Stability Observations:**
      1. **503 Spikes:** `gemini-3.1-flash-lite` suffered server-side 503 UNAVAILABLE errors ("This model is currently experiencing high demand. Spikes in demand are usually temporary.") on Claims 1, 2, and 4. `tenacity` exponential retries bloated p95 latency to 176.3 s.
      2. **Grounded Search 400 Outage:** `gemini-2.5-flash-lite` rejected `thinking_level="MINIMAL"` with HTTP 400.
-     3. **Zero Crash / Zero Fabrication Invariant:** The pipeline degraded gracefully across all provider failures, returning valid composite trust scores based on healthy siblings and never fabricating certainty or hallucinating evidence.
+     3. **Zero Crash / Zero Fabrication Invariant:** The pipeline degraded gracefully across all provider failures, returning neutral results with `degraded=True` and never fabricating certainty. Cross-Ref was degraded on 4/4 claims and Fact-Check on 2/4; on claims 001 and 020 only Linguistic was healthy, so those scores rest on Linguistic alone.
