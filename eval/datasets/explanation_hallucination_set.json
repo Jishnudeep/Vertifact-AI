@@ -49,7 +49,7 @@
     ],
     "output": {
       "rating": "false",
-      "explanation": "Health agencies state raw milk contains the same amount of lactose as pasteurized milk and does not cure lactose intolerance."
+      "explanation": "Health agencies state raw milk contains lactose just like pasteurized milk and does not cure lactose intolerance."
     },
     "is_hallucinated": false,
     "hallucination_type": null,
@@ -91,7 +91,7 @@
     ],
     "output": {
       "rating": "mostly true",
-      "explanation": "The EU approved rules mandating zero-emission sales for new cars starting in 2035, with a narrow exception for synthetic e-fuels."
+      "explanation": "The EU approved rules mandating zero-emission sales for new cars starting in 2035, with an exemption for vehicles running exclusively on carbon-neutral e-fuels."
     },
     "is_hallucinated": false,
     "hallucination_type": null,
@@ -119,7 +119,7 @@
     ],
     "output": {
       "rating": "mostly false",
-      "explanation": "While vitamin A in carrots prevents night blindness, extra carrots do not improve normal night vision; the myth stems from WWII propaganda."
+      "explanation": "While vitamin A from carrots is essential for normal vision, extra carrots do not improve vision beyond normal levels; the myth stems from WWII propaganda."
     },
     "is_hallucinated": false,
     "hallucination_type": null,
