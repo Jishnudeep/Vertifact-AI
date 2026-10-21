@@ -6,8 +6,13 @@ verify_claim takes) for exact claims and faithful paraphrases, and checks that n
 number-changed variants MISS. The comparison baseline (live p50, calls per claim) comes only from a
 valid record run; there are no fallback constants, and a figure that was not measured is None.
 
-It writes tagged seed rows into the configured Supabase project, so it refuses to run unless the
-operator names that project (--confirm-db <host>), and it always cleans up in `finally`.
+Seed rows are produced by the real pipeline: verify_claim(bypass_cache=False) under EvidenceReplay in
+replay mode, on claims the record run already recorded. So every seeded row is exactly what the scoring
+engine produced from real recorded evidence (nothing synthetic, no invented bias labels, no quota). Any
+replay miss aborts the bench. A row counts only if the cache then actually serves it for its exact claim.
+
+It writes tagged rows into the configured Supabase project, so it refuses to run unless the operator
+names that project (--confirm-db <host>), and it always cleans up in `finally`.
 """
 from __future__ import annotations
 
@@ -21,7 +26,7 @@ import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Dict, List, Optional
+from typing import Any, Awaitable, Callable, Dict, List, NamedTuple, Optional
 from urllib.parse import urlparse
 
 # Ensure repo root and backend are on sys.path (the script is run as `python eval/cache_bench.py`)
@@ -36,6 +41,8 @@ logger = logging.getLogger("cache_bench")
 
 DEFAULT_OUT = BASE_DIR / "eval" / "results" / "cache_bench.json"
 DEFAULT_RECORD_SUMMARY = BASE_DIR / "eval" / "results" / "record_run.json"
+DEFAULT_EVIDENCE_CACHE = BASE_DIR / "eval" / "results" / "evidence_cache"
+MIN_SERVED_PAIRS = 20           # plan Task 6: N >= 20 rows the cache really serves
 
 TAG_PREFIX = "[bench:"
 # Latency from these modes is a live measurement; a replay or record-missing run mixes cached turns in.
@@ -46,127 +53,25 @@ class BenchInputError(RuntimeError):
     """The bench cannot produce an honest figure (or may not touch this database); nothing was run."""
 
 
-# 20 pairs of claims and faithful paraphrases for the benchmark
-BENCH_PAIRS: List[Dict[str, str]] = [
-    {
-        "id": "bench-01",
-        "claim": "NASA confirmed asteroid Apophis will safely pass Earth in 2029 without colliding.",
-        "paraphrase": "NASA confirmed that asteroid Apophis will fly past Earth safely in 2029 with no chance of impact.",
-    },
-    {
-        "id": "bench-02",
-        "claim": "The Federal Reserve announced it is not replacing physical dollar bills with a CBDC.",
-        "paraphrase": "The Federal Reserve stated that physical dollar bills will not be replaced by a central bank digital currency.",
-    },
-    {
-        "id": "bench-03",
-        "claim": "The WHO declared the end of the global COVID-19 public health emergency in May 2023.",
-        "paraphrase": "In May 2023, the World Health Organization officially declared the end to the COVID-19 global emergency.",
-    },
-    {
-        "id": "bench-04",
-        "claim": "The European Union approved rules mandating zero-emission sales for new cars starting in 2035.",
-        "paraphrase": "EU legislation requires all new vehicles sold starting in 2035 to produce zero emissions.",
-    },
-    {
-        "id": "bench-05",
-        "claim": "Finland officially joined NATO as its 31st member nation on April 4, 2023.",
-        "paraphrase": "On April 4, 2023, Finland was formally admitted into NATO as the alliance's 31st member.",
-    },
-    {
-        "id": "bench-06",
-        "claim": "The Great Wall of China cannot be seen from low Earth orbit with the unaided eye.",
-        "paraphrase": "Astronauts confirm the Great Wall of China is not visible from low Earth orbit without binoculars or a telescope.",
-    },
-    {
-        "id": "bench-07",
-        "claim": "Drinking raw unpasteurized milk does not cure lactose intolerance.",
-        "paraphrase": "Medical experts report that consuming unpasteurized raw milk does not cure or relieve lactose intolerance.",
-    },
-    {
-        "id": "bench-08",
-        "claim": "A 2022 study detected microplastic polymer particles in human blood samples.",
-        "paraphrase": "Microplastics were found in human bloodstream samples in a 2022 research investigation.",
-    },
-    {
-        "id": "bench-09",
-        "claim": "Eating carrots does not improve normal night vision beyond baseline levels.",
-        "paraphrase": "Consuming carrots will not grant superior night vision to people with normal vitamin A levels.",
-    },
-    {
-        "id": "bench-10",
-        "claim": "Thermal expansion increases the Eiffel Tower's height by up to 15 centimeters in hot summer weather.",
-        "paraphrase": "Summer heat causes the Eiffel Tower to expand thermally and gain up to 15 centimeters in height.",
-    },
-    {
-        "id": "bench-11",
-        "claim": "Human industrial emissions exceed annual volcanic carbon dioxide emissions by at least eighty times.",
-        "paraphrase": "Annual human CO2 emissions are at least 80 times larger than all volcanic emissions combined.",
-    },
-    {
-        "id": "bench-12",
-        "claim": "Bananas naturally contain potassium-40 making them slightly radioactive but harmless.",
-        "paraphrase": "Because of natural potassium-40, bananas emit trace amounts of radiation that pose no health danger.",
-    },
-    {
-        "id": "bench-13",
-        "claim": "Lightning strikes the Empire State Building dozens of times every year.",
-        "paraphrase": "The Empire State Building is hit by lightning multiple dozens of times each year.",
-    },
-    {
-        "id": "bench-14",
-        "claim": "The Panama Canal officially opened for maritime navigation in August 1914.",
-        "paraphrase": "In August 1914, the Panama Canal began its official commercial maritime operations.",
-    },
-    {
-        "id": "bench-15",
-        "claim": "James Webb Space Telescope detected carbon-bearing molecules on exoplanet K2-18b in 2023.",
-        "paraphrase": "In 2023, observations from the James Webb Space Telescope identified carbon-rich molecules in exoplanet K2-18b's atmosphere.",
-    },
-    {
-        "id": "bench-16",
-        "claim": "Water boils at 100 degrees Celsius at standard atmospheric sea level pressure.",
-        "paraphrase": "At 1 atmosphere of sea-level pressure, the boiling point of pure water is 100 degrees Celsius.",
-    },
-    {
-        "id": "bench-17",
-        "claim": "The ozone layer above Antarctica has shown continuous signs of recovery under the Montreal Protocol.",
-        "paraphrase": "Thanks to the Montreal Protocol, the Antarctic ozone hole continues on a path toward gradual healing.",
-    },
-    {
-        "id": "bench-18",
-        "claim": "The speed of light in a vacuum is approximately 300,000 kilometers per second.",
-        "paraphrase": "In a complete vacuum, light travels at a velocity of roughly 300,000 kilometers per second.",
-    },
-    {
-        "id": "bench-19",
-        "claim": "Honey found in ancient Egyptian tombs remained unspoiled and edible after thousands of years.",
-        "paraphrase": "Centuries-old honey recovered from Egyptian pyramids and tombs remained preserved without spoiling.",
-    },
-    {
-        "id": "bench-20",
-        "claim": "Antibiotics kill bacteria and have no effect against viral infections such as influenza.",
-        "paraphrase": "Antibiotic medications target bacterial organisms only and are ineffective against viral diseases like the flu.",
-    },
-]
-
-
-# Variants that must NOT be served from the cache: negation, changed number, changed entity.
-# Embeddings alone cannot tell these from the original, so the equivalence check has to.
-BENCH_NEGATIVES: List[Dict[str, str]] = [
-    {"id": "neg-01", "of": "bench-01",
-     "text": "NASA confirmed asteroid Apophis will collide with Earth in 2029."},
-    {"id": "neg-02", "of": "bench-03",
-     "text": "The WHO declared the end of the global COVID-19 public health emergency in May 2013."},
-    {"id": "neg-03", "of": "bench-05",
-     "text": "Finland officially joined NATO as its 41st member nation on April 4, 2023."},
-    {"id": "neg-04", "of": "bench-07",
-     "text": "Drinking raw unpasteurized milk cures lactose intolerance."},
-    {"id": "neg-05", "of": "bench-14",
-     "text": "The Panama Canal officially opened for maritime navigation in August 1941."},
-    {"id": "neg-06", "of": "bench-20",
-     "text": "Antibiotics kill bacteria and also cure viral infections such as influenza."},
-]
+def load_pairs(path: Path | str) -> tuple[List[Dict[str, str]], List[Dict[str, str]]]:
+    """
+    Bench pairs from a JSON file: {"pairs": [{"id", "claim", "paraphrase"}], "negatives": [{"id", "of", "text"}]}.
+    Each pair's `claim` must be the exact text of a claim the record run recorded (the bench replays it
+    to seed the row); a paraphrase is a faithful rewording, a negative a negated / number-changed
+    variant of pair `of` that must MISS. Negatives and paraphrases are never run through the pipeline.
+    """
+    data = json.loads(Path(path).read_text(encoding="utf-8"))
+    pairs, negatives = data.get("pairs") or [], data.get("negatives") or []
+    ids = [p.get("id") for p in pairs]
+    if len(pairs) < MIN_SERVED_PAIRS or len(set(ids)) != len(ids):
+        raise BenchInputError(f"{path}: need >= {MIN_SERVED_PAIRS} pairs with unique ids, got {len(pairs)}.")
+    for p in pairs:
+        if not (p.get("claim") and p.get("paraphrase")) or p["claim"] == p["paraphrase"]:
+            raise BenchInputError(f"{path}: pair {p.get('id')!r} needs a claim and a different paraphrase.")
+    for n in negatives:
+        if n.get("of") not in ids or not n.get("text"):
+            raise BenchInputError(f"{path}: negative {n.get('id')!r} must name an existing pair in `of` and carry text.")
+    return pairs, negatives
 
 
 def summarize(
@@ -284,28 +189,64 @@ def _check_database(confirm_db: Optional[str]) -> None:
             f"project it may use (got {confirm_db!r}).")
 
 
-def _seed_row(bench_run_id: str, text: str, embedding: List[float]) -> Dict[str, Any]:
-    """A complete, servable cached result that says plainly it is a benchmark seed and carries no sources."""
-    return dict(
-        input_type="text",
-        raw_input=f"{_tag(bench_run_id)} {text}",
-        extracted_claim=text,
-        embedding=embedding,
-        c_total=0.5,
-        s_fact=0.5,
-        b_ling=0.5,
-        v_consensus=0.0,
-        weights={"w1": 0.5, "w2": 0.2, "w3": 0.3},
-        confidence_level="medium",
-        agent_outputs={name: {"degraded": False, "note": "bench_seed"}
-                       for name in ("factcheck", "crossref", "linguistic")},
-        source_citations=[],
-        linguistic_profile={},
-        processing_time_ms=0,
-        warnings=["Benchmark seed row, not a real analysis."],
-        v_refute=0.0,
-        evidence_status="unverified",
-    )
+class SeedResult(NamedTuple):
+    claim_id: Optional[str]
+    reason: Optional[str]       # why no row was seeded for this claim (None when claim_id is set)
+
+
+async def seed_via_replay(
+    texts: List[str],
+    bench_run_id: str,
+    cache_dir: Path | str,
+    *,
+    verify: Optional[Callable[..., Awaitable[Dict[str, Any]]]] = None,
+    replay: Any = None,
+) -> Dict[str, SeedResult]:
+    """
+    Seed one cache row per claim by running the real pipeline on recorded evidence (replay mode, so no
+    quota). The persisted row's raw_input gets the bench tag so cleanup can find it; nothing else about
+    the row is touched, and the claim text (hence every replay key) is unchanged.
+
+    Raises BenchInputError on ANY replay miss: a miss means the pipeline ran without recorded evidence,
+    and the row would not be what the scoring engine produces from real evidence.
+    """
+    from app.agents import orchestrator
+    from app.agents.orchestrator import AllAgentsFailedError
+    from eval.replay import EvidenceReplay
+
+    verify = verify or orchestrator.verify_claim
+    replay = replay or EvidenceReplay(Path(cache_dir), "replay")
+    original_insert = orchestrator.insert_cache
+
+    async def tagged_insert(**kwargs: Any) -> Optional[str]:
+        kwargs["raw_input"] = f"{_tag(bench_run_id)} {kwargs['raw_input']}"
+        return await original_insert(**kwargs)
+
+    results: Dict[str, SeedResult] = {}
+    replay.install()
+    orchestrator.insert_cache = tagged_insert
+    try:
+        for text in texts:
+            replay.reset_claim_counts(text)
+            try:
+                response = await verify(text, bypass_cache=False)
+            except AllAgentsFailedError:
+                results[text] = SeedResult(None, "every agent failed")
+                continue
+            if replay.claim_misses():
+                raise BenchInputError(
+                    f"Replay miss while seeding {text!r}: that claim is not in the evidence cache "
+                    f"({replay.claim_misses()} missing call(s)). Pairs must be claims the record run recorded.")
+            if response.get("cached"):
+                results[text] = SeedResult(None, "already served from the cache (not a row the bench seeded)")
+            elif not response.get("id"):
+                results[text] = SeedResult(None, "the pipeline did not persist a row")
+            else:
+                results[text] = SeedResult(response["id"], None)
+    finally:
+        orchestrator.insert_cache = original_insert
+        replay.uninstall()
+    return results
 
 
 async def _timed_lookup(
@@ -338,29 +279,39 @@ async def run_cache_benchmark(
     record_summary_path: Path | str = DEFAULT_RECORD_SUMMARY,
     output_path: Path | str = DEFAULT_OUT,
     pairs: Optional[List[Dict[str, str]]] = None,
+    negatives: Optional[List[Dict[str, str]]] = None,
     *,
+    evidence_cache: Path | str = DEFAULT_EVIDENCE_CACHE,
     confirm_db: Optional[str] = None,
     supabase: Any = None,
     embed: Optional[Callable[[str], List[float]]] = None,
-    insert: Optional[Callable[..., Awaitable[Optional[str]]]] = None,
+    verify: Optional[Callable[..., Awaitable[Dict[str, Any]]]] = None,
+    replay: Any = None,
     lookup: Optional[Callable[..., Awaitable[Any]]] = None,
 ) -> Dict[str, Any]:
     """
     1. Reads the live p50 and calls per claim from a valid record run (refuses otherwise).
-    2. Seeds N servable, tagged rows (production embedding path).
-    3. Times embed + lookup for each exact claim and each paraphrase; probes the negative variants.
-    4. Cleans up every tagged row in `finally`; a cleanup failure never masks the original error.
+    2. Seeds one row per pair through the real pipeline on recorded evidence (replay, no quota); a replay
+       miss aborts. Rows are tagged so cleanup can find them.
+    3. Probes each exact claim. A pair counts only if the cache serves ITS row for the exact claim; fewer
+       than MIN_SERVED_PAIRS such pairs aborts (nothing is reported from a bench that did not measure).
+    4. Times embed + lookup for each served pair's exact claim and paraphrase; probes the negatives of
+       served pairs, which must all MISS.
+    5. Cleans up every tagged row in `finally`; a cleanup failure never masks the original error.
     """
-    pairs = pairs or BENCH_PAIRS
+    pairs = pairs or []
+    negatives = negatives or []
     baseline = load_live_baseline(record_summary_path)
     _check_database(confirm_db)
+    if len(pairs) < MIN_SERVED_PAIRS:
+        raise BenchInputError(f"Need >= {MIN_SERVED_PAIRS} pairs (use load_pairs / --pairs), got {len(pairs)}.")
 
     if supabase is None:
         from app.db.connection import get_supabase
         supabase = get_supabase()
-    if insert is None or lookup is None:
-        from app.services.cache import insert_cache, lookup_cache
-        insert, lookup = insert or insert_cache, lookup or lookup_cache
+    if lookup is None:
+        from app.services.cache import lookup_cache
+        lookup = lookup_cache
     if embed is None:
         from app.services.embedding import generate_embedding
         embed = generate_embedding
@@ -370,28 +321,42 @@ async def run_cache_benchmark(
 
     bench_run_id = uuid.uuid4().hex[:8]
     created_claim_ids: List[str] = []
-    seeded_by_pair: List[Optional[str]] = []
-    print(f"\n--- Starting Cache Benchmark (run id: {bench_run_id}, n={len(pairs)}, db: {_db_host()}) ---")
+    print(f"\n--- Starting Cache Benchmark (run id: {bench_run_id}, pairs={len(pairs)}, db: {_db_host()}) ---")
 
     try:
-        for item in pairs:
-            row = _seed_row(bench_run_id, item["claim"], await embed_async(item["claim"]))
-            cid = await insert(**row)
-            seeded_by_pair.append(cid or None)
-            if cid:
-                created_claim_ids.append(cid)
+        seeds = await seed_via_replay([p["claim"] for p in pairs], bench_run_id, evidence_cache,
+                                      verify=verify, replay=replay)
+        created_claim_ids.extend(r.claim_id for r in seeds.values() if r.claim_id)
         seeded_ids = set(created_claim_ids)
-        print(f"Seeded {len(seeded_ids)} claims.")
+        own = {p["id"]: seeds[p["claim"]].claim_id for p in pairs}
+        print(f"Seeded {len(seeded_ids)} of {len(pairs)} claims through the pipeline on recorded evidence.")
 
-        exact = [await _timed_lookup(p["claim"], embed_async, lookup, seeded_ids, own)
-                 for p, own in zip(pairs, seeded_by_pair)]
-        para = [await _timed_lookup(p["paraphrase"], embed_async, lookup, seeded_ids, own)
-                for p, own in zip(pairs, seeded_by_pair)]
-        negatives = [await _timed_lookup(n["text"], embed_async, lookup, seeded_ids) for n in BENCH_NEGATIVES]
+        # A row the cache will not serve (low confidence, a degraded agent, ...) is not benchmarkable.
+        exact: Dict[str, Dict[str, Any]] = {}
+        for p in pairs:
+            if own[p["id"]]:
+                exact[p["id"]] = await _timed_lookup(p["claim"], embed_async, lookup, seeded_ids, own[p["id"]])
+        served = [p for p in pairs if exact.get(p["id"], {}).get("hit")]
+        not_served = [
+            {"id": p["id"],
+             "reason": seeds[p["claim"]].reason or "seeded, but the cache did not serve it for its exact claim"}
+            for p in pairs if p not in served
+        ]
+        if len(served) < MIN_SERVED_PAIRS:
+            raise BenchInputError(
+                f"Only {len(served)} of {len(pairs)} seeded rows are served by the cache (need >= "
+                f"{MIN_SERVED_PAIRS}). Not served: {not_served[:5]}{' ...' if len(not_served) > 5 else ''}. "
+                "Choose more recorded claims with complete, non-low-confidence results.")
 
-        hits = [r for r in exact + para if r["hit"]]
+        para = [await _timed_lookup(p["paraphrase"], embed_async, lookup, seeded_ids, own[p["id"]]) for p in served]
+        served_ids = {p["id"] for p in served}
+        probed_negatives = [n for n in negatives if n["of"] in served_ids]
+        neg = [await _timed_lookup(n["text"], embed_async, lookup, seeded_ids) for n in probed_negatives]
+        exact_results = [exact[p["id"]] for p in served]
+
+        hits = [r for r in exact_results + para if r["hit"]]
         summary = summarize([r["total_ms"] for r in hits], baseline["live_p50_ms"], baseline["calls_per_claim"])
-        false_positives = sum(1 for r in negatives if r["hit"])
+        false_positives = sum(1 for r in neg if r["hit"])
 
         def block(results: List[Dict[str, Any]]) -> Dict[str, Any]:
             n_hits = sum(1 for r in results if r["hit"])
@@ -409,13 +374,18 @@ async def run_cache_benchmark(
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "bench_run_id": bench_run_id,
             "database": _db_host(),
-            "pairs_tested": len(pairs),
+            "pairs_requested": len(pairs),
             "seeded_rows": len(seeded_ids),
+            "pairs_served": len(served),
+            "pairs_not_served": not_served,
+            "negatives_probed": len(probed_negatives),
+            "negatives_skipped_unserved_pair": len(negatives) - len(probed_negatives),
+            "seeding": "verify_claim(bypass_cache=False) under EvidenceReplay replay on recorded evidence",
             "latency_includes": "embedding + pgvector lookup + equivalence check",
             "baseline": baseline,
-            "exact_lookups": block(exact),
+            "exact_lookups": block(exact_results),
             "paraphrase_lookups": block(para),
-            "negative_lookups": {**block(negatives), "false_positives": false_positives,
+            "negative_lookups": {**block(neg), "false_positives": false_positives,
                                  "passed": false_positives == 0},
             "summary": summary,
         }
@@ -425,9 +395,10 @@ async def run_cache_benchmark(
         out_path.write_text(json.dumps(full_report, indent=2), encoding="utf-8")
 
         print(f"\nCache benchmark complete! Results saved to {out_path}")
-        print(f"  - Exact hit rate:       {full_report['exact_lookups']['hits']}/{len(pairs)}")
-        print(f"  - Paraphrase hit rate:  {full_report['paraphrase_lookups']['hits']}/{len(pairs)}")
-        print(f"  - Negation/number false positives: {false_positives}/{len(negatives)} (must be 0)")
+        print(f"  - Pairs served by the cache: {len(served)}/{len(pairs)}")
+        print(f"  - Exact hit rate:       {full_report['exact_lookups']['hits']}/{len(served)}")
+        print(f"  - Paraphrase hit rate:  {full_report['paraphrase_lookups']['hits']}/{len(served)}")
+        print(f"  - Negation/number false positives: {false_positives}/{len(neg)} (must be 0)")
         print(f"  - Hit p50/p95:          {summary['hit_p50_ms']} / {summary['hit_p95_ms']} ms "
               f"(live p50 {baseline['live_p50_ms']:.0f} ms from {baseline['source']}, n={baseline['n']})")
         print(f"  - Target (hit p95 < 10% of live p50): {summary['target_met']}")
@@ -449,6 +420,10 @@ def main(argv: Optional[List[str]] = None) -> None:
     parser.add_argument("--output", type=Path, default=DEFAULT_OUT, help="path to write cache_bench.json")
     parser.add_argument("--confirm-db", default=None,
                         help="host of the Supabase project the bench may write tagged rows into")
+    parser.add_argument("--pairs", type=Path, default=None,
+                        help="JSON with pairs (recorded claims + paraphrases) and negatives; see load_pairs")
+    parser.add_argument("--evidence-cache", type=Path, default=DEFAULT_EVIDENCE_CACHE,
+                        help="evidence cache written by the record run, replayed to seed the rows")
     parser.add_argument("--sweep", action="store_true", help="delete leftover bench rows and exit")
     args = parser.parse_args(argv)
 
@@ -458,7 +433,11 @@ def main(argv: Optional[List[str]] = None) -> None:
             from app.db.connection import get_supabase
             print(f"Swept {sweep_bench_rows(get_supabase())} leftover bench rows.")
             return
+        if args.pairs is None:
+            raise BenchInputError("--pairs is required: the bench seeds rows from claims the record run recorded.")
+        pairs, negatives = load_pairs(args.pairs)
         asyncio.run(run_cache_benchmark(record_summary_path=args.record_summary, output_path=args.output,
+                                        pairs=pairs, negatives=negatives, evidence_cache=args.evidence_cache,
                                         confirm_db=args.confirm_db))
     except BenchInputError as exc:
         print(f"Refusing to run: {exc}")

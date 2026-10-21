@@ -5,16 +5,45 @@ Offline unit tests for summarize() and cleanup_bench_rows().
 from unittest.mock import MagicMock
 import pytest
 
-from eval.cache_bench import BENCH_PAIRS, cleanup_bench_rows, summarize
+from eval.cache_bench import BenchInputError, cleanup_bench_rows, load_pairs, summarize
 
 
-def test_bench_pairs_count_and_keys():
-    assert len(BENCH_PAIRS) >= 20, f"Expected >= 20 bench pairs, got {len(BENCH_PAIRS)}"
-    for item in BENCH_PAIRS:
-        assert "id" in item
-        assert "claim" in item and len(item["claim"]) > 10
-        assert "paraphrase" in item and len(item["paraphrase"]) > 10
-        assert item["claim"] != item["paraphrase"]
+def _pairs_file(tmp_path, n=20, negatives=None, **overrides):
+    import json
+    pairs = [{"id": f"p{i}", "claim": f"Recorded claim number {i} about a thing", "paraphrase": f"Claim {i} reworded"}
+             for i in range(n)]
+    data = {"pairs": pairs, "negatives": negatives if negatives is not None else
+            [{"id": "n0", "of": "p0", "text": "Recorded claim number 0 about nothing"}]}
+    data.update(overrides)
+    path = tmp_path / "pairs.json"
+    path.write_text(json.dumps(data), encoding="utf-8")
+    return path
+
+
+def test_load_pairs_accepts_a_valid_file(tmp_path):
+    pairs, negatives = load_pairs(_pairs_file(tmp_path))
+    assert len(pairs) == 20 and negatives[0]["of"] == "p0"
+
+
+def test_load_pairs_needs_at_least_twenty_pairs(tmp_path):
+    with pytest.raises(BenchInputError, match="20"):
+        load_pairs(_pairs_file(tmp_path, n=19))
+
+
+def test_load_pairs_rejects_a_paraphrase_identical_to_the_claim(tmp_path):
+    import json
+    path = _pairs_file(tmp_path)
+    data = json.loads(path.read_text(encoding="utf-8"))
+    data["pairs"][3]["paraphrase"] = data["pairs"][3]["claim"]
+    path.write_text(json.dumps(data), encoding="utf-8")
+    with pytest.raises(BenchInputError, match="p3"):
+        load_pairs(path)
+
+
+def test_load_pairs_rejects_a_negative_of_an_unknown_pair(tmp_path):
+    path = _pairs_file(tmp_path, negatives=[{"id": "n0", "of": "nope", "text": "x"}])
+    with pytest.raises(BenchInputError, match="n0"):
+        load_pairs(path)
 
 
 def test_summarize_target_met():
