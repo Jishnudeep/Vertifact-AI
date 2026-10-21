@@ -33,6 +33,7 @@ class ProviderErrorCode(str, Enum):
     AUTH_ERROR = "AUTH_ERROR"
     MODEL_NOT_FOUND = "MODEL_NOT_FOUND"
     TIMEOUT = "TIMEOUT"
+    TURN_LIMIT = "TURN_LIMIT"
     SERVICE_UNAVAILABLE = "SERVICE_UNAVAILABLE"
     PARSE_ERROR = "PARSE_ERROR"
     UNKNOWN = "UNKNOWN"
@@ -55,6 +56,7 @@ _DEGRADATION_MESSAGES: Dict[str, str] = {
     ProviderErrorCode.AUTH_ERROR.value: "{agent_label} authentication failed",
     ProviderErrorCode.MODEL_NOT_FOUND.value: "{agent_label} model unavailable",
     ProviderErrorCode.TIMEOUT.value: "{agent_label} check timed out",
+    ProviderErrorCode.TURN_LIMIT.value: "{agent_label} hit its model-turn limit",
     ProviderErrorCode.SERVICE_UNAVAILABLE.value: "{agent_label} service unavailable",
     ProviderErrorCode.PARSE_ERROR.value: "{agent_label} response could not be parsed",
     ProviderErrorCode.UNKNOWN.value: "{agent_label} check failed",
@@ -140,9 +142,9 @@ def classify_provider_error(exc: Exception, provider: str = "unknown") -> AgentE
 
     if isinstance(exc, AgentTurnLimitExceeded):
         return AgentErrorDetails(
-            code=ProviderErrorCode.TIMEOUT,
+            code=ProviderErrorCode.TURN_LIMIT,
             provider=prov,
-            message=str(exc)
+            message="Agent hit its model-turn limit",
         )
 
     # Our own daily spend guards (TDD §11): refused before calling the provider.

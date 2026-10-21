@@ -131,9 +131,9 @@ def test_classify_agent_turn_limit_exceeded():
     from app.utils.errors import AgentTurnLimitExceeded
     exc = AgentTurnLimitExceeded(agent_name="factcheck_judge", max_turns=5)
     details = classify_provider_error(exc, provider="factcheck_agent")
-    assert details.code == ProviderErrorCode.TIMEOUT
+    assert details.code == ProviderErrorCode.TURN_LIMIT
     assert details.provider == "factcheck_agent"
-    assert "exceeded maximum turn limit of 5" in details.message
+    assert "hit its model-turn limit" in details.message
 
 
 def test_config_thinking_and_turn_caps():

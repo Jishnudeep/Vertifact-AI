@@ -134,10 +134,11 @@ async def test_supervisor_degrades_gracefully_on_turn_cap_exceeded(monkeypatch):
         assert outcome["confidence"]["verdict_found"] is False
         warnings = outcome["confidence"]["warnings"]
         assert any("Partial analysis" in w for w in warnings)
-        assert any("Fact-check check timed out" in w for w in warnings)
+        assert any("Fact-check hit its model-turn limit" in w for w in warnings)
+        assert not any("Fact-check check timed out" in w for w in warnings)
         fc_agent = next(a for a in outcome["agents"] if a["name"] == "factcheck")
         assert fc_agent["status"] == "degraded"
-        assert fc_agent["error_code"] == "TIMEOUT"
+        assert fc_agent["error_code"] == "TURN_LIMIT"
 
 
 def test_agents_thinking_config():
