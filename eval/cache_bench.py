@@ -1,9 +1,13 @@
 """
 Cache benchmark with counted call savings (Plan 9, Task 6 / Gate D4).
 
-Measures semantic cache lookup latency (exact hits and paraphrase hits) against pgvector
-and bidirectional NLI equivalence, asserting hit p95 < 10% of live uncached p50.
-Cleans up all bench-tagged rows from Supabase.
+Measures semantic cache hit latency (embedding + pgvector lookup + NLI equivalence, the same path
+verify_claim takes) for exact claims and faithful paraphrases, and checks that negated or
+number-changed variants MISS. The comparison baseline (live p50, calls per claim) comes only from a
+valid record run; there are no fallback constants, and a figure that was not measured is None.
+
+It writes tagged seed rows into the configured Supabase project, so it refuses to run unless the
+operator names that project (--confirm-db <host>), and it always cleans up in `finally`.
 """
 from __future__ import annotations
 
@@ -12,22 +16,35 @@ import asyncio
 import json
 import logging
 import statistics
+import sys
 import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Awaitable, Callable, Dict, List, Optional
+from urllib.parse import urlparse
 
-from app.config import settings
-from app.db.connection import get_supabase
-from app.services.cache import insert_cache, lookup_cache
-from app.services.claim_equivalence import are_equivalent
+# Ensure repo root and backend are on sys.path (the script is run as `python eval/cache_bench.py`)
+BASE_DIR = Path(__file__).resolve().parent.parent
+for _p in (BASE_DIR, BASE_DIR / "backend"):
+    if str(_p) not in sys.path:
+        sys.path.insert(0, str(_p))
+
+from app.config import settings  # noqa: E402
 
 logger = logging.getLogger("cache_bench")
 
-BASE_DIR = Path(__file__).resolve().parent.parent
 DEFAULT_OUT = BASE_DIR / "eval" / "results" / "cache_bench.json"
 DEFAULT_RECORD_SUMMARY = BASE_DIR / "eval" / "results" / "record_run.json"
+
+TAG_PREFIX = "[bench:"
+# Latency from these modes is a live measurement; a replay or record-missing run mixes cached turns in.
+LIVE_LATENCY_MODES = {"record", "live"}
+
+
+class BenchInputError(RuntimeError):
+    """The bench cannot produce an honest figure (or may not touch this database); nothing was run."""
+
 
 # 20 pairs of claims and faithful paraphrases for the benchmark
 BENCH_PAIRS: List[Dict[str, str]] = [
@@ -134,194 +151,259 @@ BENCH_PAIRS: List[Dict[str, str]] = [
 ]
 
 
+# Variants that must NOT be served from the cache: negation, changed number, changed entity.
+# Embeddings alone cannot tell these from the original, so the equivalence check has to.
+BENCH_NEGATIVES: List[Dict[str, str]] = [
+    {"id": "neg-01", "of": "bench-01",
+     "text": "NASA confirmed asteroid Apophis will collide with Earth in 2029."},
+    {"id": "neg-02", "of": "bench-03",
+     "text": "The WHO declared the end of the global COVID-19 public health emergency in May 2013."},
+    {"id": "neg-03", "of": "bench-05",
+     "text": "Finland officially joined NATO as its 41st member nation on April 4, 2023."},
+    {"id": "neg-04", "of": "bench-07",
+     "text": "Drinking raw unpasteurized milk cures lactose intolerance."},
+    {"id": "neg-05", "of": "bench-14",
+     "text": "The Panama Canal officially opened for maritime navigation in August 1941."},
+    {"id": "neg-06", "of": "bench-20",
+     "text": "Antibiotics kill bacteria and also cure viral infections such as influenza."},
+]
+
+
 def summarize(
     hit_ms: List[float],
-    live_p50_ms: float,
+    live_p50_ms: Optional[float],
     calls_per_claim: Dict[str, Any],
 ) -> Dict[str, Any]:
     """
-    Compute summary metrics for cache benchmark.
-    target_met: hit_p95 < 0.10 * live_p50
-    calls_saved_per_hit: calls_per_claim.mean
+    Summary of cache hit latencies against the live p50. Anything that was not measured is None:
+    no hits means no latency, no speedup and no verdict on the target.
+    target_met: hit_p95 < 0.10 * live_p50; calls_saved_per_hit: calls_per_claim.mean.
     """
     n = len(hit_ms)
     if n >= 2:
         q = statistics.quantiles(hit_ms, n=100, method="inclusive")
-        hit_p50 = round(q[49], 2)
-        hit_p95 = round(q[94], 2)
+        hit_p50, hit_p95 = round(q[49], 2), round(q[94], 2)
     elif n == 1:
-        hit_p50 = round(hit_ms[0], 2)
-        hit_p95 = round(hit_ms[0], 2)
+        hit_p50 = hit_p95 = round(hit_ms[0], 2)
     else:
-        hit_p50 = 0.0
-        hit_p95 = 0.0
+        hit_p50 = hit_p95 = None
 
-    speedup = round(live_p50_ms / hit_p50, 2) if hit_p50 > 0 else 0.0
-    target_met = bool(hit_p95 < 0.10 * live_p50_ms) if (live_p50_ms > 0 and n > 0) else False
-    calls_saved = float(calls_per_claim.get("mean", 0.0))
-
+    have_both = n > 0 and live_p50_ms is not None and live_p50_ms > 0
     return {
         "n_hits": n,
         "hit_p50_ms": hit_p50,
         "hit_p95_ms": hit_p95,
         "live_p50_ms": live_p50_ms,
-        "speedup": speedup,
-        "target_met": target_met,
-        "calls_saved_per_hit": calls_saved,
+        "speedup": round(live_p50_ms / hit_p50, 2) if have_both and hit_p50 else None,
+        "target_met": bool(hit_p95 < 0.10 * live_p50_ms) if have_both else None,
+        "calls_saved_per_hit": float(calls_per_claim["mean"]) if calls_per_claim.get("mean") else None,
     }
+
+
+def load_live_baseline(path: Path | str) -> Dict[str, Any]:
+    """
+    Live p50 and calls per claim from a valid record run, with their provenance.
+    Refuses (BenchInputError) rather than substituting a default: a replay, record-missing or
+    invalid run, or one without call counts, cannot support the comparison.
+    """
+    path = Path(path)
+    if not path.exists():
+        raise BenchInputError(f"No record run at {path}. Run the record run first; the bench has no fallback.")
+    data = json.loads(path.read_text(encoding="utf-8"))
+    summary = data.get("summary", data)
+
+    if summary.get("run_status") != "OK":
+        raise BenchInputError(f"{path} has run_status={summary.get('run_status')!r}; need a valid (OK) run.")
+    latency = summary.get("latency") or {}
+    if latency.get("mode") not in LIVE_LATENCY_MODES:
+        raise BenchInputError(
+            f"{path} latency.mode={latency.get('mode')!r}: replay and record-missing timings are not live latency.")
+    if not latency.get("p50_ms"):
+        raise BenchInputError(f"{path} has no latency.p50_ms.")
+    calls = summary.get("external_calls_per_claim") or {}
+    if not calls.get("mean"):
+        raise BenchInputError(f"{path} has no counted external_calls_per_claim.mean (live mode does not count calls).")
+
+    return {
+        "source": str(path),
+        "timestamp": summary.get("timestamp") or data.get("timestamp"),
+        "run_status": summary["run_status"],
+        "n": latency.get("n"),
+        "live_p50_ms": float(latency["p50_ms"]),
+        "calls_per_claim": calls,
+    }
+
+
+def _tag(bench_run_id: str) -> str:
+    return f"{TAG_PREFIX}{bench_run_id}]"
 
 
 def cleanup_bench_rows(supabase: Any, bench_run_id: str, claim_ids: Optional[List[str]] = None) -> int:
     """
-    Delete all rows inserted for this benchmark run from claims (cascades to results).
-    Asserts zero tagged rows remain in Supabase.
+    Delete the rows inserted for this benchmark run from claims (cascades to results), by id and by
+    tag, then assert zero tagged rows remain. Scoped strictly to this run's tag.
     """
     deleted_count = 0
-    tag = f"bench:{bench_run_id}"
+    pattern = f"%{_tag(bench_run_id)}%"
 
-    if claim_ids:
-        for cid in claim_ids:
-            try:
-                res = supabase.table("claims").delete().eq("id", cid).execute()
-                deleted_count += len(res.data or [])
-            except Exception as e:
-                logger.warning(f"Error deleting claim {cid}: {e}")
+    for cid in claim_ids or []:
+        try:
+            res = supabase.table("claims").delete().eq("id", cid).execute()
+            deleted_count += len(res.data or [])
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"Error deleting claim {cid}: {e}")
 
     try:
-        res2 = supabase.table("claims").delete().like("raw_input", f"%{tag}%").execute()
+        res2 = supabase.table("claims").delete().like("raw_input", pattern).execute()
         deleted_count += len(res2.data or [])
-    except Exception as e:
-        logger.warning(f"Error deleting claims by tag {tag}: {e}")
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"Error deleting claims by tag {pattern}: {e}")
 
-    # Verify zero tagged rows remain
-    check = supabase.table("claims").select("id").like("raw_input", f"%{tag}%").execute()
+    check = supabase.table("claims").select("id").like("raw_input", pattern).execute()
     remaining = len(check.data or [])
     if remaining > 0:
-        raise RuntimeError(f"Cleanup failed: {remaining} rows with tag '{tag}' still remain in Supabase claims table.")
-
+        raise RuntimeError(f"Cleanup failed: {remaining} rows with tag '{pattern}' still remain in Supabase claims table.")
     return deleted_count
+
+
+def sweep_bench_rows(supabase: Any) -> int:
+    """Delete leftovers of ANY bench run (e.g. a process killed before its cleanup ran)."""
+    res = supabase.table("claims").delete().like("raw_input", f"{TAG_PREFIX}%").execute()
+    return len(res.data or [])
+
+
+def _db_host() -> Optional[str]:
+    return urlparse(settings.supabase_url or "").hostname
+
+
+def _check_database(confirm_db: Optional[str]) -> None:
+    host = _db_host()
+    if not host or confirm_db != host:
+        raise BenchInputError(
+            f"The bench writes tagged rows into {host!r}. Pass --confirm-db {host} to confirm that is the "
+            f"project it may use (got {confirm_db!r}).")
+
+
+def _seed_row(bench_run_id: str, text: str, embedding: List[float]) -> Dict[str, Any]:
+    """A complete, servable cached result that says plainly it is a benchmark seed and carries no sources."""
+    return dict(
+        input_type="text",
+        raw_input=f"{_tag(bench_run_id)} {text}",
+        extracted_claim=text,
+        embedding=embedding,
+        c_total=0.9,
+        s_fact=1.0,
+        b_ling=0.1,
+        v_consensus=0.9,
+        weights={"w1": 0.5, "w2": 0.2, "w3": 0.3},
+        confidence_level="medium",
+        agent_outputs={name: {"degraded": False, "note": "bench_seed"}
+                       for name in ("factcheck", "crossref", "linguistic")},
+        source_citations=[],
+        linguistic_profile={},
+        processing_time_ms=0,
+        warnings=["Benchmark seed row, not a real analysis."],
+        v_refute=0.0,
+        evidence_status="corroborated",
+    )
+
+
+async def _timed_lookup(
+    text: str, embed: Callable[[str], Awaitable[List[float]]], lookup: Callable[..., Awaitable[Any]],
+    seeded_ids: set,
+) -> Dict[str, Any]:
+    """One request-path cache probe: embed + lookup. A hit only counts when it is one of OUR seeded rows."""
+    t0 = time.perf_counter()
+    embedding = await embed(text)
+    t1 = time.perf_counter()
+    hit = await lookup(embedding, text)
+    t2 = time.perf_counter()
+    return {
+        "hit": bool(hit) and hit.get("claim_id") in seeded_ids,
+        "foreign_hit": bool(hit) and hit.get("claim_id") not in seeded_ids,
+        "total_ms": (t2 - t0) * 1000,
+        "lookup_ms": (t2 - t1) * 1000,
+    }
 
 
 async def run_cache_benchmark(
     record_summary_path: Path | str = DEFAULT_RECORD_SUMMARY,
     output_path: Path | str = DEFAULT_OUT,
     pairs: Optional[List[Dict[str, str]]] = None,
+    *,
+    confirm_db: Optional[str] = None,
+    supabase: Any = None,
+    embed: Optional[Callable[[str], List[float]]] = None,
+    insert: Optional[Callable[..., Awaitable[Optional[str]]]] = None,
+    lookup: Optional[Callable[..., Awaitable[Any]]] = None,
 ) -> Dict[str, Any]:
     """
-    Execute the cache benchmark:
-    1. Reads live p50 latency and calls_per_claim from the record run summary.
-    2. Seeds N results into Supabase tagged with bench_run_id.
-    3. Measures lookup_cache timing for exact texts and paraphrases.
-    4. Cleans up all bench rows in finally block.
+    1. Reads the live p50 and calls per claim from a valid record run (refuses otherwise).
+    2. Seeds N servable, tagged rows (production embedding path).
+    3. Times embed + lookup for each exact claim and each paraphrase; probes the negative variants.
+    4. Cleans up every tagged row in `finally`; a cleanup failure never masks the original error.
     """
     pairs = pairs or BENCH_PAIRS
-    summary_path = Path(record_summary_path)
-    if summary_path.exists():
-        rec_data = json.loads(summary_path.read_text(encoding="utf-8"))
-        summary_block = rec_data.get("summary", rec_data)
-        live_p50 = float(summary_block.get("latency", {}).get("p50_ms", 5000.0) or 5000.0)
-        calls_per_claim = summary_block.get("external_calls_per_claim", {"mean": 3.0, "p50": 3.0, "max": 4})
-    else:
-        logger.warning(f"Record summary not found at {summary_path}; using fallback live p50 = 5000ms")
-        live_p50 = 5000.0
-        calls_per_claim = {"mean": 3.0, "p50": 3.0, "max": 4}
+    baseline = load_live_baseline(record_summary_path)
+    _check_database(confirm_db)
 
-    from sentence_transformers import SentenceTransformer
-    embedder = SentenceTransformer(settings.embedding_model_name)
+    if supabase is None:
+        from app.db.connection import get_supabase
+        supabase = get_supabase()
+    if insert is None or lookup is None:
+        from app.services.cache import insert_cache, lookup_cache
+        insert, lookup = insert or insert_cache, lookup or lookup_cache
+    if embed is None:
+        from app.services.embedding import generate_embedding
+        embed = generate_embedding
+
+    async def embed_async(text: str) -> List[float]:
+        return await asyncio.to_thread(embed, text)
 
     bench_run_id = uuid.uuid4().hex[:8]
-    supabase = get_supabase()
     created_claim_ids: List[str] = []
-
-    exact_latencies_ms: List[float] = []
-    exact_hits: int = 0
-    para_latencies_ms: List[float] = []
-    para_hits: int = 0
-    all_hit_latencies_ms: List[float] = []
-
-    print(f"\n--- Starting Cache Benchmark (run id: {bench_run_id}, n={len(pairs)}) ---")
+    print(f"\n--- Starting Cache Benchmark (run id: {bench_run_id}, n={len(pairs)}, db: {_db_host()}) ---")
 
     try:
-        # Step 1: Seed results
-        print("Seeding benchmark claims into cache...")
         for item in pairs:
-            text = item["claim"]
-            emb = embedder.encode(text).tolist()
-            tagged_raw = f"[bench:{bench_run_id}] {text}"
-            cid = await insert_cache(
-                input_type="text",
-                raw_input=tagged_raw,
-                extracted_claim=text,
-                embedding=emb,
-                c_total=0.9,
-                s_fact=1.0,
-                b_ling=0.1,
-                v_consensus=0.9,
-                weights={"w1": 0.5, "w2": 0.2, "w3": 0.3},
-                confidence_level="high",
-                agent_outputs={"note": "bench_seed"},
-                source_citations=[{"url": "https://example.org", "domain": "example.org", "bias_label": "Center"}],
-                linguistic_profile={},
-                processing_time_ms=500,
-                warnings=[],
-                v_refute=0.0,
-                evidence_status="corroborated",
-            )
+            row = _seed_row(bench_run_id, item["claim"], await embed_async(item["claim"]))
+            cid = await insert(**row)
             if cid:
                 created_claim_ids.append(cid)
+        seeded_ids = set(created_claim_ids)
+        print(f"Seeded {len(seeded_ids)} claims.")
 
-        print(f"Successfully seeded {len(created_claim_ids)} claims.")
+        exact = [await _timed_lookup(p["claim"], embed_async, lookup, seeded_ids) for p in pairs]
+        para = [await _timed_lookup(p["paraphrase"], embed_async, lookup, seeded_ids) for p in pairs]
+        negatives = [await _timed_lookup(n["text"], embed_async, lookup, seeded_ids) for n in BENCH_NEGATIVES]
 
-        # Step 2: Exact lookups
-        print("Benchmarking exact claim lookups...")
-        for item in pairs:
-            text = item["claim"]
-            emb = embedder.encode(text).tolist()
-            t0 = time.perf_counter()
-            hit = await lookup_cache(emb, text)
-            dt_ms = (time.perf_counter() - t0) * 1000
-            exact_latencies_ms.append(dt_ms)
-            if hit is not None:
-                exact_hits += 1
-                all_hit_latencies_ms.append(dt_ms)
+        hits = [r for r in exact + para if r["hit"]]
+        summary = summarize([r["total_ms"] for r in hits], baseline["live_p50_ms"], baseline["calls_per_claim"])
+        false_positives = sum(1 for r in negatives if r["hit"])
 
-        # Step 3: Paraphrase lookups
-        print("Benchmarking paraphrase lookups...")
-        for item in pairs:
-            para = item["paraphrase"]
-            emb = embedder.encode(para).tolist()
-            t0 = time.perf_counter()
-            hit = await lookup_cache(emb, para)
-            dt_ms = (time.perf_counter() - t0) * 1000
-            para_latencies_ms.append(dt_ms)
-            if hit is not None:
-                para_hits += 1
-                all_hit_latencies_ms.append(dt_ms)
-
-        # Step 4: Summarize
-        summary_results = summarize(
-            hit_ms=all_hit_latencies_ms if all_hit_latencies_ms else exact_latencies_ms,
-            live_p50_ms=live_p50,
-            calls_per_claim=calls_per_claim,
-        )
+        def block(results: List[Dict[str, Any]]) -> Dict[str, Any]:
+            n_hits = sum(1 for r in results if r["hit"])
+            return {
+                "n": len(results),
+                "hits": n_hits,
+                "hit_rate": n_hits / len(results) if results else None,
+                "foreign_hits_ignored": sum(1 for r in results if r["foreign_hit"]),
+                "latencies_ms": [round(r["total_ms"], 2) for r in results],
+                "lookup_only_ms": [round(r["lookup_ms"], 2) for r in results],
+            }
 
         full_report = {
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "bench_run_id": bench_run_id,
+            "database": _db_host(),
             "pairs_tested": len(pairs),
-            "exact_lookups": {
-                "n": len(pairs),
-                "hits": exact_hits,
-                "hit_rate": exact_hits / len(pairs),
-                "latencies_ms": [round(x, 2) for x in exact_latencies_ms],
-            },
-            "paraphrase_lookups": {
-                "n": len(pairs),
-                "hits": para_hits,
-                "hit_rate": para_hits / len(pairs),
-                "latencies_ms": [round(x, 2) for x in para_latencies_ms],
-            },
-            "summary": summary_results,
+            "latency_includes": "embedding + pgvector lookup + equivalence check",
+            "baseline": baseline,
+            "exact_lookups": block(exact),
+            "paraphrase_lookups": block(para),
+            "negative_lookups": {**block(negatives), "false_positives": false_positives,
+                                 "passed": false_positives == 0},
+            "summary": summary,
         }
 
         out_path = Path(output_path)
@@ -329,32 +411,44 @@ async def run_cache_benchmark(
         out_path.write_text(json.dumps(full_report, indent=2), encoding="utf-8")
 
         print(f"\nCache benchmark complete! Results saved to {out_path}")
-        print(f"  • Exact hit rate:       {exact_hits}/{len(pairs)} ({exact_hits/len(pairs):.1%})")
-        print(f"  • Paraphrase hit rate:  {para_hits}/{len(pairs)} ({para_hits/len(pairs):.1%})")
-        print(f"  • Cache hit p50:        {summary_results['hit_p50_ms']}ms (Live p50: {live_p50:.1f}ms)")
-        print(f"  • Cache hit p95:        {summary_results['hit_p95_ms']}ms (Target < {0.10*live_p50:.1f}ms: {'MET' if summary_results['target_met'] else 'MISSED'})")
-        print(f"  • Speedup factor:       {summary_results['speedup']}x")
-        print(f"  • Calls saved per hit:  {summary_results['calls_saved_per_hit']}")
-
+        print(f"  - Exact hit rate:       {full_report['exact_lookups']['hits']}/{len(pairs)}")
+        print(f"  - Paraphrase hit rate:  {full_report['paraphrase_lookups']['hits']}/{len(pairs)}")
+        print(f"  - Negation/number false positives: {false_positives}/{len(negatives)} (must be 0)")
+        print(f"  - Hit p50/p95:          {summary['hit_p50_ms']} / {summary['hit_p95_ms']} ms "
+              f"(live p50 {baseline['live_p50_ms']:.0f} ms from {baseline['source']}, n={baseline['n']})")
+        print(f"  - Target (hit p95 < 10% of live p50): {summary['target_met']}")
         return full_report
     finally:
         print(f"Cleaning up bench rows (run id: {bench_run_id})...")
-        deleted = cleanup_bench_rows(supabase, bench_run_id, created_claim_ids)
-        print(f"Cleaned up {deleted} rows from Supabase.")
+        try:
+            deleted = cleanup_bench_rows(supabase, bench_run_id, created_claim_ids)
+            print(f"Cleaned up {deleted} rows from Supabase.")
+        except Exception:  # noqa: BLE001 - never mask the error that got us here
+            logger.exception("bench cleanup FAILED; run `python eval/cache_bench.py --sweep --confirm-db %s`",
+                             _db_host())
 
 
-def main():
+def main(argv: Optional[List[str]] = None) -> None:
     parser = argparse.ArgumentParser(description="VeriFact cache benchmark")
     parser.add_argument("--record-summary", type=Path, default=DEFAULT_RECORD_SUMMARY,
-                        help="path to record_run.json or baseline summary")
-    parser.add_argument("--output", type=Path, default=DEFAULT_OUT,
-                        help="path to write cache_bench.json")
-    args = parser.parse_args()
+                        help="path to record_run.json (a valid, live-latency record run)")
+    parser.add_argument("--output", type=Path, default=DEFAULT_OUT, help="path to write cache_bench.json")
+    parser.add_argument("--confirm-db", default=None,
+                        help="host of the Supabase project the bench may write tagged rows into")
+    parser.add_argument("--sweep", action="store_true", help="delete leftover bench rows and exit")
+    args = parser.parse_args(argv)
 
-    asyncio.run(run_cache_benchmark(
-        record_summary_path=args.record_summary,
-        output_path=args.output,
-    ))
+    try:
+        _check_database(args.confirm_db)
+        if args.sweep:
+            from app.db.connection import get_supabase
+            print(f"Swept {sweep_bench_rows(get_supabase())} leftover bench rows.")
+            return
+        asyncio.run(run_cache_benchmark(record_summary_path=args.record_summary, output_path=args.output,
+                                        confirm_db=args.confirm_db))
+    except BenchInputError as exc:
+        print(f"Refusing to run: {exc}")
+        sys.exit(2)
 
 
 if __name__ == "__main__":

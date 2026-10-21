@@ -217,7 +217,7 @@ async def test_leaf_transcript_recorded_in_replay_mode(tmp_path, monkeypatch):
         req = LlmRequest(
             model="dummy",
             contents=[types.Content(role="user", parts=[types.Part(text="Check this claim")])],
-            config=types.GenerateContentConfig(system_instruction="You are a Fact-Check judge agent."),
+            config=types.GenerateContentConfig(system_instruction='You are an agent. Your internal name is "factcheck_judge".'),
         )
         responses = [r async for r in model.generate_content_async(req)]
         assert len(responses) == 1

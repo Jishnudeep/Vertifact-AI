@@ -21,6 +21,8 @@ import contextvars
 from dataclasses import asdict
 import hashlib
 import json
+import logging
+import re
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Literal, Optional, Tuple
 
@@ -39,6 +41,8 @@ from app.services.errors import EvidenceAPIError
 from app.services.grounded_search import GroundedSearch, GroundedSource, SearchKind
 from app.services.page_fetch import PageText
 from app.utils.text_processing import extract_domain
+
+logger = logging.getLogger(__name__)
 
 ReplayMode = Literal["record", "replay", "live", "record-missing"]
 
@@ -96,8 +100,18 @@ class EvidenceReplay:
             "llm": 0,
         }
         self.leaf_transcript: List[Dict[str, Any]] = []
+        self.current_claim_id: Optional[str] = None
 
-    def reset_claim_counts(self) -> None:
+    def write_leaf_transcript(self, path: Path) -> None:
+        """One JSON object per model turn, each tagged with the claim it belongs to."""
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            for entry in self.leaf_transcript:
+                f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+
+    def reset_claim_counts(self, claim_id: Optional[str] = None) -> None:
+        self.current_claim_id = claim_id
         self._current_claim_calls = {
             "search": 0,
             "fetch": 0,
@@ -250,6 +264,15 @@ def request_key(llm_request: LlmRequest) -> str:
     return _key("llm", canonical)
 
 
+_INTERNAL_NAME = re.compile(r'internal name is "([\w-]+)"')
+
+
+def _agent_name(system_instruction: str, fallback: str) -> str:
+    """ADK states the agent's name in every system instruction; do not guess it from the prompt prose."""
+    match = _INTERNAL_NAME.search(system_instruction)
+    return match.group(1) if match else fallback
+
+
 class ReplayLlm(BaseLlm):
     """
     Wraps the real worker model (`get_model()`) and serves/records each turn's LlmResponses by
@@ -267,6 +290,11 @@ class ReplayLlm(BaseLlm):
         return self.inner.capabilities                      # same structured-output path as the real model
 
     def _record_leaf_transcript(self, llm_request: LlmRequest, responses: List[LlmResponse]) -> None:
+        """
+        One structured entry per model turn: the agent (ADK's own "internal name" line in the system
+        instruction), the claim being evaluated, every tool response the model has been shown so far,
+        this turn's tool calls and, on the final turn, the structured decision.
+        """
         replay: EvidenceReplay = self.replay  # type: ignore[assignment]
         config = getattr(llm_request, "config", None)
         system = getattr(config, "system_instruction", "") or ""
@@ -277,42 +305,49 @@ class ReplayLlm(BaseLlm):
         else:
             sys_str = str(system)
 
-        sys_lower = sys_str.lower()
-        if "factcheck" in sys_lower or "fact-check" in sys_lower:
-            agent_name = "factcheck_judge"
-        elif "crossref" in sys_lower or "cross-reference" in sys_lower:
-            agent_name = "crossref_searcher"
-        else:
-            agent_name = getattr(self.inner, "model", "llm_agent")
-
-        prompt_parts = []
+        prompt_parts: List[str] = []
+        tool_responses: List[Dict[str, Any]] = []
         for c in (llm_request.contents or []):
             for p in (getattr(c, "parts", []) or []):
                 if getattr(p, "text", None):
                     prompt_parts.append(p.text)
                 elif getattr(p, "function_response", None):
-                    prompt_parts.append(json.dumps(p.function_response.response))
-        prompt_text = "\n".join(prompt_parts) if prompt_parts else json.dumps(
-            [c.model_dump(mode="json", exclude_none=True) for c in (llm_request.contents or [])]
-        )
+                    fr = p.function_response
+                    tool_responses.append({"name": fr.name, "response": fr.response})
+                    prompt_parts.append(json.dumps(fr.response))
+        prompt_text = "\n".join(prompt_parts)
 
-        resp_texts = []
+        resp_texts: List[str] = []
+        tool_calls: List[Dict[str, Any]] = []
+        decision: Optional[Dict[str, Any]] = None
         for r in responses:
             for p in (getattr(getattr(r, "content", None), "parts", []) or []):
-                if getattr(p, "text", None):
+                if getattr(p, "function_call", None):
+                    fc = p.function_call
+                    args = dict(fc.args or {})
+                    if fc.name == "set_model_response":
+                        decision = args
+                    else:
+                        tool_calls.append({"name": fc.name, "args": args})
+                    resp_texts.append(f"call:{fc.name}({json.dumps(args)})")
+                elif getattr(p, "text", None):
                     resp_texts.append(p.text)
-                elif getattr(p, "function_call", None):
-                    resp_texts.append(f"call:{p.function_call.name}({json.dumps(p.function_call.args)})")
         combined_resp = "\n".join(resp_texts)
         try:
             resp_payload = json.loads(combined_resp)
         except Exception:
             resp_payload = combined_resp
+        if decision is None and isinstance(resp_payload, dict) and not tool_calls:
+            decision = resp_payload                     # Gemini-native structured output: the final text is the JSON
 
         replay.leaf_transcript.append({
-            "name": agent_name,
+            "claim_id": replay.current_claim_id,
+            "name": _agent_name(sys_str, getattr(self.inner, "model", "llm_agent")),
             "prompt": prompt_text,
             "response": resp_payload,
+            "tool_calls": tool_calls,
+            "tool_responses": tool_responses,
+            "decision": decision,
         })
 
     async def generate_content_async(self, llm_request: LlmRequest, stream: bool = False):
@@ -329,7 +364,7 @@ class ReplayLlm(BaseLlm):
                 responses.append(r)
                 yield r
             replay._record_provider_call("llm")
-            self._record_leaf_transcript(llm_request, responses)
+            self._safe_record_transcript(llm_request, responses)
             return
 
         responses = []
@@ -337,7 +372,6 @@ class ReplayLlm(BaseLlm):
             responses.append(response)
             yield response
         replay._record_provider_call("llm")
-        self._record_leaf_transcript(llm_request, responses)
         if replay.mode in ("record", "record-missing"):
             replay.cache_dir.mkdir(parents=True, exist_ok=True)
             path.write_text(
@@ -345,3 +379,11 @@ class ReplayLlm(BaseLlm):
                 encoding="utf-8",
             )
             replay.recorded += 1
+        self._safe_record_transcript(llm_request, responses)
+
+    def _safe_record_transcript(self, llm_request: LlmRequest, responses: List[LlmResponse]) -> None:
+        """The transcript is diagnostics: a bug in it must never drop a paid recording or fail the turn."""
+        try:
+            self._record_leaf_transcript(llm_request, responses)
+        except Exception:  # noqa: BLE001
+            logger.exception("leaf transcript entry skipped")

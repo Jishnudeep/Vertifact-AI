@@ -49,8 +49,8 @@ def test_summarize_edge_cases():
     # Empty
     empty_res = summarize([], 1000.0, {})
     assert empty_res["n_hits"] == 0
-    assert empty_res["target_met"] is False
-    assert empty_res["speedup"] == 0.0
+    assert empty_res["target_met"] is None
+    assert empty_res["speedup"] is None
 
     # Single item
     single_res = summarize([50.0], 1000.0, {"mean": 3.0})

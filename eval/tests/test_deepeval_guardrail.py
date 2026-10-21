@@ -125,49 +125,6 @@ def test_flagging_threshold_boundary():
     assert res_79["detected_poisoned"] == 1
 
 
-def test_items_from_leaf_transcript(tmp_path):
-    transcript_file = tmp_path / "test_leaf_transcript.jsonl"
-    entries = [
-        # Valid entry
-        {
-            "name": "factcheck_judge",
-            "prompt": "<claim>Moon is made of cheese</claim>\n<search_snippets><snippet>Moon is made of rock and dust.</snippet></search_snippets>",
-            "response": {"rating": "false", "explanation": "The moon consists of rock and dust, not cheese."},
-        },
-        # Non-target agent entry
-        {
-            "name": "other_agent",
-            "prompt": "some prompt",
-            "response": {"rating": "true", "explanation": "ok"},
-        },
-        # Missing search snippets
-        {
-            "name": "verdict_extractor",
-            "prompt": "<claim>Water is wet</claim>",
-            "response": {"rating": "true", "explanation": "Water is liquid."},
-        },
-        # Missing explanation
-        {
-            "name": "factcheck_judge",
-            "prompt": "<claim>Earth is round</claim>\n<search_snippets>Earth is spherical.</search_snippets>",
-            "response": {"rating": "true"},
-        },
-    ]
-
-    with open(transcript_file, "w", encoding="utf-8") as f:
-        for e in entries:
-            f.write(json.dumps(e) + "\n")
-
-    items, skipped = items_from_leaf_transcript(transcript_file)
-    assert len(items) == 1
-    assert items[0]["claim"] == "Moon is made of cheese"
-    assert items[0]["actual_output"] == "The moon consists of rock and dust, not cheese."
-    assert items[0]["retrieval_context"] == ["Moon is made of rock and dust."]
-    assert skipped["non_target_agent"] == 1
-    assert skipped["missing_search_snippets"] == 1
-    assert skipped["missing_explanation"] == 1
-
-
 def test_refusal_when_judge_model_is_none(monkeypatch):
     monkeypatch.setattr(settings, "eval_judge_model", None)
     with pytest.raises(ValueError, match="D6"):
@@ -182,7 +139,8 @@ def test_live_guardrail_gate_d6():
     """
     judge = get_judge_model()
     items = _load_dataset()
-    results = score_guardrail(items, judge=judge, delay_s=1.0)
+    results = score_guardrail(items, judge=judge, delay_s=5.0)
+    assert results["status"] == "OK", f"{results['judge_errors']} judge error(s)"
 
     assert results["detected_poisoned"] >= 12, (
         f"Judge model caught only {results['detected_poisoned']}/15 poisoned items (target >= 12)"
@@ -190,3 +148,284 @@ def test_live_guardrail_gate_d6():
     assert results["flagged_clean"] <= 3, (
         f"Judge model falsely flagged {results['flagged_clean']}/15 clean items (target <= 3)"
     )
+
+
+# --- Task C review: fail-closed guardrail, quota guards, runnable CLI ---------------------------
+
+import subprocess
+import sys
+
+from eval import deepeval_runner
+from eval.deepeval_runner import is_flagged
+
+
+def _poisoned_item():
+    return {"id": "p1", "claim": "c", "source_snippets": ["s"], "is_hallucinated": True,
+            "output": {"rating": "false", "explanation": "e"}}
+
+
+@pytest.mark.parametrize("score,expected", [
+    (None, True), (float("nan"), True), (0.799, True), (0.0, True), (0.8, False), (1.0, False),
+])
+def test_is_flagged_fails_closed(score, expected):
+    assert is_flagged(score) is expected
+
+
+def test_missing_faithfulness_from_the_judge_is_flagged_not_passed():
+    res = score_guardrail([_poisoned_item()], judge=lambda item: {"hallucination": 0.0})
+    assert res["items"][0]["flagged"] is True
+    assert res["detected_poisoned"] == 1
+
+
+def test_a_judge_exception_is_recorded_flagged_and_invalidates_the_run():
+    def judge(item):
+        raise RuntimeError("429 RESOURCE_EXHAUSTED")
+
+    res = score_guardrail([_poisoned_item()], judge=judge)
+    assert res["items"][0]["judge_error"].startswith("RuntimeError")
+    assert res["items"][0]["flagged"] is True
+    assert res["judge_errors"] == 1 and res["status"] == "INVALID"
+
+
+def test_partial_results_are_reported_after_every_item():
+    seen = []
+
+    def judge(item):
+        if len(seen) == 1:
+            raise RuntimeError("boom")
+        return {"faithfulness": 1.0, "hallucination": 0.0}
+
+    items = [{**_poisoned_item(), "id": f"p{i}"} for i in range(3)]
+    score_guardrail(items, judge=judge, on_item=lambda scored: seen.append(len(scored)))
+    assert seen == [1, 2, 3]
+
+
+def test_fake_judge_path_does_not_import_deepeval(monkeypatch):
+    monkeypatch.setitem(sys.modules, "deepeval", None)
+    monkeypatch.setitem(sys.modules, "deepeval.metrics", None)
+    res = score_guardrail([_poisoned_item()], judge=lambda item: {"faithfulness": 0.5, "hallucination": 0.5})
+    assert res["detected_poisoned"] == 1
+
+
+def test_empty_input_reports_no_rate_rather_than_a_perfect_one():
+    res = score_guardrail([], judge=lambda item: {})
+    assert res["hallucination_catch_rate"] is None and res["false_positive_rate"] is None
+    leaf = score_leaf_groundedness([], judge=lambda item: {})
+    assert leaf["groundedness_rate"] is None and leaf["mean_faithfulness"] is None
+
+
+def test_faithfulness_metric_penalizes_ambiguous_claims_and_hallucination_skips_reasons(monkeypatch):
+    import deepeval.metrics as dm
+
+    built = {}
+
+    class Recorder:
+        def __init__(self, name, **kwargs):
+            built[name] = kwargs
+            self.score, self.reason = 1.0, ""
+
+        def measure(self, test_case):
+            return self.score
+
+    monkeypatch.setattr(dm, "FaithfulnessMetric", lambda **kw: Recorder("faithfulness", **kw))
+    monkeypatch.setattr(dm, "HallucinationMetric", lambda **kw: Recorder("hallucination", **kw))
+    score_guardrail([_poisoned_item()], judge=object())
+    assert built["faithfulness"]["penalize_ambiguous_claims"] is True
+    assert built["hallucination"]["include_reason"] is False
+
+
+@pytest.mark.parametrize("model", ["gemini/gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini/gemini-2.5-flash-lite"])
+def test_quota_starved_judge_models_are_refused(monkeypatch, model):
+    monkeypatch.setattr(settings, "eval_judge_model", model)
+    with pytest.raises(ValueError, match="RPD"):
+        get_judge_model()
+
+
+def test_result_discloses_pipeline_model_and_self_judging(monkeypatch):
+    monkeypatch.setattr(settings, "model_id", "gemini-3.1-flash-lite")
+
+    class Judge:
+        model_name = "gemini/gemini-3.1-flash-lite"
+
+    class FakeMetric:
+        def __init__(self, **kwargs):
+            self.score, self.reason = 1.0, ""
+
+        def measure(self, test_case):
+            return 1.0
+
+    import deepeval.metrics as dm
+    monkeypatch.setattr(dm, "FaithfulnessMetric", FakeMetric)
+    monkeypatch.setattr(dm, "HallucinationMetric", FakeMetric)
+    res = score_guardrail([_poisoned_item()], judge=Judge())
+    assert res["pipeline_model"] == "gemini-3.1-flash-lite"
+    assert res["self_judging"] is True
+
+    res = score_guardrail([_poisoned_item()], judge=lambda item: {"faithfulness": 1.0})
+    assert res["self_judging"] is False
+
+
+def test_main_refuses_to_spend_quota_without_live_flag(monkeypatch):
+    monkeypatch.setattr(settings, "eval_judge_model", "gemini/gemini-3.1-flash-lite")
+    monkeypatch.setattr(deepeval_runner, "get_judge_model",
+                        lambda: pytest.fail("a judge must not be built without --live"))
+    with pytest.raises(SystemExit) as exc:
+        deepeval_runner.main(["--mode", "guardrail"])
+    assert exc.value.code != 0
+
+
+@pytest.mark.parametrize("script", ["deepeval_runner.py", "cache_bench.py"])
+def test_cli_scripts_start_from_the_repo_root(script, tmp_path):
+    root = Path(__file__).resolve().parents[2]
+    done = subprocess.run([sys.executable, str(root / "eval" / script), "--help"], cwd=tmp_path,
+                          capture_output=True, text=True, timeout=300)
+    assert done.returncode == 0, done.stderr[-800:]
+
+
+# --- leaf mode on transcripts produced by the real ReplayLlm -------------------------------------
+
+DECISION = {"evidence": "web", "source_id": "web-1", "relevant": True, "opposite_polarity": False,
+            "rating": "false", "explanation": "Snopes found that moon rocks are basalt, not cheese."}
+EXCERPT = "Moon rock samples returned by Apollo are basalt and anorthosite."
+
+
+def _factcheck_request():
+    from google.adk.models.llm_request import LlmRequest
+    from google.genai import types
+
+    web = {"query": "moon cheese", "count": 1, "sources": [
+        {"source_id": "web-1", "domain": "snopes.com", "title": "t", "is_claimreview_authority": True,
+         "excerpt": EXCERPT}]}
+    db = {"query": "moon cheese", "count": 1, "reviews": [
+        {"source_id": "db-1", "claim_reviewed": "The Moon is cheese", "publisher": "PolitiFact",
+         "rating": "False", "normalized_rating": 0.0, "similarity": 0.9}]}
+    fr = lambda name, response: types.Part(function_response=types.FunctionResponse(name=name, response=response))
+    return LlmRequest(
+        model="dummy",
+        contents=[
+            types.Content(role="user", parts=[types.Part(text="<claim>The Moon is made of cheese</claim>")]),
+            types.Content(role="user", parts=[fr("search_fact_check_database", db),
+                                              fr("search_fact_check_sites", web)]),
+        ],
+        config=types.GenerateContentConfig(
+            system_instruction='You are an agent. Your internal name is "factcheck_judge".\n'
+                               "You check whether a fact-check already answers the claim."),
+    )
+
+
+async def _record_final_turn(tmp_path, monkeypatch, final_part, mode="record"):
+    import app.agents.common as common
+    from google.adk.models.base_llm import BaseLlm
+    from google.adk.models.llm_response import LlmResponse
+    from google.genai import types
+    from eval.replay import EvidenceReplay
+
+    class Inner(BaseLlm):
+        model: str = "dummy"
+
+        async def generate_content_async(self, llm_request, stream=False):
+            yield LlmResponse(content=types.Content(role="model", parts=[final_part]))
+
+    monkeypatch.setattr(common, "get_model", lambda: Inner())
+    replay = EvidenceReplay(tmp_path / "cache", mode)
+    replay.install()
+    try:
+        replay.reset_claim_counts("claim-001")
+        _ = [r async for r in common.get_model().generate_content_async(_factcheck_request())]
+    finally:
+        replay.uninstall()
+    path = tmp_path / f"leaf-{mode}.jsonl"
+    replay.write_leaf_transcript(path)
+    return replay, path
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("final_part_factory", [
+    lambda t: t.Part(function_call=t.FunctionCall(name="set_model_response", args=DECISION)),
+    lambda t: t.Part(text=json.dumps(DECISION)),
+], ids=["set_model_response_call", "json_text_answer"])
+async def test_leaf_items_come_from_a_real_factcheck_turn(tmp_path, monkeypatch, final_part_factory):
+    from google.genai import types
+
+    _, path = await _record_final_turn(tmp_path, monkeypatch, final_part_factory(types))
+    items, skipped = items_from_leaf_transcript(path)
+    assert len(items) == 1, skipped
+    item = items[0]
+    assert item["claim"] == "The Moon is made of cheese"
+    assert item["actual_output"] == DECISION["explanation"]
+    assert EXCERPT in item["retrieval_context"]
+    assert any("PolitiFact" in c and "False" in c for c in item["retrieval_context"])
+    assert item["id"].startswith("claim-001")
+
+
+@pytest.mark.anyio
+async def test_leaf_items_also_come_from_replayed_turns(tmp_path, monkeypatch):
+    from google.genai import types
+    from eval.replay import EvidenceReplay
+    import app.agents.common as common
+    from google.adk.models.base_llm import BaseLlm
+
+    await _record_final_turn(tmp_path, monkeypatch,
+                             types.Part(function_call=types.FunctionCall(name="set_model_response", args=DECISION)))
+
+    class Boom(BaseLlm):
+        model: str = "dummy"
+
+        async def generate_content_async(self, llm_request, stream=False):
+            raise AssertionError("replay must not call the model")
+            yield
+
+    monkeypatch.setattr(common, "get_model", lambda: Boom())
+    replay = EvidenceReplay(tmp_path / "cache", "replay")
+    replay.install()
+    try:
+        _ = [r async for r in common.get_model().generate_content_async(_factcheck_request())]
+    finally:
+        replay.uninstall()
+    assert replay.calls_by_provider["llm"] == 1 and replay.misses == 0
+    path = tmp_path / "leaf-replay.jsonl"
+    replay.write_leaf_transcript(path)
+    items, _ = items_from_leaf_transcript(path)
+    assert len(items) == 1 and items[0]["actual_output"] == DECISION["explanation"]
+
+
+@pytest.mark.anyio
+async def test_an_unrecorded_llm_turn_in_replay_counts_a_miss(tmp_path, monkeypatch):
+    import app.agents.common as common
+    from google.adk.models.base_llm import BaseLlm
+    from eval.replay import EvidenceReplay, ReplayMissError
+
+    class Boom(BaseLlm):
+        model: str = "dummy"
+
+        async def generate_content_async(self, llm_request, stream=False):
+            raise AssertionError("replay must not call the model")
+            yield
+
+    monkeypatch.setattr(common, "get_model", lambda: Boom())
+    replay = EvidenceReplay(tmp_path / "empty", "replay")
+    replay.install()
+    try:
+        with pytest.raises(ReplayMissError):
+            _ = [r async for r in common.get_model().generate_content_async(_factcheck_request())]
+    finally:
+        replay.uninstall()
+    assert replay.misses == 1
+
+
+def test_leaf_skips_other_agents_and_non_final_turns(tmp_path):
+    path = tmp_path / "t.jsonl"
+    rows = [
+        {"name": "crossref_searcher", "decision": {"explanation": "x"}, "tool_responses": []},
+        {"name": LEAF_NAME, "decision": None, "tool_responses": []},
+        {"name": LEAF_NAME, "decision": {"explanation": "e"}, "tool_responses": []},
+        {"name": LEAF_NAME, "decision": {"rating": "false"}, "tool_responses": []},
+    ]
+    path.write_text("\n".join(json.dumps(r) for r in rows) + "\nnot json\n", encoding="utf-8")
+    items, skipped = items_from_leaf_transcript(path)
+    assert items == []
+    assert skipped == {"non_target_agent": 1, "not_a_final_turn": 1, "missing_context": 1,
+                       "missing_explanation": 1, "invalid_json": 1}
+
+
+LEAF_NAME = "factcheck_judge"
