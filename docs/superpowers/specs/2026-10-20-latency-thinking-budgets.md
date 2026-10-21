@@ -32,9 +32,10 @@ Separately, a Cross-Ref LLM turn reasoned that *"the current date is 2024, makin
    *(Note: While `BuiltInPlanner(thinking_config=...)` exists, setting it via `generate_content_config` is direct and avoids planner overhead.)*
 
 2. **Parameter Applicability (`thinking_level` vs `thinking_budget`):**
-   - In `backend/.venv/Lib/site-packages/google/genai/types.py:13828-13832`:
-     > *"Starting from Gemini 3.5 models, the old thinking_budget will no longer be supported and will result in a user error if set. Instead, users should use the thinking_level parameter to control the maximum thinking depth."*
-   - For `gemini-3.1-flash-lite`, **`thinking_level`** is the supported reasoning parameter. Passing legacy `thinking_budget` or combining both triggers an API error.
+   - In `backend/.venv/Lib/site-packages/google/genai/types.py:13789-13791` and `13829-13831`:
+     > *"Indicates the maximum thinking depth during tuning. Starting from Gemini 3.5 models, the old thinking_budget will no longer be supported and will result in a user error if set. Instead, users should use the thinking_level parameter to control the maximum thinking depth."*
+   - For `gemini-3.1-flash-lite`, **`thinking_level`** is the supported reasoning parameter on `GenerateContentConfig.thinking_config`.
+   - **Verification Status [UNVERIFIED]:** Whether the generation endpoint actively rejects legacy `thinking_budget` for `gemini-3.1-flash-lite` has not been empirically verified (the SDK docstring above documents this deprecation explicitly for Gemini 3.5+ tuning). We adopt `thinking_level` because it is the current typed parameter for Gemini 3.x models.
 
 3. **Legal Values:**
    Defined in `backend/.venv/Lib/site-packages/google/genai/types.py:375-387`:
@@ -45,12 +46,12 @@ Separately, a Cross-Ref LLM turn reasoned that *"the current date is 2024, makin
    - `HIGH = 'HIGH'`
    (Or lowercase string aliases `"minimal"`, `"low"`, `"medium"`, `"high"`).
 
-4. **Default Behavior when Unset:**
+4. **Default Behavior when Unset [UNVERIFIED]:**
    - In the SDK source (`backend/.venv/Lib/site-packages/google/genai/types.py:5803-5806`):
      `thinking_level: Optional[ThinkingLevel] = Field(default=None)`
    - The client SDK sets no local default; `None` is sent, leaving the default entirely to the backend endpoint.
-   - Official Gemini API documentation states that while `gemini-3.1-pro` defaults to high reasoning, `gemini-3.1-flash-lite` defaults to dynamic/minimal reasoning depending on endpoint routing.
-   - **Verification Note:** Because the server-side default cannot be inspected in client code, **we do NOT cite an unverified default as the sole explanation for the ~10 s LLM turns**. Other verified factors in turn duration include large tool schema declarations, strict structured output schema validation (`output_schema`), and roundtrip overhead. Setting `thinking_level="LOW"` or `"MINIMAL"` explicitly guarantees that reasoning tokens are constrained to the lowest tier.
+   - **Server-Side Default Position [UNVERIFIED]:** No primary documentation URL or SDK constant confirms whether `gemini-3.1-flash-lite` defaults to dynamic, minimal, low, or high reasoning on the API endpoint when unset. The server-side default cannot be inspected in client code.
+   - **Rationale for Explicit Wiring:** Because the server-side default is unverified, setting `thinking_level="LOW"` or `"MINIMAL"` explicitly guarantees that reasoning tokens are constrained to the lowest tier rather than relying on unverified endpoint defaults. Other verified factors in turn duration include large tool schema declarations, strict structured output schema validation (`output_schema`), and network roundtrip overhead.
 
 ---
 
@@ -138,7 +139,7 @@ Separately, a Cross-Ref LLM turn reasoned that *"the current date is 2024, makin
    ```
 
 3. **Replay Cache Key Invariant:**
-   In [`eval/replay.py:request_key`](file:///D:/Gen%20AI%20Projects/AI%20Fake%20News%20Scorer/verifact-latency/eval/replay.py), dynamic date prefixes are normalized before hashing so daily date rollovers do not invalidate recorded eval benchmarks. Furthermore, `EvidenceReplay.install()` pins `get_today_utc` to `"2026-10-20"`.
+   In [`eval/replay.py:request_key`](file:///D:/Gen%20AI%20Projects/AI%20Fake%20News%20Scorer/verifact-latency/eval/replay.py), dynamic date prefixes are normalized before hashing so daily date rollovers do not invalidate recorded eval benchmarks. Record and record-missing modes pass the real current date to the live model while preserving cache key stability.
 
 4. **Testing (TDD):**
    - Verified via `backend/tests/test_date_awareness.py` (5/5 passed).
