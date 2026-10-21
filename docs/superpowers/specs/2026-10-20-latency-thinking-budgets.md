@@ -171,6 +171,13 @@ Separately, a Cross-Ref LLM turn reasoned that *"the current date is 2024, makin
 
 5. **Live Benchmark Results (A.4 — 2026-10-21):**
 
+   > **INVALID AS LATENCY EVIDENCE.** Grounded search returned HTTP 400 on every call in this run
+   > (`thinking_level` sent to `gemini-2.5-flash-lite`), so the pipeline ran without web evidence and the
+   > p50 below measures a degraded pipeline, not a faster one. The p95 comes from Gemini 503 retries.
+   > Fixed in `94f5c93` (`thinking_content_config` sends `thinking_level` only to Gemini 3 models).
+   > No valid after-numbers exist yet; the single approved bench is spent and a second needs the lead's approval.
+   > The table is kept as a record of what was observed, not as a result.
+
    Conducted exactly one live benchmark run (`eval/latency_bench.py --n 4 --delay 6`) on `fix/latency-thinking-budgets`:
 
    #### 5.1 Before vs. After Latency Comparison
