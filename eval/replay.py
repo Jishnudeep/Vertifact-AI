@@ -5,8 +5,8 @@ Never imported by the backend. run_eval.py installs it around a run:
   record: call live, store successful responses under cache_dir
   replay: serve from cache_dir only; a missing entry raises ReplayMissError (an outage)
   live:   call live, store nothing
-Cached payloads are RAW results. Domain exclusion is applied on the way out, so one cache
-serves runs with and without leave-source-out.
+Cached search and fact-check payloads are RAW results; domain exclusion is applied on the way out.
+LLM turns are keyed on what the model was shown, so a leave-source-out run needs its own recording.
 
 Two seams are patched, both where the worker agents look the dependency up:
   * the services the agents' TOOLS call (`app.agents.factcheck_agent` / `crossref_agent`:
@@ -85,6 +85,7 @@ class EvidenceReplay:
         self.cache_dir = Path(cache_dir)
         self.mode = mode
         self.misses = 0
+        self._current_claim_misses = 0
         self.recorded = 0
         self._originals: List[Tuple[Any, str, Callable]] = []
         self.calls_by_provider: Dict[str, int] = {
@@ -110,8 +111,17 @@ class EvidenceReplay:
             for entry in self.leaf_transcript:
                 f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
+    def note_miss(self) -> None:
+        self.misses += 1
+        self._current_claim_misses += 1
+
+    def claim_misses(self) -> int:
+        """Replay misses during the current claim: a claim can look normal while one of its calls missed."""
+        return self._current_claim_misses
+
     def reset_claim_counts(self, claim_id: Optional[str] = None) -> None:
         self.current_claim_id = claim_id
+        self._current_claim_misses = 0
         self._current_claim_calls = {
             "search": 0,
             "fetch": 0,
@@ -144,7 +154,7 @@ class EvidenceReplay:
 
         if self.mode == "replay" or (self.mode == "record-missing" and path.exists()):
             if not path.exists():
-                self.misses += 1
+                self.note_miss()
                 raise ReplayMissError(f"No recorded {provider} response (key {key[:12]})", provider=provider)
             res = json.loads(path.read_text(encoding="utf-8"))
             self._record_provider_call(alias)
@@ -250,11 +260,31 @@ def _without_ids(node):
     return node
 
 
+_GENERATION_FIELDS = ("temperature", "top_p", "top_k", "max_output_tokens", "candidate_count", "seed",
+                      "response_mime_type", "presence_penalty", "frequency_penalty")
+
+
+def _generation_settings(config: Any) -> Dict[str, Any]:
+    """What shapes the answer besides the prompt: sampling, thinking budget and the output schema."""
+    out: Dict[str, Any] = {f: getattr(config, f, None) for f in _GENERATION_FIELDS}
+    thinking = getattr(config, "thinking_config", None)
+    out["thinking_config"] = thinking.model_dump(mode="json", exclude_none=True) if thinking else None
+    schema = getattr(config, "response_schema", None)
+    if isinstance(schema, type) and hasattr(schema, "model_json_schema"):
+        out["response_schema"] = schema.model_json_schema()
+    elif hasattr(schema, "model_dump"):
+        out["response_schema"] = schema.model_dump(mode="json", exclude_none=True)
+    else:
+        out["response_schema"] = schema
+    return {k: v for k, v in out.items() if v is not None}
+
+
 def request_key(llm_request: LlmRequest) -> str:
-    """Hash of what the model is actually shown: system instruction, contents, tool declarations."""
+    """Hash of what the model is actually shown: system instruction, contents, tool declarations, generation settings."""
     config = llm_request.config
     system = getattr(config, "system_instruction", None)
     canonical = {
+        "generation": _generation_settings(config),
         "model": llm_request.model,
         "system_instruction": system if isinstance(system, str) or system is None
         else system.model_dump(mode="json", exclude_none=True),
@@ -356,7 +386,7 @@ class ReplayLlm(BaseLlm):
         path = replay._path(key)
         if replay.mode == "replay" or (replay.mode == "record-missing" and path.exists()):
             if not path.exists():
-                replay.misses += 1
+                replay.note_miss()
                 raise ReplayMissError(f"No recorded llm response (key {key[:12]})", provider="llm")
             responses: List[LlmResponse] = []
             for item in json.loads(path.read_text(encoding="utf-8")):

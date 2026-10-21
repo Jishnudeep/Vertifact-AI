@@ -39,6 +39,7 @@ from eval.replay import EvidenceReplay, ReplayMode, excluding_domains
 from eval.trace_eval import audit_trace, make_eval_case, tool_call_counts
 from collections import defaultdict
 import hashlib
+import re
 
 DEFAULT_CACHE_DIR = BASE_DIR / "eval" / "results" / "evidence_cache"
 
@@ -46,14 +47,19 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(na
 logger = logging.getLogger("eval_harness")
 
 
+# A bare 429 (not 14290 or 4291 inside a timing or an id), a quota status, or the words "rate limit".
+_RATE_LIMITED = re.compile(r"\b429\b|RESOURCE_EXHAUSTED|rate[ -]limit", re.IGNORECASE)
+
+
 class RateLimitCounter(logging.Handler):
+    """Counts log lines that look like a provider rate limit. A proxy for retries, not an exact count."""
+
     def __init__(self):
         super().__init__()
         self.count = 0
 
     def emit(self, record):
-        msg = record.getMessage()
-        if "429" in msg or "Rate limit" in msg or "RESOURCE_EXHAUSTED" in msg:
+        if _RATE_LIMITED.search(record.getMessage()):
             self.count += 1
 
 # Run-validity thresholds (R7.B3): a run whose evidence layer was dead measures the outage,
@@ -341,6 +347,7 @@ async def run_evaluation(
                         "warnings": res["confidence"].get("warnings", []),
                         "adversarial_safe": adversarial_safe,
                         "external_calls": claim_calls,
+                    "replay_misses": replay.claim_misses(),
                         "processing_time_ms": proc_time,
                         "status": "PASS" if adversarial_safe else "FAIL",
                         "trace_audit": {
@@ -428,6 +435,7 @@ async def run_evaluation(
                     "source_dataset": item.get("source_dataset", "curated"),
                     "sources_count": len(sources),
                     "external_calls": claim_calls,
+                    "replay_misses": replay.claim_misses(),
                     "processing_time_ms": proc_time,
                     "status": "PASS",
                     "trace_audit": {
@@ -493,6 +501,9 @@ async def run_evaluation(
             "p50": calls_p50,
             "max": max(verifiable_calls) if verifiable_calls else 0,
         }
+        if replay_mode == "live":
+            # Live mode installs no counting wrappers, so a tally of zero would be a made-up figure.
+            calls_summary = {"mean": None, "p50": None, "max": None, "note": "not counted in live mode"}
 
         # 1. Compute MAE
         mae = compute_mae(verifiable_preds, verifiable_targets)
@@ -638,7 +649,10 @@ async def run_evaluation(
             print(f"  • Latency (verifiable n={len(verifiable_latencies)}): p50={fmt(latency_summary.get('p50_ms'), '{:.1f}')}ms p95={fmt(latency_summary.get('p95_ms'), '{:.1f}')}ms (429 retries: {rate_limit_counter.count})")
         else:
             print(f"  • Latency:                     not measured (replay timings)")
-        print(f"  • External Calls / Claim:      mean={calls_summary['mean']:.1f} p50={calls_summary['p50']:.1f} max={calls_summary['max']} (by provider: {replay.calls_by_provider})")
+        if calls_summary["mean"] is None:
+            print(f"  • External Calls / Claim:      {calls_summary['note']}")
+        else:
+            print(f"  • External Calls / Claim:      mean={calls_summary['mean']:.1f} p50={calls_summary['p50']:.1f} max={calls_summary['max']} (by provider: {replay.calls_by_provider})")
         print(f"  • Calibration Monotonic:       {calib['monotonic'] if calib['monotonic'] is not None else 'not evaluable (too few populated bins)'}")
         print(f"  • Opinion Rejection Rate:      {summary['opinion_rejection_rate']*100:.1f}% ({opinion_rejections}/{total_opinions})")
         print(f"  • Adversarial Defense Rate:    {summary['adversarial_handling_rate']*100:.1f}% ({adversarial_handled}/{total_adversarial}, errors: {adversarial_errors})")

@@ -108,3 +108,32 @@ def test_trajectory_and_degradation_trace_failures_are_guardrail_failures(check)
     )
     assert status == STATUS_GUARDRAIL_FAIL
     assert any(check in r for r in reasons)
+
+
+# --- rate-limit counter and live-mode honesty (N5, N6) ---------------------------------------------
+
+import logging
+
+
+@pytest.mark.parametrize("message,counted", [
+    ("HTTP 429 Too Many Requests", True),
+    ("google.genai.errors.ClientError: 429 RESOURCE_EXHAUSTED", True),
+    ("Rate limit reached for model", True),
+    ("done, timings_ms={'crossref': 14290}", False),
+    ("DEGRADED after 4290 ms", False),
+    ("fetched https://example.com/a-4291", False),
+])
+def test_rate_limit_counter_only_counts_rate_limit_lines(message, counted):
+    counter = re_mod.RateLimitCounter()
+    counter.emit(logging.LogRecord("x", logging.WARNING, __file__, 1, message, (), None))
+    assert counter.count == (1 if counted else 0)
+
+
+async def test_live_mode_does_not_report_a_made_up_call_tally(tmp_path, dataset, monkeypatch):
+    async def fake_verify(text, bypass_cache=True):
+        return _response()
+
+    monkeypatch.setattr(re_mod, "verify_claim", fake_verify)
+    report = await run_evaluation(dataset_paths=[dataset], output_path=tmp_path / "out.json", replay_mode="live")
+    calls = report["summary"]["external_calls_per_claim"]
+    assert calls["mean"] is None and calls["p50"] is None and "not counted" in calls["note"]
