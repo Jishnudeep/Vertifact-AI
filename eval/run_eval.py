@@ -187,6 +187,16 @@ def _tool_calls(replay: EvidenceReplay, claim_id: str) -> Optional[Dict[str, int
     return counts
 
 
+def dataset_sha256(paths: List[Path]) -> str:
+    """Hash of the dataset CONTENT, not its bytes: the same labels hash the same on CRLF and LF checkouts."""
+    digest = hashlib.sha256()
+    for path in paths:
+        with open(path, "r", encoding="utf-8") as f:
+            raw_claims = json.load(f)
+        digest.update(json.dumps(raw_claims, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8"))
+    return digest.hexdigest()
+
+
 async def run_evaluation(
     dataset_paths: Optional[List[Path]] = None,
     output_path: Path = BASE_DIR / "eval" / "results" / "baseline_run.json",
@@ -213,13 +223,10 @@ async def run_evaluation(
                          "whatever backend/app/.env sets and the recording does not say what produced it.")
     dataset_paths = dataset_paths or [BASE_DIR / "eval" / "datasets" / "curated_claims_seed.json"]
     claims_data: List[Dict[str, Any]] = []
-    dataset_hash = hashlib.sha256()
     for path in dataset_paths:
         logger.info(f"Loading evaluation dataset from {path}...")
         with open(path, "r", encoding="utf-8") as f:
             raw_claims = json.load(f)
-        # Hash the content, not the bytes: the same labels must hash the same on CRLF and LF checkouts.
-        dataset_hash.update(json.dumps(raw_claims, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8"))
         claims_data.extend(EvalClaim(**raw).model_dump() for raw in raw_claims)
 
     if offset > 0 or limit is not None:
@@ -581,7 +588,7 @@ async def run_evaluation(
                 "node_timeouts": {n.name: n.timeout for n, _, _, _ in AGENT_NODES},
                 "timeouts_pinned": timeouts_pinned,
             },
-            "dataset_sha256": dataset_hash.hexdigest(),
+            "dataset_sha256": dataset_sha256(dataset_paths),
             "run_status_reasons": run_status_reasons,
             # Kept for backward compatibility with existing baseline_run.json consumers
             "invalid_reasons": run_status_reasons,
