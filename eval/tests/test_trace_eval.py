@@ -201,3 +201,51 @@ def test_adk_eval_export():
             report = audit_trace(case["verify_response"], claim_type=case.get("claim_type", "verifiable"))
             assert report.passed, f"Trace audit failed for {case['eval_case_id']}: {report.failures}"
 
+
+
+def _real_crossref_result():
+    """A CrossRefResult built by the real finalize(): one read page and one unread rated outlet."""
+    from app.agents import crossref_agent as cr
+    from app.services.bias_lookup import get_bias_label, load_bias_ratings
+
+    load_bias_ratings()
+    redirect = "https://vertexaisearch.cloud.google.com/grounding-api-redirect/abc"
+
+    def record(domain, url, stance):
+        return {"domain": domain, "url": url, "title": "T", "publisher": domain,
+                "bias_label": get_bias_label(domain), "stance": stance,
+                "stance_confidence": 0.9 if stance else None, "is_claimreview": False}
+
+    cov = cr.Coverage(batches=[[record("reuters.com", "https://www.reuters.com/a", "supports"),
+                                record("foxnews.com", redirect, None)]], calls=1, answered=1)
+    return cr.finalize([], cov)
+
+
+async def _verify_with_real_crossref_sources():
+    cr_result = _real_crossref_result()
+    fc = make_neutral_factcheck(degraded=False)
+    ling = LinguisticResult(
+        clickbait_syntax=0.0, emotional_framing=0.0, sensationalism=0.0,
+        informational_density=1.0, b_ling_score=0.0, degraded=False
+    )
+    with patch("app.agents.orchestrator.generate_embedding", return_value=[0.1] * 384), \
+         patched_agents(fc=AsyncMock(return_value=fc), cr=AsyncMock(return_value=cr_result),
+                        ling=AsyncMock(return_value=ling)):
+        return await verify_claim("NASA announces Mars landing", bypass_cache=True)
+
+
+@pytest.mark.anyio
+async def test_real_crossref_sources_pass_the_bias_audit_even_when_unread():
+    result = await _verify_with_real_crossref_sources()
+    domains = {s["domain"] for s in result["sources"]}
+    assert domains == {"reuters.com", "foxnews.com"}, "an unread source must keep its grounding domain"
+    report = audit_trace(result, claim_type="verifiable")
+    assert report.checks["bias_from_allsides"], report.failures
+
+
+@pytest.mark.anyio
+async def test_real_response_with_a_tampered_bias_label_fails_the_audit():
+    result = await _verify_with_real_crossref_sources()
+    fox = next(s for s in result["sources"] if s["domain"] == "foxnews.com")
+    fox["bias_label"] = "Left" if fox["bias_label"] != "Left" else "Right"
+    assert "bias_from_allsides" in audit_trace(result, claim_type="verifiable").failures
