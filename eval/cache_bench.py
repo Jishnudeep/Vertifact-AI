@@ -65,6 +65,9 @@ def load_pairs(path: Path | str) -> tuple[List[Dict[str, str]], List[Dict[str, s
     ids = [p.get("id") for p in pairs]
     if len(pairs) < MIN_SERVED_PAIRS or len(set(ids)) != len(ids):
         raise BenchInputError(f"{path}: need >= {MIN_SERVED_PAIRS} pairs with unique ids, got {len(pairs)}.")
+    claims = [p.get("claim") for p in pairs]
+    if len(set(claims)) != len(claims):
+        raise BenchInputError(f"{path}: two pairs share the same claim text; seeding is keyed by claim.")
     for p in pairs:
         if not (p.get("claim") and p.get("paraphrase")) or p["claim"] == p["paraphrase"]:
             raise BenchInputError(f"{path}: pair {p.get('id')!r} needs a claim and a different paraphrase.")
@@ -189,6 +192,28 @@ def _check_database(confirm_db: Optional[str]) -> None:
             f"project it may use (got {confirm_db!r}).")
 
 
+def _check_evidence_cache(cache_dir: Path | str) -> None:
+    """Refuse before any write if the evidence cache is missing or empty: every claim would miss."""
+    path = Path(cache_dir)
+    if not path.is_dir() or not any(path.glob("*.json")):
+        raise BenchInputError(f"No recorded evidence in {path}. Run the record run first (or pass --evidence-cache).")
+
+
+async def drain_persist_tasks(timeout_s: float = 30.0) -> int:
+    """
+    Wait for verify_claim's background persist writes. It stops waiting at the request deadline and lets
+    the write finish on its own, so cleanup must not run until those writes have landed.
+    Returns the number still running after the timeout.
+    """
+    from app.agents import orchestrator
+
+    pending = {t for t in getattr(orchestrator, "_background_tasks", ()) if not t.done()}
+    if pending:
+        await asyncio.wait(pending, timeout=timeout_s)
+        pending = {t for t in pending if not t.done()}
+    return len(pending)
+
+
 class SeedResult(NamedTuple):
     claim_id: Optional[str]
     reason: Optional[str]       # why no row was seeded for this claim (None when claim_id is set)
@@ -219,25 +244,30 @@ async def seed_via_replay(
     original_insert = orchestrator.insert_cache
 
     async def tagged_insert(**kwargs: Any) -> Optional[str]:
+        if replay.claim_misses():
+            # Evidence was missing for this claim: never write a row built from incomplete evidence.
+            logger.error("replay miss: refusing to persist a seed row for %r", kwargs.get("extracted_claim"))
+            return None
         kwargs["raw_input"] = f"{_tag(bench_run_id)} {kwargs['raw_input']}"
         return await original_insert(**kwargs)
 
     results: Dict[str, SeedResult] = {}
-    replay.install()
-    orchestrator.insert_cache = tagged_insert
     try:
+        replay.install()
+        orchestrator.insert_cache = tagged_insert
         for text in texts:
             replay.reset_claim_counts(text)
             try:
-                response = await verify(text, bypass_cache=False)
+                response: Optional[Dict[str, Any]] = await verify(text, bypass_cache=False)
             except AllAgentsFailedError:
-                results[text] = SeedResult(None, "every agent failed")
-                continue
+                response = None
             if replay.claim_misses():
                 raise BenchInputError(
                     f"Replay miss while seeding {text!r}: that claim is not in the evidence cache "
                     f"({replay.claim_misses()} missing call(s)). Pairs must be claims the record run recorded.")
-            if response.get("cached"):
+            if response is None:
+                results[text] = SeedResult(None, "every agent failed")
+            elif response.get("cached"):
                 results[text] = SeedResult(None, "already served from the cache (not a row the bench seeded)")
             elif not response.get("id"):
                 results[text] = SeedResult(None, "the pipeline did not persist a row")
@@ -305,6 +335,8 @@ async def run_cache_benchmark(
     _check_database(confirm_db)
     if len(pairs) < MIN_SERVED_PAIRS:
         raise BenchInputError(f"Need >= {MIN_SERVED_PAIRS} pairs (use load_pairs / --pairs), got {len(pairs)}.")
+    if replay is None:
+        _check_evidence_cache(evidence_cache)
 
     if supabase is None:
         from app.db.connection import get_supabase
@@ -337,11 +369,14 @@ async def run_cache_benchmark(
             if own[p["id"]]:
                 exact[p["id"]] = await _timed_lookup(p["claim"], embed_async, lookup, seeded_ids, own[p["id"]])
         served = [p for p in pairs if exact.get(p["id"], {}).get("hit")]
-        not_served = [
-            {"id": p["id"],
-             "reason": seeds[p["claim"]].reason or "seeded, but the cache did not serve it for its exact claim"}
-            for p in pairs if p not in served
-        ]
+        def why_not_served(p: Dict[str, str]) -> str:
+            if seeds[p["claim"]].reason:
+                return seeds[p["claim"]].reason
+            if exact.get(p["id"], {}).get("wrong_row_hit"):
+                return "the cache served another seeded row for its exact claim"
+            return "seeded, but the cache did not serve it for its exact claim"
+
+        not_served = [{"id": p["id"], "reason": why_not_served(p)} for p in pairs if p not in served]
         if len(served) < MIN_SERVED_PAIRS:
             raise BenchInputError(
                 f"Only {len(served)} of {len(pairs)} seeded rows are served by the cache (need >= "
@@ -396,7 +431,6 @@ async def run_cache_benchmark(
 
         print(f"\nCache benchmark complete! Results saved to {out_path}")
         print(f"  - Pairs served by the cache: {len(served)}/{len(pairs)}")
-        print(f"  - Exact hit rate:       {full_report['exact_lookups']['hits']}/{len(served)}")
         print(f"  - Paraphrase hit rate:  {full_report['paraphrase_lookups']['hits']}/{len(served)}")
         print(f"  - Negation/number false positives: {false_positives}/{len(neg)} (must be 0)")
         print(f"  - Hit p50/p95:          {summary['hit_p50_ms']} / {summary['hit_p95_ms']} ms "
@@ -404,6 +438,11 @@ async def run_cache_benchmark(
         print(f"  - Target (hit p95 < 10% of live p50): {summary['target_met']}")
         return full_report
     finally:
+        still_running = await drain_persist_tasks()
+        if still_running:
+            logger.error("%d background persist write(s) still running; a tagged row may remain. "
+                         "Run `python eval/cache_bench.py --sweep --confirm-db %s` afterwards.",
+                         still_running, _db_host())
         print(f"Cleaning up bench rows (run id: {bench_run_id})...")
         try:
             deleted = cleanup_bench_rows(supabase, bench_run_id, created_claim_ids)

@@ -40,6 +40,16 @@ def test_load_pairs_rejects_a_paraphrase_identical_to_the_claim(tmp_path):
         load_pairs(path)
 
 
+def test_load_pairs_rejects_duplicate_claim_texts(tmp_path):
+    import json
+    path = _pairs_file(tmp_path)
+    data = json.loads(path.read_text(encoding="utf-8"))
+    data["pairs"][4]["claim"] = data["pairs"][2]["claim"]
+    path.write_text(json.dumps(data), encoding="utf-8")
+    with pytest.raises(BenchInputError, match="same claim"):
+        load_pairs(path)
+
+
 def test_load_pairs_rejects_a_negative_of_an_unknown_pair(tmp_path):
     path = _pairs_file(tmp_path, negatives=[{"id": "n0", "of": "nope", "text": "x"}])
     with pytest.raises(BenchInputError, match="n0"):

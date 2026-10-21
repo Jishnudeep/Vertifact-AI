@@ -194,6 +194,28 @@ async def test_pairs_the_cache_does_not_serve_are_excluded_and_reported(tmp_path
     assert report["exact_lookups"]["n"] == len(PAIRS) - 2
 
 
+async def test_a_pair_served_by_another_pairs_row_is_not_counted_as_served(tmp_path):
+    def hits(text, ids):
+        if text == PAIRS[5]["claim"]:
+            return {"claim_id": ids[6]}                 # the exact claim of p5 returns p6's row
+        return _serves_all(text, ids)
+
+    report = await run_cache_benchmark(**FakeBench(hits_for=hits).kwargs(tmp_path))
+    assert report["pairs_served"] == len(PAIRS) - 1
+    assert report["pairs_not_served"] == [{"id": "p5", "reason": "the cache served another seeded row for its exact claim"}]
+
+
+async def test_a_negative_that_hits_a_foreign_row_is_not_a_false_positive(tmp_path):
+    texts = {n["text"] for n in NEGATIVES}
+
+    def hits(text, ids):
+        return {"claim_id": "somebody-elses-row"} if text in texts else _serves_all(text, ids)
+
+    report = await run_cache_benchmark(**FakeBench(hits_for=hits).kwargs(tmp_path))
+    assert report["negative_lookups"]["false_positives"] == 0
+    assert report["negative_lookups"]["foreign_hits_ignored"] == len(NEGATIVES)
+
+
 async def test_negatives_of_unserved_pairs_are_not_probed(tmp_path):
     def hits(text, ids):
         return None if text == PAIRS[0]["claim"] else _serves_all(text, ids)
@@ -219,6 +241,114 @@ async def test_any_replay_miss_aborts_the_bench_and_still_cleans_up(tmp_path):
         await run_cache_benchmark(**bench.kwargs(tmp_path))
     assert bench.replay.uninstalled == 1
     assert bench.supabase.table.return_value.delete.called
+
+
+async def test_a_miss_while_seeding_aborts_even_when_every_agent_failed():
+    from app.agents.orchestrator import AllAgentsFailedError
+
+    async def failed(text, bypass_cache=True):
+        raise AllAgentsFailedError("all failed")
+
+    replay = FakeReplay(misses_for={"a claim"})
+    with pytest.raises(BenchInputError, match="Replay miss"):
+        await seed_via_replay(["a claim"], "abc12345", "unused", verify=failed, replay=replay)
+
+
+async def test_no_row_is_written_for_a_claim_that_had_a_replay_miss(monkeypatch):
+    from app.agents import orchestrator
+
+    recorded = []
+
+    async def recorder(**kwargs):
+        recorded.append(kwargs)
+        return "claim-1"
+
+    monkeypatch.setattr(orchestrator, "insert_cache", recorder)
+
+    async def pipeline(text, bypass_cache=True):
+        cid = await orchestrator.insert_cache(raw_input=text, extracted_claim=text, embedding=[0.2])
+        return {"id": cid, "cached": False}
+
+    with pytest.raises(BenchInputError, match="Replay miss"):
+        await seed_via_replay(["a claim"], "abc12345", "unused", verify=pipeline,
+                              replay=FakeReplay(misses_for={"a claim"}))
+    assert recorded == [], "a row built from incomplete evidence must never be persisted"
+
+
+async def test_the_tag_survives_a_background_persist_that_outlives_the_call(monkeypatch):
+    """verify_claim stops waiting at its deadline and lets the write finish: the coroutine is created
+    while the wrapper is installed, so it keeps the tag even after the patch is restored."""
+    import asyncio
+    from app.agents import orchestrator
+
+    recorded = []
+    tasks = []
+
+    async def recorder(**kwargs):
+        recorded.append(kwargs)
+        return "claim-1"
+
+    monkeypatch.setattr(orchestrator, "insert_cache", recorder)
+
+    async def pipeline(text, bypass_cache=True):
+        tasks.append(asyncio.create_task(orchestrator.insert_cache(raw_input=text, extracted_claim=text,
+                                                                   embedding=[0.2])))
+        return {"id": None, "cached": False}                       # returned before the write finished
+
+    await seed_via_replay(["a claim"], "abc12345", "unused", verify=pipeline, replay=FakeReplay())
+    await asyncio.gather(*tasks)
+    assert recorded[0]["raw_input"].startswith("[bench:abc12345]")
+
+
+async def test_orchestrator_resolves_insert_cache_as_a_module_global():
+    """The seam: if verify_claim switched to cache.insert_cache(...) the bench would write untagged rows."""
+    import inspect
+    from app.agents import orchestrator
+
+    source = inspect.getsource(orchestrator.verify_claim)
+    assert "asyncio.create_task(insert_cache(" in source
+    assert "cache.insert_cache" not in source
+
+
+async def test_cleanup_waits_for_background_persist_writes(tmp_path, monkeypatch):
+    import asyncio
+    from app.agents import orchestrator
+
+    order = []
+    release = asyncio.Event()
+
+    async def slow_write():
+        await release.wait()
+        order.append("write-landed")
+
+    task = asyncio.create_task(slow_write())
+    monkeypatch.setattr(orchestrator, "_background_tasks", {task}, raising=False)
+
+    real_cleanup = cache_bench.cleanup_bench_rows
+
+    def spy(*args, **kwargs):
+        order.append("cleanup")
+        return real_cleanup(*args, **kwargs)
+
+    monkeypatch.setattr(cache_bench, "cleanup_bench_rows", spy)
+    bench = FakeBench(hits_for=_serves_all)
+    asyncio.get_running_loop().call_later(0.05, release.set)
+    await run_cache_benchmark(**bench.kwargs(tmp_path))
+    assert order == ["write-landed", "cleanup"]
+
+
+async def test_a_missing_or_empty_evidence_cache_is_refused_before_anything_is_written(tmp_path):
+    bench = FakeBench()
+    kwargs = bench.kwargs(tmp_path)
+    kwargs.pop("replay")
+    kwargs["evidence_cache"] = tmp_path / "no_such_dir"
+    with pytest.raises(BenchInputError, match="No recorded evidence"):
+        await run_cache_benchmark(**kwargs)
+    (tmp_path / "empty").mkdir()
+    kwargs["evidence_cache"] = tmp_path / "empty"
+    with pytest.raises(BenchInputError, match="No recorded evidence"):
+        await run_cache_benchmark(**kwargs)
+    assert bench.verified == []
 
 
 async def test_a_claim_already_served_from_the_cache_is_not_a_seeded_row():
