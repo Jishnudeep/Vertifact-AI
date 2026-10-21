@@ -174,8 +174,6 @@ def get_instruction(today: Optional[str] = None) -> str:
     return f"Today's date is {today_str} (UTC). Published fact-checks before this date are past events.\n\n{BASE_INSTRUCTION}"
 
 
-INSTRUCTION = get_instruction()
-
 
 # --- tools (closures over this run's evidence) --------------------------------------------------
 

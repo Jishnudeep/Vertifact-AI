@@ -40,14 +40,22 @@ class GroundedSearchBlocked(RuntimeError):
 
 # `thinking_level` exists only on Gemini 3 models; Gemini 2.5 rejects it with HTTP 400
 # ("Thinking level is not supported for this model"), which broke grounded search in the 2026-10-21 bench.
-_THINKING_LEVEL_MODEL = re.compile(r"^(models/)?gemini-3")
+_THINKING_LEVEL_MODEL = re.compile(r"(^|/)gemini-3")
+_warned_thinking_dropped: set = set()
 
 
 def thinking_content_config(
     model_id: Optional[str], level: str
 ) -> Optional[types.GenerateContentConfig]:
     """ThinkingConfig for `model_id`, or None when the model does not accept `thinking_level`."""
-    if not model_id or not _THINKING_LEVEL_MODEL.match(model_id):
+    model = (model_id or "").strip().lower()
+    if not _THINKING_LEVEL_MODEL.search(model):
+        if model and model not in _warned_thinking_dropped:
+            _warned_thinking_dropped.add(model)
+            logger.warning(
+                "thinking_level=%s not sent: model %r is not a Gemini 3 model (it would be rejected with HTTP 400)",
+                level, model_id,
+            )
         return None
     return types.GenerateContentConfig(thinking_config=types.ThinkingConfig(thinking_level=level))
 

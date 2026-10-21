@@ -1,9 +1,11 @@
 import os
 from functools import lru_cache
 from pathlib import Path
-from typing import List
+from typing import List, Literal
 from pydantic import Field, AliasChoices
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+ThinkingLevelName = Literal["MINIMAL", "LOW", "MEDIUM", "HIGH"]  # a typo in .env fails at boot
 
 class Settings(BaseSettings):
     supabase_url: str = Field(default="", validation_alias=AliasChoices("SUPABASE_URL"))
@@ -54,11 +56,11 @@ class Settings(BaseSettings):
     # when its module is imported. TBD from benchmarking.
     agent_timeout_s: float = 30.0
 
-    # Thinking levels for Gemini 3.1 models (MINIMAL, LOW, MEDIUM, HIGH).
+    # Thinking levels, sent only to Gemini 3 models (others reject thinking_level and run at the provider default).
     # Spec: docs/superpowers/specs/2026-10-20-latency-thinking-budgets.md
-    factcheck_thinking_level: str = "LOW"
-    crossref_thinking_level: str = "LOW"
-    grounded_search_thinking_level: str = "MINIMAL"
+    factcheck_thinking_level: ThinkingLevelName = "LOW"
+    crossref_thinking_level: ThinkingLevelName = "LOW"
+    grounded_search_thinking_level: ThinkingLevelName = "MINIMAL"
 
     # Per-agent model turn caps derived from worst legitimate paths + 1-turn headroom.
     # Exceeding the cap raises AgentTurnLimitExceeded and degrades the agent gracefully.

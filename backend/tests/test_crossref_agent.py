@@ -327,8 +327,12 @@ def test_neutral_degraded_result_is_zero():
     assert neutral.v_consensus_score == 0.0 and neutral.v_refute_score == 0.0
 
 
-def test_crossref_instruction_prioritizes_single_search_wording():
-    """Cross-Ref instruction must prioritize a single search; second search only if zero reputable sources."""
+def test_crossref_instruction_keeps_contradicting_coverage_search():
+    """The optional second search (few sources, one side, contradicting coverage) feeds V_refute; keep it.
+
+    A "single search by default" rewrite was reverted: it was never measured and can lower V_refute.
+    """
     instruction = cr.BASE_INSTRUCTION
-    assert "If and only if the first search returned zero reputable sources" in instruction
-    assert "few sources or only one side" not in instruction
+    assert "few sources or only one side" in instruction
+    assert "contradicting coverage" in instruction
+    assert "Never a third time" in instruction

@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from google.adk.agents.callback_context import CallbackContext
+from google.adk.agents.context import Context
 from google.adk.models.llm_request import LlmRequest
 from google.genai import types
 
@@ -141,55 +142,63 @@ async def test_supervisor_degrades_gracefully_on_turn_cap_exceeded(monkeypatch):
         assert fc_agent["error_code"] == "TURN_LIMIT"
 
 
-def test_agents_thinking_config():
-    """Verify thinking config on LlmAgents matches settings."""
-    s = get_settings()
-
-    # Fact-check agent
-    ev_fc = fc.Evidence()
-    tools_fc = fc.build_tools("claim", ev_fc)
-    agent_fc = fc.LlmAgent(
-        name="factcheck_judge",
-        model=common.get_model(),
-        instruction=fc.get_instruction(),
-        tools=tools_fc,
-        output_schema=fc.FactCheckDecision,
-        generate_content_config=types.GenerateContentConfig(
-            thinking_config=types.ThinkingConfig(
-                thinking_level=s.factcheck_thinking_level
-            )
-        ),
-        **common.agent_kwargs(),
-    )
-    assert agent_fc.generate_content_config.thinking_config.thinking_level == types.ThinkingLevel.LOW
-
-    # Cross-ref agent
-    cov_cr = cr.Coverage()
-    tools_cr = cr.build_tools("claim", cov_cr)
-    agent_cr = cr.LlmAgent(
-        name="crossref_searcher",
-        model=common.get_model(),
-        instruction=cr.get_instruction(),
-        tools=tools_cr,
-        output_schema=cr.CoverageSummary,
-        generate_content_config=types.GenerateContentConfig(
-            thinking_config=types.ThinkingConfig(
-                thinking_level=s.crossref_thinking_level
-            )
-        ),
-        **common.agent_kwargs(),
-    )
-    assert agent_cr.generate_content_config.thinking_config.thinking_level == types.ThinkingLevel.LOW
-
-    # Grounded search runner (pin a Gemini 3 model: a local .env may select a 2.5 model)
+def test_grounded_runner_thinking_config_matches_settings():
     adk_helpers._grounded_runner_cache.clear()
-    with patch.object(adk_helpers.settings, "search_model_id", "gemini-3.1-flash-lite"):
-        runner = adk_helpers.get_grounded_runner("coverage", "search instruction")
-    assert runner.agent.generate_content_config.thinking_config.thinking_level == types.ThinkingLevel.MINIMAL
-    adk_helpers._grounded_runner_cache.clear()
+    try:
+        # Pin a Gemini 3 model: a local .env may select a 2.5 search model.
+        with patch.object(adk_helpers.settings, "search_model_id", "gemini-3.1-flash-lite"),                 patch.object(adk_helpers.settings, "grounded_search_thinking_level", "MINIMAL"):
+            runner = adk_helpers.get_grounded_runner("coverage", "search instruction")
+        assert runner.agent.generate_content_config.thinking_config.thinking_level == types.ThinkingLevel.MINIMAL
+    finally:
+        adk_helpers._grounded_runner_cache.clear()
 
 
-@pytest.mark.parametrize("model_id", ["gemini-3.1-flash-lite", "gemini-3-pro-preview", "models/gemini-3.1-flash-lite"])
+async def _agent_built_by(analyze, ctx_agent_output, monkeypatch, *args):
+    """Run the real analyze() with a fake ctx.run_node and return the LlmAgent it built."""
+    built = {}
+
+    async def fake_run_node(agent, input_text, *a, **kw):
+        built["agent"] = agent
+        return ctx_agent_output
+
+    ctx = AsyncMock(spec=Context)
+    ctx.run_node = AsyncMock(side_effect=fake_run_node)
+    await analyze(ctx, "Test claim", *args)
+    return built["agent"]
+
+
+@pytest.mark.parametrize(
+    "model_id,expected",
+    [("gemini-3.1-flash-lite", types.ThinkingLevel.LOW), ("gemini-2.5-flash-lite", None)],
+)
+async def test_factcheck_node_wires_thinking_config(monkeypatch, model_id, expected):
+    """analyze() must pass the guarded thinking config to the real LlmAgent it builds."""
+    monkeypatch.setattr(fc, "finalize", lambda claim, decision, ev: fc.make_neutral_factcheck())
+    decision = fc.FactCheckDecision(evidence="none", relevant=False, rating="unproven", explanation="t")
+    with patch.object(fc.settings, "model_id", model_id),             patch.object(fc.settings, "factcheck_thinking_level", "LOW"):
+        agent = await _agent_built_by(fc.analyze, decision, monkeypatch)
+    cfg = agent.generate_content_config
+    level = cfg.thinking_config.thinking_level if cfg and cfg.thinking_config else None
+    assert level == expected
+
+
+@pytest.mark.parametrize(
+    "model_id,expected",
+    [("gemini-3.1-flash-lite", types.ThinkingLevel.LOW), ("gemini-2.5-flash-lite", None)],
+)
+async def test_crossref_node_wires_thinking_config(monkeypatch, model_id, expected):
+    monkeypatch.setattr(cr, "_extract_entities", lambda claim: [])
+    monkeypatch.setattr(cr, "finalize", lambda entities, cov: cr.make_neutral_crossref())
+    with patch.object(cr.settings, "model_id", model_id),             patch.object(cr.settings, "crossref_thinking_level", "LOW"):
+        agent = await _agent_built_by(cr.analyze, cr.CoverageSummary(queries_rationale="t"), monkeypatch)
+    cfg = agent.generate_content_config
+    level = cfg.thinking_config.thinking_level if cfg and cfg.thinking_config else None
+    assert level == expected
+
+
+@pytest.mark.parametrize("model_id", ["gemini-3.1-flash-lite", "gemini-3-pro-preview", "models/gemini-3.1-flash-lite",
+                                      "projects/p/locations/l/publishers/google/models/gemini-3.1-flash-lite",
+                                      "  Gemini-3.1-Flash-Lite "])
 def test_thinking_config_sent_to_gemini_3_models(model_id):
     cfg = adk_helpers.thinking_content_config(model_id, "LOW")
     assert cfg is not None
@@ -213,12 +222,18 @@ def test_grounded_runner_omits_thinking_config_for_gemini_25_search_model():
         adk_helpers._grounded_runner_cache.clear()
 
 
-def test_worker_agents_omit_thinking_config_for_gemini_25_model():
-    with patch.object(fc.settings, "model_id", "gemini-2.5-flash-lite"):
-        assert fc.build_generate_content_config() is None
-    with patch.object(cr.settings, "model_id", "gemini-2.5-flash-lite"):
-        assert cr.build_generate_content_config() is None
-    with patch.object(fc.settings, "model_id", "gemini-3.1-flash-lite"):
-        assert fc.build_generate_content_config().thinking_config.thinking_level == types.ThinkingLevel.LOW
-    with patch.object(cr.settings, "model_id", "gemini-3.1-flash-lite"):
-        assert cr.build_generate_content_config().thinking_config.thinking_level == types.ThinkingLevel.LOW
+def test_dropped_thinking_level_is_logged_once(caplog):
+    adk_helpers._warned_thinking_dropped.clear()
+    with caplog.at_level("WARNING", logger=adk_helpers.logger.name):
+        adk_helpers.thinking_content_config("gemini-2.5-flash-lite", "LOW")
+        adk_helpers.thinking_content_config("gemini-2.5-flash-lite", "LOW")
+    assert len([r for r in caplog.records if "not sent" in r.getMessage()]) == 1
+
+
+def test_invalid_thinking_level_fails_at_settings_load():
+    from pydantic import ValidationError
+
+    from app.config import Settings
+
+    with pytest.raises(ValidationError):
+        Settings(factcheck_thinking_level="TURBO")
