@@ -328,10 +328,29 @@ def _parse_args(argv=None):
     parser.add_argument("--delay", type=float, default=6.0,
                         help="Seconds to pause between claims (provider rate limits).")
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
-    return parser.parse_args(argv)
+    parser.add_argument("--live", action="store_true",
+                        help="Required. Confirms you accept spending live Gemini quota (about 8 requests per claim).")
+    args = parser.parse_args(argv)
+    if not args.live:
+        parser.error(f"refusing to run without --live: {estimated_requests(args.n)} requests of free-tier quota "
+                     "(500 RPD) would be spent.")
+    return args
+
+
+REQUESTS_PER_CLAIM = 8      # cold claim, bench 2026-10-20
+
+
+def estimated_requests(n: int) -> int:
+    return REQUESTS_PER_CLAIM * n
+
+
+def print_estimate(n: int) -> None:
+    print(f"latency_bench will spend about {estimated_requests(n)} Gemini requests "
+          f"({REQUESTS_PER_CLAIM} per claim x {n}) of the 500 requests/day free-tier cap.")
 
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
     args = _parse_args()
+    print_estimate(args.n)
     asyncio.run(run_bench(args.dataset, args.n, args.delay, args.output))
