@@ -137,3 +137,14 @@ async def test_live_mode_does_not_report_a_made_up_call_tally(tmp_path, dataset,
     report = await run_evaluation(dataset_paths=[dataset], output_path=tmp_path / "out.json", replay_mode="live")
     calls = report["summary"]["external_calls_per_claim"]
     assert calls["mean"] is None and calls["p50"] is None and "not counted" in calls["note"]
+
+
+def test_tool_caps_are_not_evaluable_when_a_claim_has_model_calls_but_no_transcript(tmp_path):
+    from eval.replay import EvidenceReplay
+
+    replay = EvidenceReplay(tmp_path, "record")
+    replay.reset_claim_counts("c1")
+    replay._record_provider_call("llm")          # the model was called, yet no transcript entry exists
+    assert re_mod._tool_calls(replay, "c1") is None
+    replay.leaf_transcript.append({"claim_id": "c1", "name": "factcheck_judge", "tool_responses": []})
+    assert re_mod._tool_calls(replay, "c1") == {}

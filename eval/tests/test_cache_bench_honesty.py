@@ -208,3 +208,12 @@ def test_sweep_removes_every_leftover_bench_row():
     table.delete.return_value.like.return_value.execute.return_value = MagicMock(data=[{"id": "a"}, {"id": "b"}])
     assert cache_bench.sweep_bench_rows(supabase) == 2
     table.delete.return_value.like.assert_called_once_with("raw_input", "[bench:%")
+
+
+async def test_seed_rows_claim_no_certainty(tmp_path):
+    bench = FakeBench()
+    await run_cache_benchmark(**bench.kwargs(tmp_path))
+    for kwargs in bench.inserted:
+        assert kwargs["evidence_status"] == "unverified"
+        assert kwargs["c_total"] == 0.5 and kwargs["s_fact"] == 0.5 and kwargs["v_consensus"] == 0.0
+        assert kwargs["source_citations"] == []

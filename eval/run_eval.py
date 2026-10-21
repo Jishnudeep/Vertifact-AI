@@ -180,7 +180,11 @@ def _tool_calls(replay: EvidenceReplay, claim_id: str) -> Optional[Dict[str, int
     """Executed tool calls per tool for this claim, or None when no transcript is kept (live mode)."""
     if replay.mode == "live":
         return None
-    return tool_call_counts(replay.leaf_transcript, claim_id)
+    counts = tool_call_counts(replay.leaf_transcript, claim_id)
+    has_entries = any(e.get("claim_id") == claim_id for e in replay.leaf_transcript)
+    if replay.claim_counts()["llm"] > 0 and not has_entries:
+        return None                                 # model calls but no transcript: not evaluable, not "passed"
+    return counts
 
 
 async def run_evaluation(
@@ -347,7 +351,7 @@ async def run_evaluation(
                         "warnings": res["confidence"].get("warnings", []),
                         "adversarial_safe": adversarial_safe,
                         "external_calls": claim_calls,
-                    "replay_misses": replay.claim_misses(),
+                        "replay_misses": replay.claim_misses(),
                         "processing_time_ms": proc_time,
                         "status": "PASS" if adversarial_safe else "FAIL",
                         "trace_audit": {

@@ -79,7 +79,14 @@ def get_judge_model():
 
 
 def _judge_label(judge: Any) -> str:
-    return str(getattr(judge, "model_name", None) or getattr(judge, "model", None) or judge)
+    """The judge's model id. deepeval models keep it in `.name`; never fall back to an object repr."""
+    for attr in ("name", "model_name", "model"):
+        value = getattr(judge, attr, None)
+        if isinstance(value, str) and value:
+            return value
+    if callable(judge):                                   # a test fixture
+        return getattr(judge, "__name__", "callable-judge")
+    raise ValueError(f"cannot tell which judge model {judge!r} is; it must expose its id as .name")
 
 
 def _is_self_judging(judge: Any) -> bool:
@@ -214,6 +221,8 @@ def _score_items(
             logger.error("judge failed on %s: %s", row.get("id"), exc)
             row.update(faithfulness=None, hallucination=None, reason="",
                        judge_error=f"{type(exc).__name__}: {str(exc)[:200]}")
+        if "judge_error" not in row and (row["faithfulness"] is None or not math.isfinite(row["faithfulness"])):
+            row["judge_error"] = "judge returned no finite faithfulness score"
         row["flagged"] = is_flagged(row["faithfulness"])
         scored.append(row)
         if on_item:

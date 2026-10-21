@@ -148,3 +148,14 @@ def test_degradation_metric_fails_on_the_grader_instance_shape():
 def test_unparsable_instances_score_zero_on_every_metric(instance):
     _, metrics = _config_metrics()
     assert {name: fn(instance)["score"] for name, fn in metrics.items()} == {name: 0.0 for name in metrics}
+
+
+def test_a_claim_type_missing_from_the_grader_instance_scores_zero():
+    _, metrics = _config_metrics()
+    case = make_eval_case("c6", "claim", "adversarial", _resp(verdict_found=True))
+    instance = _grader_instance(case)
+    import json
+    body = json.loads(instance["response"]["parts"][0]["text"])
+    del body["_claim_type"]
+    instance["response"] = {"role": "model", "parts": [{"text": json.dumps(body)}]}
+    assert metrics["adversarial_no_verdict"](instance)["score"] == 0.0

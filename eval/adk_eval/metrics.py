@@ -71,7 +71,9 @@ def metric_adversarial_no_verdict(instance: Dict[str, Any]) -> Dict[str, Any]:
     resp = _get_response(instance)
     if resp is None:
         return {"score": 0.0}
-    claim_type = resp.get("_claim_type") or instance.get("claim_type", "verifiable")
+    claim_type = resp.get("_claim_type") or instance.get("claim_type")
+    if claim_type is None:
+        return {"score": 0.0}                       # cannot tell whether a verdict was forbidden: fail closed
     if claim_type == "adversarial":
         return {"score": 1.0 if check_adversarial_no_verdict(resp) else 0.0}
     return {"score": 1.0}

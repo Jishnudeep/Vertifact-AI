@@ -291,10 +291,10 @@ def _seed_row(bench_run_id: str, text: str, embedding: List[float]) -> Dict[str,
         raw_input=f"{_tag(bench_run_id)} {text}",
         extracted_claim=text,
         embedding=embedding,
-        c_total=0.9,
-        s_fact=1.0,
-        b_ling=0.1,
-        v_consensus=0.9,
+        c_total=0.5,
+        s_fact=0.5,
+        b_ling=0.5,
+        v_consensus=0.0,
         weights={"w1": 0.5, "w2": 0.2, "w3": 0.3},
         confidence_level="medium",
         agent_outputs={name: {"degraded": False, "note": "bench_seed"}
@@ -304,7 +304,7 @@ def _seed_row(bench_run_id: str, text: str, embedding: List[float]) -> Dict[str,
         processing_time_ms=0,
         warnings=["Benchmark seed row, not a real analysis."],
         v_refute=0.0,
-        evidence_status="corroborated",
+        evidence_status="unverified",
     )
 
 

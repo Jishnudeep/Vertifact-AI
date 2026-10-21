@@ -242,7 +242,7 @@ def test_faithfulness_metric_penalizes_ambiguous_claims_and_hallucination_skips_
 
     monkeypatch.setattr(dm, "FaithfulnessMetric", lambda **kw: Recorder("faithfulness", **kw), raising=False)
     monkeypatch.setattr(dm, "HallucinationMetric", lambda **kw: Recorder("hallucination", **kw), raising=False)
-    score_guardrail([_poisoned_item()], judge=object())
+    score_guardrail([_poisoned_item()], judge=type("J", (), {"name": "gemini/gemini-3.1-flash-lite"})())
     assert built["faithfulness"]["penalize_ambiguous_claims"] is True
     assert built["hallucination"]["include_reason"] is False
 
@@ -442,3 +442,49 @@ def test_leaf_skips_other_agents_and_non_final_turns(tmp_path):
 
 
 LEAF_NAME = "factcheck_judge"
+
+
+# --- re-gate: disclosure for the real judge class, missing scores count as judge errors ----------
+
+def test_judge_label_reads_the_name_deepeval_models_expose(monkeypatch):
+    from eval.deepeval_runner import _judge_label
+
+    class DeepEvalStyleModel:               # deepeval's LiteLLMModel keeps the id in `.name`; `.model` is None
+        name = "gemini/gemini-3.1-flash-lite"
+        model = None
+
+    assert _judge_label(DeepEvalStyleModel()) == "gemini/gemini-3.1-flash-lite"
+
+
+def test_judge_label_never_falls_back_to_an_object_repr():
+    from eval.deepeval_runner import _judge_label
+
+    with pytest.raises(ValueError, match="judge model"):
+        _judge_label(object())
+
+
+def test_self_judging_is_true_for_a_deepeval_style_judge(monkeypatch, fake_deepeval):
+    monkeypatch.setattr(settings, "model_id", "gemini-3.1-flash-lite")
+
+    class FakeMetric:
+        def __init__(self, **kwargs):
+            self.score, self.reason = 1.0, ""
+
+        def measure(self, test_case):
+            return 1.0
+
+    monkeypatch.setattr(fake_deepeval, "FaithfulnessMetric", FakeMetric, raising=False)
+    monkeypatch.setattr(fake_deepeval, "HallucinationMetric", FakeMetric, raising=False)
+
+    class Judge:
+        name = "gemini/gemini-3.1-flash-lite"
+        model = None
+
+    res = score_guardrail([_poisoned_item()], judge=Judge())
+    assert res["self_judging"] is True and res["judge_model"] == "gemini/gemini-3.1-flash-lite"
+
+
+def test_a_missing_score_without_an_exception_is_a_judge_error():
+    res = score_guardrail([_poisoned_item()], judge=lambda item: {"hallucination": 0.0})
+    assert res["items"][0]["flagged"] is True
+    assert res["judge_errors"] == 1 and res["status"] == "INVALID"
