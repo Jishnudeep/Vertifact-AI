@@ -30,6 +30,7 @@ from app.services.factcheck_api import search_factchecks
 from app.services.grounded_search import grounded_search
 from app.services.page_fetch import PageText, fetch_page_text
 from app.services.source_domains import CLAIMREVIEW_DOMAINS, FACTCHECK_DOMAINS
+from app.utils.adk_helpers import thinking_content_config
 from app.utils.errors import AgentErrorDetails
 
 logger = logging.getLogger(__name__)
@@ -417,6 +418,11 @@ def finalize(claim: str, decision: FactCheckDecision, ev: Evidence) -> FactCheck
     return no_evidence()
 
 
+def build_generate_content_config() -> Optional[types.GenerateContentConfig]:
+    """Thinking config for the worker model; None when the model does not accept `thinking_level`."""
+    return thinking_content_config(settings.model_id, settings.factcheck_thinking_level)
+
+
 async def analyze(ctx: Context, claim: str) -> FactCheckResult:
     ev = Evidence()
     agent = LlmAgent(
@@ -426,11 +432,7 @@ async def analyze(ctx: Context, claim: str) -> FactCheckResult:
         instruction=get_instruction(),
         tools=build_tools(claim, ev),
         output_schema=FactCheckDecision,
-        generate_content_config=types.GenerateContentConfig(
-            thinking_config=types.ThinkingConfig(
-                thinking_level=settings.factcheck_thinking_level
-            )
-        ),
+        generate_content_config=build_generate_content_config(),
         **common.agent_kwargs(),
     )
     decision = await ctx.run_node(agent, f"<claim>{fenced(claim[:500])}</claim>")

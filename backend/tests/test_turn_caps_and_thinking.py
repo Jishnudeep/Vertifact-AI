@@ -181,6 +181,44 @@ def test_agents_thinking_config():
     )
     assert agent_cr.generate_content_config.thinking_config.thinking_level == types.ThinkingLevel.LOW
 
-    # Grounded search runner
-    runner = adk_helpers.get_grounded_runner("coverage", "search instruction")
+    # Grounded search runner (pin a Gemini 3 model: a local .env may select a 2.5 model)
+    adk_helpers._grounded_runner_cache.clear()
+    with patch.object(adk_helpers.settings, "search_model_id", "gemini-3.1-flash-lite"):
+        runner = adk_helpers.get_grounded_runner("coverage", "search instruction")
     assert runner.agent.generate_content_config.thinking_config.thinking_level == types.ThinkingLevel.MINIMAL
+    adk_helpers._grounded_runner_cache.clear()
+
+
+@pytest.mark.parametrize("model_id", ["gemini-3.1-flash-lite", "gemini-3-pro-preview", "models/gemini-3.1-flash-lite"])
+def test_thinking_config_sent_to_gemini_3_models(model_id):
+    cfg = adk_helpers.thinking_content_config(model_id, "LOW")
+    assert cfg is not None
+    assert cfg.thinking_config.thinking_level == types.ThinkingLevel.LOW
+
+
+@pytest.mark.parametrize("model_id", ["gemini-2.5-flash-lite", "gemini-2.5-flash", "gemini-2.0-flash", "", None])
+def test_thinking_level_never_sent_to_models_that_reject_it(model_id):
+    """Gemini 2.5 rejects thinking_level with HTTP 400 (seen in the 2026-10-21 A.4 bench)."""
+    assert adk_helpers.thinking_content_config(model_id, "MINIMAL") is None
+
+
+def test_grounded_runner_omits_thinking_config_for_gemini_25_search_model():
+    adk_helpers._grounded_runner_cache.clear()
+    try:
+        with patch.object(adk_helpers.settings, "search_model_id", "gemini-2.5-flash-lite"):
+            runner = adk_helpers.get_grounded_runner("coverage", "search instruction")
+        cfg = runner.agent.generate_content_config  # ADK normalizes None to an empty config
+        assert cfg is None or cfg.thinking_config is None
+    finally:
+        adk_helpers._grounded_runner_cache.clear()
+
+
+def test_worker_agents_omit_thinking_config_for_gemini_25_model():
+    with patch.object(fc.settings, "model_id", "gemini-2.5-flash-lite"):
+        assert fc.build_generate_content_config() is None
+    with patch.object(cr.settings, "model_id", "gemini-2.5-flash-lite"):
+        assert cr.build_generate_content_config() is None
+    with patch.object(fc.settings, "model_id", "gemini-3.1-flash-lite"):
+        assert fc.build_generate_content_config().thinking_config.thinking_level == types.ThinkingLevel.LOW
+    with patch.object(cr.settings, "model_id", "gemini-3.1-flash-lite"):
+        assert cr.build_generate_content_config().thinking_config.thinking_level == types.ThinkingLevel.LOW

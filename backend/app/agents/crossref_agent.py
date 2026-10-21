@@ -33,6 +33,7 @@ from app.services.grounded_search import grounded_search
 from app.services.nli import NLIScores, classify_pairs
 from app.services.page_fetch import PageText, fetch_page_text
 from app.services.source_domains import CLAIMREVIEW_DOMAINS
+from app.utils.adk_helpers import thinking_content_config
 from app.utils.errors import AgentErrorDetails
 
 logger = logging.getLogger(__name__)
@@ -312,6 +313,11 @@ def _extract_entities(claim: str) -> List[str]:
     return entities
 
 
+def build_generate_content_config() -> Optional[types.GenerateContentConfig]:
+    """Thinking config for the worker model; None when the model does not accept `thinking_level`."""
+    return thinking_content_config(settings.model_id, settings.crossref_thinking_level)
+
+
 async def analyze(ctx: Context, claim: str) -> CrossRefResult:
     # spaCy in a worker thread: a cold load takes seconds and would stall the loop and the timeout.
     entities = await asyncio.to_thread(_extract_entities, claim)
@@ -323,11 +329,7 @@ async def analyze(ctx: Context, claim: str) -> CrossRefResult:
         instruction=get_instruction(),
         tools=build_tools(claim, cov),
         output_schema=CoverageSummary,
-        generate_content_config=types.GenerateContentConfig(
-            thinking_config=types.ThinkingConfig(
-                thinking_level=settings.crossref_thinking_level
-            )
-        ),
+        generate_content_config=build_generate_content_config(),
         **common.agent_kwargs(),
     )
     hints = ", ".join(fenced(e[:80]) for e in entities[:8]) or "none"
