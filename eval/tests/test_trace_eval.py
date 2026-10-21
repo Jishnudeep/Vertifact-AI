@@ -185,10 +185,10 @@ def test_adk_eval_export():
     import json
     from pathlib import Path
     from eval.trace_eval import audit_trace
-    traces_dir = Path("eval/results/traces")
+    traces_dir = Path(__file__).resolve().parents[2] / "eval" / "results" / "traces"
     if not traces_dir.exists():
         pytest.skip("No traces generated yet")
-    trace_files = list(traces_dir.glob("*.json"))
+    trace_files = list(traces_dir.rglob("*.json"))
     if not trace_files:
         pytest.skip("No trace files in traces dir")
     for f in trace_files:

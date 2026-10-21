@@ -1,9 +1,10 @@
 import pytest
+from types import SimpleNamespace
 
 import app.agents.crossref_agent as crossref_tools
 import app.agents.factcheck_agent as factcheck_tools
 from eval.replay import (
-    EvidenceReplay, ReplayMissError, excluding_domains,
+    EvidenceReplay, ReplayMissError, _note_agent, excluding_domains,
     filter_factcheck_claims, filter_web_results,
 )
 from app.services.errors import EvidenceAPIError
@@ -217,8 +218,9 @@ async def test_leaf_transcript_recorded_in_replay_mode(tmp_path, monkeypatch):
         req = LlmRequest(
             model="dummy",
             contents=[types.Content(role="user", parts=[types.Part(text="Check this claim")])],
-            config=types.GenerateContentConfig(system_instruction='You are an agent. Your internal name is "factcheck_judge".'),
+            config=types.GenerateContentConfig(system_instruction="You check claims."),
         )
+        _note_agent(SimpleNamespace(agent_name="factcheck_judge"))     # what ADK's callback context provides
         responses = [r async for r in model.generate_content_async(req)]
         assert len(responses) == 1
         assert len(recorder.leaf_transcript) == 1

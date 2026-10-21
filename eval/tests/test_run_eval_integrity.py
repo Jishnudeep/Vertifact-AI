@@ -64,7 +64,9 @@ async def test_summary_records_the_pipeline_settings_and_dataset_hash(tmp_path, 
     assert recorded["model_id"] == re_mod.settings.model_id
     assert recorded["enable_llm_sensationalism"] == re_mod.settings.enable_llm_sensationalism
     assert recorded["timeouts_pinned"] is False
-    assert report["summary"]["dataset_sha256"] == hashlib.sha256(dataset.read_bytes()).hexdigest()
+    canonical = json.dumps(json.loads(dataset.read_text(encoding="utf-8")), sort_keys=True,
+                           separators=(",", ":"), ensure_ascii=False)
+    assert report["summary"]["dataset_sha256"] == hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 async def test_traces_and_transcript_follow_the_output_path_and_stale_traces_are_cleared(tmp_path, dataset, monkeypatch):
@@ -73,14 +75,14 @@ async def test_traces_and_transcript_follow_the_output_path_and_stale_traces_are
 
     monkeypatch.setattr(re_mod, "verify_claim", fake_verify)
     out = tmp_path / "run" / "out.json"
-    stale = out.parent / "traces" / "stale-claim.json"
+    stale = out.parent / "traces" / "out" / "stale-claim.json"
     stale.parent.mkdir(parents=True)
     stale.write_text("{}", encoding="utf-8")
 
     await run_evaluation(dataset_paths=[dataset], output_path=out, replay_mode="replay")
     assert not stale.exists()
-    assert sorted(p.name for p in (out.parent / "traces").glob("*.json")) == ["c1.json", "c2.json"]
-    assert (out.parent / "leaf_transcript.jsonl").exists()
+    assert sorted(p.name for p in (out.parent / "traces" / "out").glob("*.json")) == ["c1.json", "c2.json"]
+    assert (out.parent / "out.leaf_transcript.jsonl").exists()
 
 
 async def test_scored_claims_are_counted_separately_from_attempted_ones(tmp_path, dataset, monkeypatch):
@@ -148,3 +150,101 @@ def test_tool_caps_are_not_evaluable_when_a_claim_has_model_calls_but_no_transcr
     assert re_mod._tool_calls(replay, "c1") is None
     replay.leaf_transcript.append({"claim_id": "c1", "name": "factcheck_judge", "tool_responses": []})
     assert re_mod._tool_calls(replay, "c1") == {}
+
+
+# --- re-review: wiring, restore, pinning, hashing, per-run artifacts --------------------------------
+
+def _capture_replay(monkeypatch):
+    holder = {}
+
+    class Capturing(re_mod.EvidenceReplay):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            holder["replay"] = self
+
+    monkeypatch.setattr(re_mod, "EvidenceReplay", Capturing)
+    return holder
+
+
+async def test_run_evaluation_wires_claim_ids_tool_caps_and_misses_into_the_run(tmp_path, dataset, monkeypatch):
+    holder = _capture_replay(monkeypatch)
+    seen_ids = []
+
+    async def fake_verify(text, bypass_cache=True):
+        replay = holder["replay"]
+        seen_ids.append(replay.current_claim_id)
+        replay.leaf_transcript.append({
+            "claim_id": replay.current_claim_id, "name": "crossref_searcher",
+            "tool_responses": [{"name": "search_news_coverage", "response": {"sources": []}}] * 3})
+        replay._record_provider_call("llm")
+        if replay.current_claim_id == "c1":
+            replay.note_miss()
+        return _response()
+
+    monkeypatch.setattr(re_mod, "verify_claim", fake_verify)
+    report = await run_evaluation(dataset_paths=[dataset], output_path=tmp_path / "out.json", replay_mode="replay")
+    assert seen_ids == ["c1", "c2"]
+    assert report["summary"]["run_status"] == STATUS_GUARDRAIL_FAIL
+    assert report["summary"]["trace_audit"]["failures_by_check"]["tool_caps"] == 2
+    by_id = {r["id"]: r for r in report["results"]}
+    assert by_id["c1"]["replay_misses"] == 1 and by_id["c2"]["replay_misses"] == 0
+    assert "tool_caps" in by_id["c1"]["trace_audit"]["failures"]
+
+
+async def test_global_settings_are_restored_after_a_pinned_run(tmp_path, dataset, monkeypatch):
+    async def fake_verify(text, bypass_cache=True):
+        return _response()
+
+    monkeypatch.setattr(re_mod, "verify_claim", fake_verify)
+    before = (re_mod.settings.agent_timeout_s, re_mod.settings.request_deadline_s)
+    await run_evaluation(dataset_paths=[dataset], output_path=tmp_path / "out.json", replay_mode="replay",
+                         agent_timeout_s=11.0, request_deadline_s=12.0)
+    assert (re_mod.settings.agent_timeout_s, re_mod.settings.request_deadline_s) == before
+
+
+@pytest.mark.parametrize("mode", ["record", "record-missing"])
+async def test_recording_refuses_to_inherit_unpinned_timeouts(tmp_path, dataset, mode):
+    with pytest.raises(ValueError, match="agent-timeout"):
+        await run_evaluation(dataset_paths=[dataset], output_path=tmp_path / "out.json", replay_mode=mode)
+
+
+async def test_dataset_hash_ignores_line_endings(tmp_path, monkeypatch):
+    async def fake_verify(text, bypass_cache=True):
+        return _response()
+
+    monkeypatch.setattr(re_mod, "verify_claim", fake_verify)
+    body = json.dumps([_claim("c1")], indent=2)
+    lf, crlf = tmp_path / "lf.json", tmp_path / "crlf.json"
+    lf.write_bytes(body.encode("utf-8"))
+    crlf.write_bytes(body.replace("\n", "\r\n").encode("utf-8"))
+    hashes = []
+    for path in (lf, crlf):
+        report = await run_evaluation(dataset_paths=[path], output_path=tmp_path / "out.json", replay_mode="replay")
+        hashes.append(report["summary"]["dataset_sha256"])
+    assert hashes[0] == hashes[1]
+
+
+async def test_two_runs_in_one_directory_keep_their_own_traces_and_transcripts(tmp_path, dataset, monkeypatch):
+    async def fake_verify(text, bypass_cache=True):
+        return _response()
+
+    monkeypatch.setattr(re_mod, "verify_claim", fake_verify)
+    await run_evaluation(dataset_paths=[dataset], output_path=tmp_path / "record_run.json", replay_mode="replay")
+    await run_evaluation(dataset_paths=[dataset], output_path=tmp_path / "baseline_run.json", replay_mode="replay")
+    for stem in ("record_run", "baseline_run"):
+        assert sorted(p.name for p in (tmp_path / "traces" / stem).glob("*.json")) == ["c1.json", "c2.json"]
+        assert (tmp_path / f"{stem}.leaf_transcript.jsonl").exists()
+
+
+async def test_a_transcript_write_failure_does_not_lose_the_run(tmp_path, dataset, monkeypatch):
+    async def fake_verify(text, bypass_cache=True):
+        return _response()
+
+    def broken(self, path):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(re_mod, "verify_claim", fake_verify)
+    monkeypatch.setattr(re_mod.EvidenceReplay, "write_leaf_transcript", broken)
+    out = tmp_path / "out.json"
+    report = await run_evaluation(dataset_paths=[dataset], output_path=out, replay_mode="replay")
+    assert out.exists() and report["summary"]["total_claims"] == 2

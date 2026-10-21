@@ -311,16 +311,24 @@ def _seed_row(bench_run_id: str, text: str, embedding: List[float]) -> Dict[str,
 async def _timed_lookup(
     text: str, embed: Callable[[str], Awaitable[List[float]]], lookup: Callable[..., Awaitable[Any]],
     seeded_ids: set,
+    expected_id: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """One request-path cache probe: embed + lookup. A hit only counts when it is one of OUR seeded rows."""
+    """
+    One request-path cache probe: embed + lookup. A hit counts only when it is the row seeded for THIS
+    claim (expected_id); another seeded row is a wrong-row hit, anything else a foreign row. For the
+    negative variants expected_id is None and any seeded row is a (false-positive) hit.
+    """
     t0 = time.perf_counter()
     embedding = await embed(text)
     t1 = time.perf_counter()
     hit = await lookup(embedding, text)
     t2 = time.perf_counter()
+    got = hit.get("claim_id") if hit else None
+    in_seed = got in seeded_ids
     return {
-        "hit": bool(hit) and hit.get("claim_id") in seeded_ids,
-        "foreign_hit": bool(hit) and hit.get("claim_id") not in seeded_ids,
+        "hit": bool(hit) and in_seed and (expected_id is None or got == expected_id),
+        "wrong_row_hit": bool(hit) and in_seed and expected_id is not None and got != expected_id,
+        "foreign_hit": bool(hit) and not in_seed,
         "total_ms": (t2 - t0) * 1000,
         "lookup_ms": (t2 - t1) * 1000,
     }
@@ -362,19 +370,23 @@ async def run_cache_benchmark(
 
     bench_run_id = uuid.uuid4().hex[:8]
     created_claim_ids: List[str] = []
+    seeded_by_pair: List[Optional[str]] = []
     print(f"\n--- Starting Cache Benchmark (run id: {bench_run_id}, n={len(pairs)}, db: {_db_host()}) ---")
 
     try:
         for item in pairs:
             row = _seed_row(bench_run_id, item["claim"], await embed_async(item["claim"]))
             cid = await insert(**row)
+            seeded_by_pair.append(cid or None)
             if cid:
                 created_claim_ids.append(cid)
         seeded_ids = set(created_claim_ids)
         print(f"Seeded {len(seeded_ids)} claims.")
 
-        exact = [await _timed_lookup(p["claim"], embed_async, lookup, seeded_ids) for p in pairs]
-        para = [await _timed_lookup(p["paraphrase"], embed_async, lookup, seeded_ids) for p in pairs]
+        exact = [await _timed_lookup(p["claim"], embed_async, lookup, seeded_ids, own)
+                 for p, own in zip(pairs, seeded_by_pair)]
+        para = [await _timed_lookup(p["paraphrase"], embed_async, lookup, seeded_ids, own)
+                for p, own in zip(pairs, seeded_by_pair)]
         negatives = [await _timed_lookup(n["text"], embed_async, lookup, seeded_ids) for n in BENCH_NEGATIVES]
 
         hits = [r for r in exact + para if r["hit"]]
@@ -387,6 +399,7 @@ async def run_cache_benchmark(
                 "n": len(results),
                 "hits": n_hits,
                 "hit_rate": n_hits / len(results) if results else None,
+                "wrong_row_hits": sum(1 for r in results if r["wrong_row_hit"]),
                 "foreign_hits_ignored": sum(1 for r in results if r["foreign_hit"]),
                 "latencies_ms": [round(r["total_ms"], 2) for r in results],
                 "lookup_only_ms": [round(r["lookup_ms"], 2) for r in results],
@@ -397,6 +410,7 @@ async def run_cache_benchmark(
             "bench_run_id": bench_run_id,
             "database": _db_host(),
             "pairs_tested": len(pairs),
+            "seeded_rows": len(seeded_ids),
             "latency_includes": "embedding + pgvector lookup + equivalence check",
             "baseline": baseline,
             "exact_lookups": block(exact),

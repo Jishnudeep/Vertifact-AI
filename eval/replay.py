@@ -218,6 +218,15 @@ class EvidenceReplay:
             return filter_factcheck_claims(claims, _excluded.get())
         return search_factchecks
 
+    def _wrap_agent_kwargs(self, original):
+        def agent_kwargs() -> Dict[str, Any]:
+            kwargs = dict(original())
+            before = kwargs.get("before_model_callback") or []
+            before = list(before) if isinstance(before, (list, tuple)) else [before]
+            kwargs["before_model_callback"] = [_note_agent, *before]
+            return kwargs
+        return agent_kwargs
+
     def _wrap_get_model(self, original):
         def get_model() -> BaseLlm:
             inner = original()
@@ -241,6 +250,7 @@ class EvidenceReplay:
         self._patch(factcheck_agent, "fetch_page_text", self._wrap_fetch_page_text)
         self._patch(factcheck_agent, "search_factchecks", self._wrap_search_factchecks)
         self._patch(common, "get_model", self._wrap_get_model)
+        self._patch(common, "agent_kwargs", self._wrap_agent_kwargs)
 
     def uninstall(self) -> None:
         while self._originals:
@@ -294,11 +304,24 @@ def request_key(llm_request: LlmRequest) -> str:
     return _key("llm", canonical)
 
 
+# The agent whose model turn is being served. Workers run through ctx.run_node, whose requests carry no
+# "internal name is ..." line, so the name is taken from ADK's callback context (the documented
+# `common.agent_kwargs` seam) in the same task that then calls the model.
+_current_agent: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar("eval_current_agent", default=None)
 _INTERNAL_NAME = re.compile(r'internal name is "([\w-]+)"')
 
 
+def _note_agent(callback_context, llm_request=None):
+    """before_model_callback: remember which agent is about to call the model."""
+    _current_agent.set(getattr(callback_context, "agent_name", None))
+    return None
+
+
 def _agent_name(system_instruction: str, fallback: str) -> str:
-    """ADK states the agent's name in every system instruction; do not guess it from the prompt prose."""
+    """The calling agent's ADK name; then the identity line ADK adds to some requests; then the model id."""
+    current = _current_agent.get()
+    if current:
+        return current
     match = _INTERNAL_NAME.search(system_instruction)
     return match.group(1) if match else fallback
 

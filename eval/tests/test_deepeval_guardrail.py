@@ -157,6 +157,8 @@ import sys
 
 from eval import deepeval_runner
 from eval.deepeval_runner import is_flagged
+from eval.replay import _note_agent
+from types import SimpleNamespace
 
 
 @pytest.fixture
@@ -321,8 +323,7 @@ def _factcheck_request():
                                               fr("search_fact_check_sites", web)]),
         ],
         config=types.GenerateContentConfig(
-            system_instruction='You are an agent. Your internal name is "factcheck_judge".\n'
-                               "You check whether a fact-check already answers the claim."),
+            system_instruction="You check whether a fact-check already answers the claim."),
     )
 
 
@@ -344,6 +345,7 @@ async def _record_final_turn(tmp_path, monkeypatch, final_part, mode="record"):
     replay.install()
     try:
         replay.reset_claim_counts("claim-001")
+        _note_agent(SimpleNamespace(agent_name="factcheck_judge"))     # what ADK's callback context provides
         _ = [r async for r in common.get_model().generate_content_async(_factcheck_request())]
     finally:
         replay.uninstall()
@@ -392,6 +394,7 @@ async def test_leaf_items_also_come_from_replayed_turns(tmp_path, monkeypatch):
     replay = EvidenceReplay(tmp_path / "cache", "replay")
     replay.install()
     try:
+        _note_agent(SimpleNamespace(agent_name="factcheck_judge"))
         _ = [r async for r in common.get_model().generate_content_async(_factcheck_request())]
     finally:
         replay.uninstall()
@@ -488,3 +491,14 @@ def test_a_missing_score_without_an_exception_is_a_judge_error():
     res = score_guardrail([_poisoned_item()], judge=lambda item: {"hallucination": 0.0})
     assert res["items"][0]["flagged"] is True
     assert res["judge_errors"] == 1 and res["status"] == "INVALID"
+
+
+def test_a_successful_cli_run_leaves_no_partial_file(tmp_path, monkeypatch):
+    dataset = tmp_path / "set.json"
+    dataset.write_text(json.dumps([_poisoned_item()]), encoding="utf-8")
+    monkeypatch.setattr(deepeval_runner, "get_judge_model",
+                        lambda: (lambda item: {"faithfulness": 0.1, "hallucination": 0.9}))
+    out = tmp_path / "res.json"
+    deepeval_runner.main(["--live", "--dataset", str(dataset), "--output", str(out), "--delay", "0"])
+    assert out.exists() and not (tmp_path / "res.partial.json").exists()
+    assert json.loads(out.read_text(encoding="utf-8"))["status"] == "OK"

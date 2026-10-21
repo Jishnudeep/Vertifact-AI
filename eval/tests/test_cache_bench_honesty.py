@@ -217,3 +217,16 @@ async def test_seed_rows_claim_no_certainty(tmp_path):
         assert kwargs["evidence_status"] == "unverified"
         assert kwargs["c_total"] == 0.5 and kwargs["s_fact"] == 0.5 and kwargs["v_consensus"] == 0.0
         assert kwargs["source_citations"] == []
+
+
+async def test_a_paraphrase_that_matches_another_pairs_row_is_a_wrong_row_hit(tmp_path):
+    def hits(text, ids):
+        pair = next((i for i, p in enumerate(BENCH_PAIRS) if text in (p["claim"], p["paraphrase"])), None)
+        if pair is None:
+            return None
+        return {"claim_id": ids[(pair + 1) % len(ids)]}      # always somebody else's seeded row
+
+    report = await run_cache_benchmark(**FakeBench(hits_for=hits).kwargs(tmp_path))
+    assert report["summary"]["n_hits"] == 0
+    assert report["exact_lookups"]["wrong_row_hits"] == len(BENCH_PAIRS)
+    assert report["seeded_rows"] == len(BENCH_PAIRS)

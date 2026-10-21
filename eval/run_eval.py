@@ -209,20 +209,18 @@ async def run_evaluation(
     """
     timeouts_pinned = agent_timeout_s is not None and request_deadline_s is not None
     if replay_mode in ("record", "record-missing") and not timeouts_pinned:
-        logger.warning("Recording without --agent-timeout/--request-deadline: the run inherits the "
-                       "environment's timeouts (backend/app/.env). Pin both for a recorded baseline.")
-    if agent_timeout_s is not None:
-        settings.agent_timeout_s = agent_timeout_s
-    if request_deadline_s is not None:
-        settings.request_deadline_s = request_deadline_s
+        raise ValueError("A recorded run must pin --agent-timeout and --request-deadline: otherwise it inherits "
+                         "whatever backend/app/.env sets and the recording does not say what produced it.")
     dataset_paths = dataset_paths or [BASE_DIR / "eval" / "datasets" / "curated_claims_seed.json"]
     claims_data: List[Dict[str, Any]] = []
     dataset_hash = hashlib.sha256()
     for path in dataset_paths:
         logger.info(f"Loading evaluation dataset from {path}...")
-        dataset_hash.update(Path(path).read_bytes())
         with open(path, "r", encoding="utf-8") as f:
-            claims_data.extend(EvalClaim(**raw).model_dump() for raw in json.load(f))
+            raw_claims = json.load(f)
+        # Hash the content, not the bytes: the same labels must hash the same on CRLF and LF checkouts.
+        dataset_hash.update(json.dumps(raw_claims, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8"))
+        claims_data.extend(EvalClaim(**raw).model_dump() for raw in raw_claims)
 
     if offset > 0 or limit is not None:
         end = (offset + limit) if limit is not None else len(claims_data)
@@ -245,6 +243,11 @@ async def run_evaluation(
     # Each agent node's timeout is fixed when its module is imported, so changing settings alone would
     # record a value that was never applied. Set it on the nodes too, and restore it afterwards.
     original_node_timeouts = [(n, n.timeout) for n, _, _, _ in AGENT_NODES]
+    original_settings = (settings.agent_timeout_s, settings.request_deadline_s)
+    if agent_timeout_s is not None:
+        settings.agent_timeout_s = agent_timeout_s
+    if request_deadline_s is not None:
+        settings.request_deadline_s = request_deadline_s
     if agent_timeout_s is not None:
         for agent_node, _ in original_node_timeouts:
             agent_node.timeout = agent_timeout_s
@@ -267,7 +270,7 @@ async def run_evaluation(
         eval_results: List[Dict[str, Any]] = []
         adversarial_results: List[Dict[str, Any]] = []
         # Per-run artifacts live next to the run's output, and last run's traces never survive into this one.
-        traces_dir = Path(output_path).parent / "traces"
+        traces_dir = Path(output_path).parent / "traces" / Path(output_path).stem
         traces_dir.mkdir(parents=True, exist_ok=True)
         for stale in traces_dir.glob("*.json"):
             stale.unlink()
@@ -463,7 +466,10 @@ async def run_evaluation(
         total_time = round(time.time() - start_time, 2)
 
         # Write leaf transcript (E4)
-        replay.write_leaf_transcript(Path(output_path).parent / "leaf_transcript.jsonl")
+        try:
+            replay.write_leaf_transcript(Path(output_path).parent / f"{Path(output_path).stem}.leaf_transcript.jsonl")
+        except OSError:
+            logger.exception("could not write the leaf transcript; the run itself is unaffected")
 
         # Compute latency summary (live only per Plan 9 Task 4 Step 3)
         if replay_mode != "replay":
@@ -685,6 +691,7 @@ async def run_evaluation(
         logging.getLogger().removeHandler(rate_limit_counter)
         for agent_node, original_timeout in original_node_timeouts:
             agent_node.timeout = original_timeout
+        settings.agent_timeout_s, settings.request_deadline_s = original_settings
         replay.uninstall()
 
 

@@ -38,7 +38,7 @@ from app.config import settings  # noqa: E402
 logger = logging.getLogger("deepeval_runner")
 
 DEFAULT_DATASET = BASE_DIR / "eval" / "datasets" / "explanation_hallucination_set.json"
-DEFAULT_TRANSCRIPT = BASE_DIR / "eval" / "results" / "leaf_transcript.jsonl"
+DEFAULT_TRANSCRIPT = BASE_DIR / "eval" / "results" / "record_run.leaf_transcript.jsonl"
 DEFAULT_GUARDRAIL_OUT = BASE_DIR / "eval" / "results" / "deepeval_guardrail.json"
 DEFAULT_LEAF_OUT = BASE_DIR / "eval" / "results" / "leaf_groundedness.json"
 
@@ -374,6 +374,7 @@ def main(argv: Optional[List[str]] = None) -> None:
     results = scorer(items, judge=judge, delay_s=args.delay, on_item=_writer(out_path))
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps(results, indent=2), encoding="utf-8")
+    out_path.with_name(out_path.stem + ".partial.json").unlink(missing_ok=True)
     print(f"Results saved to {out_path} (status {results['status']}, judge {results['judge_model']}, "
           f"self-judging: {results['self_judging']})")
     if args.mode == "guardrail":
