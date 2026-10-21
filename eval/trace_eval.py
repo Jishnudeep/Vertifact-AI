@@ -50,7 +50,9 @@ def check_deadline(response: Dict[str, Any], deadline_ms: Optional[float] = None
 
 def check_degradation_flagged(response: Dict[str, Any]) -> bool:
     """Every non-ok agent has its warning, and the score is held at the partial-analysis cap."""
-    agents = response.get("agents") or []
+    if not isinstance(response.get("agents"), list):
+        return False                                 # not a verify_claim response: never a vacuous pass
+    agents = response["agents"]
     confidence = response.get("confidence") or {}
     warnings = confidence.get("warnings") or []
 
@@ -68,7 +70,9 @@ def check_degradation_flagged(response: Dict[str, Any]) -> bool:
 
 
 def check_bias_from_allsides(response: Dict[str, Any]) -> bool:
-    sources = response.get("sources") or []
+    if not isinstance(response.get("sources"), list) or not isinstance(response.get("agents"), list):
+        return False                                 # not a verify_claim response: never a vacuous pass
+    sources = response["sources"]
     for src in sources:
         if not isinstance(src, dict):
             return False

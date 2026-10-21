@@ -181,27 +181,42 @@ def test_adk_eval_metrics_functions():
     assert metric_all_nodes_present(bad_case)["score"] == 0.0
 
 
-def test_adk_eval_export():
+def test_adk_eval_export_round_trips_and_audits(tmp_path):
+    """Hermetic: build the export from a response in tmp_path; never read eval/results/traces."""
     import json
-    from pathlib import Path
-    from eval.trace_eval import audit_trace
-    traces_dir = Path(__file__).resolve().parents[2] / "eval" / "results" / "traces"
-    if not traces_dir.exists():
-        pytest.skip("No traces generated yet")
-    trace_files = list(traces_dir.rglob("*.json"))
-    if not trace_files:
-        pytest.skip("No trace files in traces dir")
-    for f in trace_files:
-        data = json.loads(f.read_text("utf-8"))
-        assert "eval_cases" in data
-        for case in data["eval_cases"]:
-            assert "eval_case_id" in case
-            assert "prompt" in case
-            assert "responses" in case
-            assert "verify_response" in case
-            report = audit_trace(case["verify_response"], claim_type=case.get("claim_type", "verifiable"))
-            assert report.passed, f"Trace audit failed for {case['eval_case_id']}: {report.failures}"
+    from eval.trace_eval import audit_trace, make_eval_case
 
+    case = make_eval_case("claim-1", "Test claim", "verifiable", _resp())
+    path = tmp_path / "claim-1.json"
+    path.write_text(json.dumps({"eval_cases": [case]}), "utf-8")
+    data = json.loads(path.read_text("utf-8"))
+    for c in data["eval_cases"]:
+        assert {"eval_case_id", "prompt", "responses", "verify_response"} <= set(c)
+        report = audit_trace(c["verify_response"], claim_type=c.get("claim_type", "verifiable"))
+        assert report.passed, report.failures
+
+
+@pytest.mark.parametrize("not_a_verify_response", [{}, {"author": "crossref", "content": "x"}, {"agents": "x"}])
+def test_bias_and_degradation_checks_fail_closed_on_foreign_shapes(not_a_verify_response):
+    """A response without list-typed agents/sources is not a verify_claim response: never a vacuous pass."""
+    from eval.trace_eval import check_bias_from_allsides, check_degradation_flagged
+
+    assert check_bias_from_allsides(not_a_verify_response) is False
+    assert check_degradation_flagged(not_a_verify_response) is False
+
+
+@pytest.mark.parametrize("not_a_verify_response", [{}, {"author": "crossref", "content": "x"}])
+def test_adk_metrics_score_zero_on_foreign_grader_instances(not_a_verify_response):
+    import json
+    from eval.adk_eval.metrics import (
+        metric_bias_from_allsides,
+        metric_degradation_flagged,
+    )
+
+    instance = {"prompt": {"parts": [{"text": "c"}]},
+                "response": {"role": "model", "parts": [{"text": json.dumps(not_a_verify_response)}]}}
+    assert metric_bias_from_allsides(instance)["score"] == 0.0
+    assert metric_degradation_flagged(instance)["score"] == 0.0
 
 
 def _real_crossref_result():
