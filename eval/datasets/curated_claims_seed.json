@@ -476,8 +476,7 @@
     "expected_confidence": "high",
     "tags": [
       "conspiracy",
-      "debunked",
-      "recent_2025_2026"
+      "debunked"
     ],
     "label_source": "https://www.reuters.com/fact-check/wef-did-not-mandate-insect-consumption-2024-03-12/",
     "label_note": "Reuters fact-check debunking recurring false claims attributing non-existent legal mandates to the WEF."
@@ -611,7 +610,7 @@
   },
   {
     "id": "claim-048",
-    "claim_text": "Coffee consumption directly prevents Alzheimer's disease in adults.",
+    "claim_text": "Drinking coffee reduces the risk of Alzheimer's disease in adults.",
     "ground_truth_score": 0.5,
     "category": "health",
     "claim_type": "verifiable",
@@ -621,11 +620,11 @@
       "health_studies"
     ],
     "label_source": "https://www.alzheimers.org.uk/about-dementia/risk-factors-and-prevention/coffee-and-dementia",
-    "label_note": "Alzheimer's Society UK: Observational studies show modest correlation but clinical trials show no causal prevention."
+    "label_note": "Alzheimer's Society UK: observational studies show a modest association, but clinical trials have not shown that coffee prevents the disease."
   },
   {
     "id": "claim-049",
-    "claim_text": "Electric vehicles produce zero lifetime carbon emissions across manufacturing and driving.",
+    "claim_text": "Electric vehicles have lower lifetime carbon emissions than petrol cars, even when charged on coal-heavy grids.",
     "ground_truth_score": 0.5,
     "category": "technology",
     "claim_type": "verifiable",
@@ -635,11 +634,11 @@
       "environment"
     ],
     "label_source": "https://www.epa.gov/greenvehicles/electric-vehicle-myths",
-    "label_note": "EPA lifecycle analysis: EVs emit substantially less total carbon, but manufacturing and grid generation emit non-zero carbon."
+    "label_note": "EPA lifecycle analysis: EVs emit less over their lifetime on most grids, but manufacturing emissions are non-zero and a coal-heavy grid narrows or erases the gap."
   },
   {
     "id": "claim-050",
-    "claim_text": "Non-sugar artificial sweeteners are conclusively worse for metabolic health than natural cane sugar.",
+    "claim_text": "Non-sugar artificial sweeteners are worse for metabolic health than sugar.",
     "ground_truth_score": 0.5,
     "category": "health",
     "claim_type": "verifiable",
@@ -649,11 +648,11 @@
       "nutrition"
     ],
     "label_source": "https://www.who.int/publications/i/item/9789240073616",
-    "label_note": "WHO guideline on non-sugar sweeteners finds nuanced risks but stops short of declaring them worse than high-sugar diets."
+    "label_note": "WHO guideline on non-sugar sweeteners: evidence of long-term harm is uncertain, and it does not find them worse than high-sugar diets."
   },
   {
     "id": "claim-051",
-    "claim_text": "Remote work arrangements significantly increase overall corporate productivity across all sectors.",
+    "claim_text": "Remote work increases corporate productivity.",
     "ground_truth_score": 0.5,
     "category": "economy",
     "claim_type": "verifiable",
@@ -663,7 +662,7 @@
       "workplace"
     ],
     "label_source": "https://www.nber.org/papers/w31515",
-    "label_note": "NBER empirical survey: Mixed outcomes depending on coordination, task autonomy, and team structure."
+    "label_note": "NBER empirical survey: mixed outcomes depending on coordination, task autonomy, and team structure."
   },
   {
     "id": "claim-052",
@@ -674,37 +673,34 @@
     "expected_confidence": "medium",
     "tags": [
       "mixed",
-      "automotive",
-      "recent_2025_2026"
+      "automotive"
     ],
     "label_source": "https://www.reuters.com/technology/autonomous-vehicles-safety-data-comparison-2024-01-18/",
     "label_note": "Reuters analysis: Operational domain limits and reporting methodologies make direct comparison contested."
   },
   {
     "id": "claim-053",
-    "claim_text": "The 2025 international climate summit concluded with binding legal sanctions for missed emissions targets.",
+    "claim_text": "International climate agreements legally require countries to meet their emissions targets.",
     "ground_truth_score": 0.5,
     "category": "politics",
     "claim_type": "verifiable",
     "expected_confidence": "medium",
     "tags": [
       "mixed",
-      "recent_2025_2026",
       "climate"
     ],
     "label_source": "https://unfccc.int/process-and-meetings/the-paris-agreement",
-    "label_note": "UNFCCC treaties operate on nationally determined voluntary contributions rather than international sanctions."
+    "label_note": "UNFCCC: reporting and review obligations are binding, but national targets are voluntary contributions with no international sanctions."
   },
   {
     "id": "claim-054",
-    "claim_text": "Clinical trials confirmed intermittent fasting extends human lifespan by twenty percent.",
+    "claim_text": "Intermittent fasting extends human lifespan.",
     "ground_truth_score": 0.5,
     "category": "health",
     "claim_type": "verifiable",
     "expected_confidence": "medium",
     "tags": [
       "mixed",
-      "recent_2025_2026",
       "longevity"
     ],
     "label_source": "https://www.nih.gov/news-events/nih-research-matters/dietary-restriction-aging",
@@ -712,7 +708,7 @@
   },
   {
     "id": "claim-055",
-    "claim_text": "Nuclear power is entirely green with zero radioactive waste challenges.",
+    "claim_text": "Nuclear power is a clean energy source.",
     "ground_truth_score": 0.5,
     "category": "energy",
     "claim_type": "verifiable",
@@ -722,7 +718,7 @@
       "energy"
     ],
     "label_source": "https://www.iea.org/reports/nuclear-power-and-secure-energy-transitions",
-    "label_note": "IEA report: Low carbon during generation, but long-term geological disposal and upfront construction emissions remain complex."
+    "label_note": "IEA report: low carbon during generation, but long-term geological disposal and upfront construction emissions remain complex."
   },
   {
     "id": "claim-056",
@@ -740,18 +736,17 @@
   },
   {
     "id": "claim-057",
-    "claim_text": "Quantum computing labs in early 2026 succeeded in cracking standard 2048-bit RSA encryption.",
+    "claim_text": "Quantum computers are about to make current internet encryption obsolete.",
     "ground_truth_score": 0.5,
     "category": "technology",
     "claim_type": "verifiable",
     "expected_confidence": "low",
     "tags": [
       "mixed",
-      "cybersecurity",
-      "recent_2025_2026"
+      "cybersecurity"
     ],
     "label_source": "https://www.nist.gov/news-events/news/2024/08/nist-releases-first-3-finalized-post-quantum-encryption-standards",
-    "label_note": "NIST post-quantum cryptographic standards: Existing NISQ quantum devices cannot factor 2048-bit keys."
+    "label_note": "NIST finalized post-quantum standards in August 2024 because the threat is expected, but no existing quantum device can factor 2048-bit keys and timelines are uncertain."
   },
   {
     "id": "claim-058",
@@ -769,7 +764,7 @@
   },
   {
     "id": "claim-059",
-    "claim_text": "Social media platforms are the sole identified cause of the adolescent mental health decline.",
+    "claim_text": "Social media is a major cause of the decline in adolescent mental health.",
     "ground_truth_score": 0.5,
     "category": "science",
     "claim_type": "verifiable",
@@ -779,7 +774,7 @@
       "psychology"
     ],
     "label_source": "https://www.hhs.gov/surgeongeneral/priorities/youth-mental-health/index.html",
-    "label_note": "US Surgeon General advisory: Strong correlation and risks, but acknowledged to be multifactorial."
+    "label_note": "US Surgeon General advisory: strong correlation and risks, but acknowledged to be multifactorial."
   },
   {
     "id": "claim-060",
