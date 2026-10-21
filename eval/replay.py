@@ -177,7 +177,6 @@ class EvidenceReplay:
         self._patch(factcheck_agent, "fetch_page_text", self._wrap_fetch_page_text)
         self._patch(factcheck_agent, "search_factchecks", self._wrap_search_factchecks)
         self._patch(common, "get_model", self._wrap_get_model)
-        self._patch(common, "get_today_utc", lambda _orig: (lambda: "2026-10-20"))
 
     def uninstall(self) -> None:
         while self._originals:

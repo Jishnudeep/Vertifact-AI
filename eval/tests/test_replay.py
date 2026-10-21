@@ -163,3 +163,45 @@ def test_replay_request_key_stable_across_dates():
     key1 = request_key(req1)
     key2 = request_key(req2)
     assert key1 == key2, "Date differences in system instruction must be normalized in replay request_key"
+
+
+@pytest.mark.parametrize("mode", ["record", "record-missing"])
+def test_replay_record_modes_pass_current_date_and_cache_key_stable(tmp_path, monkeypatch, mode):
+    """
+    EvidenceReplay.install() in record / record-missing modes must NOT pin get_today_utc
+    to a stale date; the live model must receive the real current date, while request_key
+    normalizes the date so cache keys remain identical across two different dates.
+    """
+    import app.agents.common as common
+    import app.agents.factcheck_agent as fc
+    import app.agents.crossref_agent as cr
+
+    real_date_1 = "2026-10-25"
+    monkeypatch.setattr(common, "get_today_utc", lambda: real_date_1)
+
+    replay = EvidenceReplay(tmp_path, mode=mode)
+    replay.install()
+    try:
+        assert common.get_today_utc() == real_date_1
+        assert f"Today's date is {real_date_1} (UTC)" in fc.get_instruction()
+        assert f"Today's date is {real_date_1} (UTC)" in cr.get_instruction()
+    finally:
+        replay.uninstall()
+
+    real_date_2 = "2026-10-26"
+    req1 = LlmRequest(
+        model="gemini-3.1-flash-lite",
+        config=types.GenerateContentConfig(
+            system_instruction=fc.get_instruction(real_date_1),
+        ),
+        contents=[types.Content(role="user", parts=[types.Part.from_text(text="claim 1")])],
+    )
+    req2 = LlmRequest(
+        model="gemini-3.1-flash-lite",
+        config=types.GenerateContentConfig(
+            system_instruction=fc.get_instruction(real_date_2),
+        ),
+        contents=[types.Content(role="user", parts=[types.Part.from_text(text="claim 1")])],
+    )
+
+    assert request_key(req1) == request_key(req2), "Cache key must be identical across different dates"
