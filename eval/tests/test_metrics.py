@@ -116,3 +116,29 @@ def test_replay_miss_invalidates_run():
     assert status == STATUS_INVALID_RUN
     assert any("replay" in r for r in reasons)
 
+
+def test_trace_bias_failure_causes_guardrail_fail():
+    from eval.run_eval import assess_run_validity, STATUS_GUARDRAIL_FAIL
+    status, reasons = assess_run_validity(
+        verifiable_preds=[0.2, 0.8], verifiable_targets=[0.0, 1.0],
+        zero_source_rate=0.0, error_rate=0.0,
+        bias_metrics={"passed": True}, bridging_violations=[], adversarial_results=[],
+        replay_misses=0,
+        trace_failures_by_check={"bias_from_allsides": 1},
+    )
+    assert status == STATUS_GUARDRAIL_FAIL
+    assert any("bias_from_allsides" in r for r in reasons)
+
+
+def test_trace_adversarial_failure_causes_guardrail_fail():
+    from eval.run_eval import assess_run_validity, STATUS_GUARDRAIL_FAIL
+    status, reasons = assess_run_validity(
+        verifiable_preds=[0.2, 0.8], verifiable_targets=[0.0, 1.0],
+        zero_source_rate=0.0, error_rate=0.0,
+        bias_metrics={"passed": True}, bridging_violations=[], adversarial_results=[],
+        replay_misses=0,
+        trace_failures_by_check={"adversarial_no_verdict": 2},
+    )
+    assert status == STATUS_GUARDRAIL_FAIL
+    assert any("adversarial_no_verdict" in r for r in reasons)
+

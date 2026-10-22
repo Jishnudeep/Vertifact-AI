@@ -58,7 +58,7 @@ _ENTITY_LABELS = {"PERSON", "ORG", "GPE", "NORP", "FAC", "LOC", "PRODUCT", "EVEN
 @dataclass
 class CrossRefResult:
     entities_extracted: List[str]             # People, organizations, locations
-    sources_found: List[Dict[str, Any]]       # {url, title, publisher, bias_label, relevance_score, stance, stance_confidence}
+    sources_found: List[Dict[str, Any]]       # {url, domain, title, publisher, bias_label, relevance_score, stance, stance_confidence}
     coverage_distribution: Dict[str, int]     # {"Left": 0, "Lean Left": 0, "Center": 0, "Lean Right": 0, "Right": 0}
     v_consensus_score: float                  # 0.0 to 1.0 (0.0 when no sources or degraded)
     v_refute_score: float = 0.0               # 0.0 to 1.0: refuting reputable coverage (count / 5)
@@ -285,7 +285,7 @@ def finalize(entities: List[str], cov: Coverage) -> CrossRefResult:
     distribution = {b: 0 for b in _BIAS_BUCKETS}                  # counts every LISTED rated source
     sources, reputable = [], []
     for r in _dedupe_by_domain(cov.batches):
-        source = {"url": r["url"], "title": r["title"], "publisher": r["publisher"],
+        source = {"url": r["url"], "domain": r["domain"], "title": r["title"], "publisher": r["publisher"],
                   "bias_label": r["bias_label"], "relevance_score": CITED_RELEVANCE,
                   "stance": r["stance"], "stance_confidence": r["stance_confidence"]}
         sources.append(source)

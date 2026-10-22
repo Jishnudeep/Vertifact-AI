@@ -327,6 +327,18 @@ def test_neutral_degraded_result_is_zero():
     assert neutral.v_consensus_score == 0.0 and neutral.v_refute_score == 0.0
 
 
+async def test_every_source_carries_its_grounding_domain_even_when_the_url_is_a_redirect(monkeypatch, services):
+    # The unread page keeps the grounding redirect as its url; the domain must not be re-derived
+    # from it (google.com would be rated Lean Left and break the per-trace bias audit).
+    services.search.return_value = search("foxnews.com", "reuters.com")
+    services.pages = {"foxnews.com": None, "reuters.com": page("reuters.com")}
+    result = await run("NASA announces Mars landing", monkeypatch)
+    by_domain = {s["domain"]: s for s in result.sources_found}
+    assert set(by_domain) == {"foxnews.com", "reuters.com"}
+    assert "vertexaisearch.cloud.google.com" in by_domain["foxnews.com"]["url"]
+    assert by_domain["foxnews.com"]["bias_label"] == get_bias_label("foxnews.com")
+
+
 def test_crossref_instruction_keeps_contradicting_coverage_search():
     """The optional second search (few sources, one side, contradicting coverage) feeds V_refute; keep it.
 

@@ -1,0 +1,422 @@
+[
+  {
+    "id": "hallu-001",
+    "claim": "NASA confirmed that an asteroid will definitely collide with Earth in 2029.",
+    "source_snippets": [
+      "According to NASA's Center for Near-Earth Object Studies (CNEOS), asteroid 99942 Apophis will safely pass within 20,000 miles of Earth on April 13, 2029. Extensive radar observations have ruled out any possibility of impact in 2029 or during its subsequent 2036 flyby."
+    ],
+    "output": {
+      "rating": "false",
+      "explanation": "NASA confirmed Apophis will safely fly past Earth in 2029 and ruled out any chance of collision."
+    },
+    "is_hallucinated": false,
+    "hallucination_type": null,
+    "twin_of": null
+  },
+  {
+    "id": "hallu-002",
+    "claim": "The Federal Reserve announced it is replacing physical dollar bills with a Central Bank Digital Currency by December 2026.",
+    "source_snippets": [
+      "The Federal Reserve clarified that it has not decided to issue a central bank digital currency (CBDC) and would only proceed with an authorizing law. The Fed stated it will always ensure the availability of cash and physical dollar currency."
+    ],
+    "output": {
+      "rating": "false",
+      "explanation": "The Federal Reserve stated it has made no decision to issue a CBDC and continues to support physical cash."
+    },
+    "is_hallucinated": false,
+    "hallucination_type": null,
+    "twin_of": null
+  },
+  {
+    "id": "hallu-003",
+    "claim": "The James Webb Space Telescope detected atmospheric oxygen and definitive signs of life on exoplanet K2-18b.",
+    "source_snippets": [
+      "In September 2023, NASA reported that Webb telescope observations of exoplanet K2-18b revealed carbon-bearing molecules, including methane and carbon dioxide. A potential detection of dimethyl sulfide (DMS) was noted, but NASA and astrophysicists cautioned that further data is required to confirm whether DMS is truly present and that this does not constitute proof of life."
+    ],
+    "output": {
+      "rating": "mostly false",
+      "explanation": "Webb detected carbon molecules on K2-18b but scientists emphasized that definitive signs of life or confirmed biosignatures have not been established."
+    },
+    "is_hallucinated": false,
+    "hallucination_type": null,
+    "twin_of": null
+  },
+  {
+    "id": "hallu-004",
+    "claim": "Drinking unpasteurized raw milk cures lactose intolerance in adults.",
+    "source_snippets": [
+      "Medical and food safety experts from the FDA and CDC state that raw milk does not cure lactose intolerance. Raw milk contains lactose just like pasteurized milk and poses significant health risks from pathogens such as Salmonella, E. coli, and Listeria."
+    ],
+    "output": {
+      "rating": "false",
+      "explanation": "Health agencies state raw milk contains lactose just like pasteurized milk and does not cure lactose intolerance."
+    },
+    "is_hallucinated": false,
+    "hallucination_type": null,
+    "twin_of": null
+  },
+  {
+    "id": "hallu-005",
+    "claim": "The Great Wall of China is visible from low Earth orbit with the naked eye.",
+    "source_snippets": [
+      "NASA and astronauts including Yang Liwei have repeatedly clarified that the Great Wall of China is generally not visible to the unaided human eye from orbit because its width is only a few meters and it is constructed from materials that blend with the surrounding terrain."
+    ],
+    "output": {
+      "rating": "false",
+      "explanation": "Astronauts and NASA have confirmed the Great Wall cannot be seen from low Earth orbit without magnification."
+    },
+    "is_hallucinated": false,
+    "hallucination_type": null,
+    "twin_of": null
+  },
+  {
+    "id": "hallu-006",
+    "claim": "The WHO declared the end of the global COVID-19 public health emergency in May 2023.",
+    "source_snippets": [
+      "On May 5, 2023, World Health Organization Director-General Tedros Adhanom Ghebreyesus declared an end to COVID-19 as a public health emergency of international concern (PHEIC), while noting the virus remains an ongoing global health threat."
+    ],
+    "output": {
+      "rating": "true",
+      "explanation": "The WHO officially declared an end to the COVID-19 global health emergency on May 5, 2023."
+    },
+    "is_hallucinated": false,
+    "hallucination_type": null,
+    "twin_of": null
+  },
+  {
+    "id": "hallu-007",
+    "claim": "The European Union banned the sale of all new combustion engine cars starting in 2035.",
+    "source_snippets": [
+      "In March 2023, EU member states approved legislation requiring all new cars sold in the European Union from 2035 to be zero-emission vehicles, effectively banning new petrol and diesel cars with an exemption negotiated for vehicles running exclusively on carbon-neutral e-fuels."
+    ],
+    "output": {
+      "rating": "mostly true",
+      "explanation": "The EU approved rules mandating zero-emission sales for new cars starting in 2035, with an exemption for vehicles running exclusively on carbon-neutral e-fuels."
+    },
+    "is_hallucinated": false,
+    "hallucination_type": null,
+    "twin_of": null
+  },
+  {
+    "id": "hallu-008",
+    "claim": "A study found that microplastics have been detected in human blood samples.",
+    "source_snippets": [
+      "A 2022 pilot study published in Environment International by researchers at Vrije Universiteit Amsterdam detected microplastic particles in blood samples from 17 out of 22 healthy human volunteers tested."
+    ],
+    "output": {
+      "rating": "true",
+      "explanation": "A 2022 study detected microplastic polymer particles in blood samples from a majority of tested human donors."
+    },
+    "is_hallucinated": false,
+    "hallucination_type": null,
+    "twin_of": null
+  },
+  {
+    "id": "hallu-009",
+    "claim": "Eating carrots dramatically improves night vision.",
+    "source_snippets": [
+      "Carrots contain beta-carotene which the body converts to vitamin A, essential for normal vision. However, eating additional carrots will not improve vision beyond normal baseline levels in people who are not vitamin A deficient. The belief originated as British World War II propaganda to hide radar technology."
+    ],
+    "output": {
+      "rating": "mostly false",
+      "explanation": "While vitamin A from carrots is essential for normal vision, extra carrots do not improve vision beyond normal levels; the myth stems from WWII propaganda."
+    },
+    "is_hallucinated": false,
+    "hallucination_type": null,
+    "twin_of": null
+  },
+  {
+    "id": "hallu-010",
+    "claim": "Finland officially became the 31st member of NATO in April 2023.",
+    "source_snippets": [
+      "On April 4, 2023, Finland completed its accession process and formally became the 31st member of NATO, following the deposit of its accession document at the U.S. State Department in Brussels."
+    ],
+    "output": {
+      "rating": "true",
+      "explanation": "Finland officially joined NATO as its 31st member nation on April 4, 2023."
+    },
+    "is_hallucinated": false,
+    "hallucination_type": null,
+    "twin_of": null
+  },
+  {
+    "id": "hallu-011",
+    "claim": "The Eiffel Tower grows up to 15 centimeters taller during the summer due to thermal expansion.",
+    "source_snippets": [
+      "Thermal expansion causes the iron structure of the Eiffel Tower to expand in summer heat, increasing its height by up to 15 centimeters (about 6 inches). In winter, the cold causes the metal structure to contract slightly."
+    ],
+    "output": {
+      "rating": "true",
+      "explanation": "Thermal expansion of the iron structure can increase the Eiffel Tower's height by up to 15 cm in hot temperatures."
+    },
+    "is_hallucinated": false,
+    "hallucination_type": null,
+    "twin_of": null
+  },
+  {
+    "id": "hallu-012",
+    "claim": "Volcanoes emit more carbon dioxide per year than all human activities combined.",
+    "source_snippets": [
+      "According to the U.S. Geological Survey (USGS), all volcanic emissions on Earth generate between 0.13 and 0.44 billion metric tons of CO2 annually, whereas human activities produce roughly 35 billion metric tons per year. Human emissions exceed volcanic emissions by a factor of 80 to 270."
+    ],
+    "output": {
+      "rating": "false",
+      "explanation": "USGS data confirms human activities produce at least 80 times more carbon dioxide annually than all terrestrial and submarine volcanoes combined."
+    },
+    "is_hallucinated": false,
+    "hallucination_type": null,
+    "twin_of": null
+  },
+  {
+    "id": "hallu-013",
+    "claim": "Bananas are naturally radioactive due to potassium content.",
+    "source_snippets": [
+      "Bananas contain natural potassium, including small amounts of the radioactive isotope potassium-40. The radiation dose from eating a banana (approximately 0.1 microsieverts) is negligible and harmless compared to natural background radiation."
+    ],
+    "output": {
+      "rating": "true",
+      "explanation": "Bananas naturally contain potassium-40, making them slightly radioactive, though the levels are completely harmless."
+    },
+    "is_hallucinated": false,
+    "hallucination_type": null,
+    "twin_of": null
+  },
+  {
+    "id": "hallu-014",
+    "claim": "Lightning never strikes the same place twice.",
+    "source_snippets": [
+      "The National Oceanic and Atmospheric Administration (NOAA) states that lightning frequently strikes the same place multiple times, especially tall, pointed structures. The Empire State Building in New York is struck by lightning dozens of times each year."
+    ],
+    "output": {
+      "rating": "false",
+      "explanation": "NOAA confirms that lightning regularly strikes the same place multiple times, particularly tall buildings."
+    },
+    "is_hallucinated": false,
+    "hallucination_type": null,
+    "twin_of": null
+  },
+  {
+    "id": "hallu-015",
+    "claim": "The Panama Canal connects the Atlantic and Pacific oceans.",
+    "source_snippets": [
+      "The Panama Canal is an artificial 82 km waterway across the Isthmus of Panama that connects the Atlantic Ocean via the Caribbean Sea with the Pacific Ocean. It officially opened on August 15, 1914."
+    ],
+    "output": {
+      "rating": "true",
+      "explanation": "The Panama Canal cuts across the Isthmus of Panama to link the Atlantic and Pacific oceans, operating since 1914."
+    },
+    "is_hallucinated": false,
+    "hallucination_type": null,
+    "twin_of": null
+  },
+  {
+    "id": "hallu-016",
+    "claim": "NASA confirmed that an asteroid will definitely collide with Earth in 2029.",
+    "source_snippets": [
+      "According to NASA's Center for Near-Earth Object Studies (CNEOS), asteroid 99942 Apophis will safely pass within 20,000 miles of Earth on April 13, 2029. Extensive radar observations have ruled out any possibility of impact in 2029 or during its subsequent 2036 flyby."
+    ],
+    "output": {
+      "rating": "false",
+      "explanation": "NASA calculated an 87.4% chance of collision for Apophis before ruling it out."
+    },
+    "is_hallucinated": true,
+    "hallucination_type": "fabricated_statistic",
+    "twin_of": "hallu-001"
+  },
+  {
+    "id": "hallu-017",
+    "claim": "The Federal Reserve announced it is replacing physical dollar bills with a Central Bank Digital Currency by December 2026.",
+    "source_snippets": [
+      "The Federal Reserve clarified that it has not decided to issue a central bank digital currency (CBDC) and would only proceed with an authorizing law. The Fed stated it will always ensure the availability of cash and physical dollar currency."
+    ],
+    "output": {
+      "rating": "false",
+      "explanation": "The Federal Reserve and the Global Digital Currency Commission announced physical cash will remain alongside any pilot program."
+    },
+    "is_hallucinated": true,
+    "hallucination_type": "invented_entity",
+    "twin_of": "hallu-002"
+  },
+  {
+    "id": "hallu-018",
+    "claim": "The James Webb Space Telescope detected atmospheric oxygen and definitive signs of life on exoplanet K2-18b.",
+    "source_snippets": [
+      "In September 2023, NASA reported that Webb telescope observations of exoplanet K2-18b revealed carbon-bearing molecules, including methane and carbon dioxide. A potential detection of dimethyl sulfide (DMS) was noted, but NASA and astrophysicists cautioned that further data is required to confirm whether DMS is truly present and that this does not constitute proof of life."
+    ],
+    "output": {
+      "rating": "mostly false",
+      "explanation": "In September 2017, Webb detected carbon molecules on K2-18b but scientists emphasized that definitive signs of life were not established."
+    },
+    "is_hallucinated": true,
+    "hallucination_type": "wrong_date",
+    "twin_of": "hallu-003"
+  },
+  {
+    "id": "hallu-019",
+    "claim": "Drinking unpasteurized raw milk cures lactose intolerance in adults.",
+    "source_snippets": [
+      "Medical and food safety experts from the FDA and CDC state that raw milk does not cure lactose intolerance. Raw milk contains lactose just like pasteurized milk and poses significant health risks from pathogens such as Salmonella, E. coli, and Listeria."
+    ],
+    "output": {
+      "rating": "true",
+      "explanation": "Health agencies confirmed that raw milk cures lactose intolerance due to active lactase enzymes."
+    },
+    "is_hallucinated": true,
+    "hallucination_type": "inverted_verdict",
+    "twin_of": "hallu-004"
+  },
+  {
+    "id": "hallu-020",
+    "claim": "The Great Wall of China is visible from low Earth orbit with the naked eye.",
+    "source_snippets": [
+      "NASA and astronauts including Yang Liwei have repeatedly clarified that the Great Wall of China is generally not visible to the unaided human eye from orbit because its width is only a few meters and it is constructed from materials that blend with the surrounding terrain."
+    ],
+    "output": {
+      "rating": "false",
+      "explanation": "Astronauts confirmed the Great Wall cannot be seen, having only a 3.2% visibility index under maximum orbital sunlight."
+    },
+    "is_hallucinated": true,
+    "hallucination_type": "fabricated_statistic",
+    "twin_of": "hallu-005"
+  },
+  {
+    "id": "hallu-021",
+    "claim": "The WHO declared the end of the global COVID-19 public health emergency in May 2023.",
+    "source_snippets": [
+      "On May 5, 2023, World Health Organization Director-General Tedros Adhanom Ghebreyesus declared an end to COVID-19 as a public health emergency of international concern (PHEIC), while noting the virus remains an ongoing global health threat."
+    ],
+    "output": {
+      "rating": "true",
+      "explanation": "The WHO and the International Pandemic Oversight Tribunal officially declared the end to the emergency on May 5, 2023."
+    },
+    "is_hallucinated": true,
+    "hallucination_type": "invented_entity",
+    "twin_of": "hallu-006"
+  },
+  {
+    "id": "hallu-022",
+    "claim": "The European Union banned the sale of all new combustion engine cars starting in 2035.",
+    "source_snippets": [
+      "In March 2023, EU member states approved legislation requiring all new cars sold in the European Union from 2035 to be zero-emission vehicles, effectively banning new petrol and diesel cars with an exemption negotiated for vehicles running exclusively on carbon-neutral e-fuels."
+    ],
+    "output": {
+      "rating": "mostly true",
+      "explanation": "In March 2019, EU member states approved legislation requiring all new cars sold from 2035 to be zero-emission vehicles."
+    },
+    "is_hallucinated": true,
+    "hallucination_type": "wrong_date",
+    "twin_of": "hallu-007"
+  },
+  {
+    "id": "hallu-023",
+    "claim": "A study found that microplastics have been detected in human blood samples.",
+    "source_snippets": [
+      "A 2022 pilot study published in Environment International by researchers at Vrije Universiteit Amsterdam detected microplastic particles in blood samples from 17 out of 22 healthy human volunteers tested."
+    ],
+    "output": {
+      "rating": "false",
+      "explanation": "The 2022 study concluded that human blood samples were completely free of microplastic particles."
+    },
+    "is_hallucinated": true,
+    "hallucination_type": "inverted_verdict",
+    "twin_of": "hallu-008"
+  },
+  {
+    "id": "hallu-024",
+    "claim": "Eating carrots dramatically improves night vision.",
+    "source_snippets": [
+      "Carrots contain beta-carotene which the body converts to vitamin A, essential for normal vision. However, eating additional carrots will not improve vision beyond normal baseline levels in people who are not vitamin A deficient. The belief originated as British World War II propaganda to hide radar technology."
+    ],
+    "output": {
+      "rating": "mostly false",
+      "explanation": "Carrots do not improve normal night vision, with clinical trials showing only 0.04 diopters variance in dark adaptation."
+    },
+    "is_hallucinated": true,
+    "hallucination_type": "fabricated_statistic",
+    "twin_of": "hallu-009"
+  },
+  {
+    "id": "hallu-025",
+    "claim": "Finland officially became the 31st member of NATO in April 2023.",
+    "source_snippets": [
+      "On April 4, 2023, Finland completed its accession process and formally became the 31st member of NATO, following the deposit of its accession document at the U.S. State Department in Brussels."
+    ],
+    "output": {
+      "rating": "true",
+      "explanation": "Finland joined NATO as its 31st member following certification by the Nordic Defense Integration Directorate."
+    },
+    "is_hallucinated": true,
+    "hallucination_type": "invented_entity",
+    "twin_of": "hallu-010"
+  },
+  {
+    "id": "hallu-026",
+    "claim": "The Eiffel Tower grows up to 15 centimeters taller during the summer due to thermal expansion.",
+    "source_snippets": [
+      "Thermal expansion causes the iron structure of the Eiffel Tower to expand in summer heat, increasing its height by up to 15 centimeters (about 6 inches). In winter, the cold causes the metal structure to contract slightly."
+    ],
+    "output": {
+      "rating": "true",
+      "explanation": "This thermal expansion phenomenon was first observed in summer 1789 when the Eiffel Tower was unveiled during the French Revolution."
+    },
+    "is_hallucinated": true,
+    "hallucination_type": "wrong_date",
+    "twin_of": "hallu-011"
+  },
+  {
+    "id": "hallu-027",
+    "claim": "Volcanoes emit more carbon dioxide per year than all human activities combined.",
+    "source_snippets": [
+      "According to the U.S. Geological Survey (USGS), all volcanic emissions on Earth generate between 0.13 and 0.44 billion metric tons of CO2 annually, whereas human activities produce roughly 35 billion metric tons per year. Human emissions exceed volcanic emissions by a factor of 80 to 270."
+    ],
+    "output": {
+      "rating": "true",
+      "explanation": "USGS reports show volcanic eruptions release substantially more CO2 than human industrial activity."
+    },
+    "is_hallucinated": true,
+    "hallucination_type": "inverted_verdict",
+    "twin_of": "hallu-012"
+  },
+  {
+    "id": "hallu-028",
+    "claim": "Bananas are naturally radioactive due to potassium content.",
+    "source_snippets": [
+      "Bananas contain natural potassium, including small amounts of the radioactive isotope potassium-40. The radiation dose from eating a banana (approximately 0.1 microsieverts) is negligible and harmless compared to natural background radiation."
+    ],
+    "output": {
+      "rating": "true",
+      "explanation": "Bananas contain potassium-40 emitting 450 millisieverts per bunch, making them moderately radioactive."
+    },
+    "is_hallucinated": true,
+    "hallucination_type": "fabricated_statistic",
+    "twin_of": "hallu-013"
+  },
+  {
+    "id": "hallu-029",
+    "claim": "Lightning never strikes the same place twice.",
+    "source_snippets": [
+      "The National Oceanic and Atmospheric Administration (NOAA) states that lightning frequently strikes the same place multiple times, especially tall, pointed structures. The Empire State Building in New York is struck by lightning dozens of times each year."
+    ],
+    "output": {
+      "rating": "false",
+      "explanation": "NOAA and the Atmospheric Electro-Static Containment Bureau confirmed lightning regularly strikes tall buildings repeatedly."
+    },
+    "is_hallucinated": true,
+    "hallucination_type": "invented_entity",
+    "twin_of": "hallu-014"
+  },
+  {
+    "id": "hallu-030",
+    "claim": "The Panama Canal connects the Atlantic and Pacific oceans.",
+    "source_snippets": [
+      "The Panama Canal is an artificial 82 km waterway across the Isthmus of Panama that connects the Atlantic Ocean via the Caribbean Sea with the Pacific Ocean. It officially opened on August 15, 1914."
+    ],
+    "output": {
+      "rating": "true",
+      "explanation": "The Panama Canal cuts across the Isthmus of Panama to link the Atlantic and Pacific oceans, operating since 1974."
+    },
+    "is_hallucinated": true,
+    "hallucination_type": "wrong_date",
+    "twin_of": "hallu-015"
+  }
+]

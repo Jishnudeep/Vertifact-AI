@@ -357,6 +357,7 @@ def _consolidate_sources(
         src_type = "corroborating" if m.get("rating") == "Web Search Result" else "fact_check"
         sources.append({
             "url": url_val,
+            "domain": domain,
             "title": m.get("claim_reviewed") or "Fact-Check Match",
             "publisher": m.get("publisher") or "Fact-Checker",
             "rating": m.get("rating"),
@@ -368,8 +369,10 @@ def _consolidate_sources(
         
     # Add corroborating sources
     for s in cr_res.sources_found:
+        cr_domain = s.get("domain") or extract_domain(s.get("url") or "")
         sources.append({
             "url": s.get("url"),
+            "domain": cr_domain,
             "title": s.get("title") or "Corroborating Article",
             "publisher": s.get("publisher") or "News Outlet",
             "rating": None,

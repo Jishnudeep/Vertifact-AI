@@ -1,6 +1,7 @@
 # VeriFact AI — Evals & Agent Ops Design Brief (Plan 9 Spec)
 
-**Status:** Draft, revised 2026-10-16 after stress test. Six open decisions (§6) need the project lead before execution.
+**Status:** Draft, revised 2026-10-16 after stress test; amended 2026-10-20 for ADK-native agents (`cd69a7f`, `e518dd7`). Six open decisions (§6) need the project lead before execution.
+**Amendments (2026-10-20):** Reconciled for ADK-native agents (`cd69a7f`, `e518dd7`, merged 2026-10-20). Groq/LiteLLM leaf prompts replaced by native Gemini `LlmAgent`s (`gemini-3.1-flash-lite`). Timeouts are config backstops. Replay hooks `backend/app/agents/common.py::get_model`. See `docs/superpowers/plans/2026-10-16-evals.md` §Amendments.
 **Roadmap:** Phase D of `docs/superpowers/specs/2026-10-15-realigned-roadmap-design.md` (decision R7; Phase D scope list)
 **Companion:** `documents/VeriFact_AI_OpenSource_Stack_and_Eval_Framework.md` §2.3 and §2.5, `documents/VeriFact_AI_Build_Order.md` Phase 3
 **Implementation Plan:** `docs/superpowers/plans/2026-10-16-evals.md`
