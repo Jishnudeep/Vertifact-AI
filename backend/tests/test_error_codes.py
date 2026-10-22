@@ -54,6 +54,8 @@ def test_degradation_message_mapping():
 
     assert degradation_message("Fact-check", "TIMEOUT") == "Fact-check check timed out"
     assert degradation_message("Fact-check", ProviderErrorCode.TIMEOUT.value) == "Fact-check check timed out"
+    assert degradation_message("Fact-check", ProviderErrorCode.TURN_LIMIT.value) == "Fact-check hit its model-turn limit"
+    assert degradation_message("Fact-check", "TURN_LIMIT") == "Fact-check hit its model-turn limit"
     assert degradation_message("Cross-reference", "RATE_LIMIT") == "Cross-reference check rate limited"
     assert degradation_message("Cross-reference", "QUOTA_EXHAUSTED") == "Cross-reference check quota exhausted"
     assert degradation_message("Cross-reference", "AUTH_ERROR") == "Cross-reference authentication failed"
