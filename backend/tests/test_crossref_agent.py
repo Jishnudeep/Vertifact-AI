@@ -325,3 +325,14 @@ def test_compute_consensus():
 def test_neutral_degraded_result_is_zero():
     neutral = make_neutral_crossref(degraded=True)
     assert neutral.v_consensus_score == 0.0 and neutral.v_refute_score == 0.0
+
+
+def test_crossref_instruction_keeps_contradicting_coverage_search():
+    """The optional second search (few sources, one side, contradicting coverage) feeds V_refute; keep it.
+
+    A "single search by default" rewrite was reverted: it was never measured and can lower V_refute.
+    """
+    instruction = cr.BASE_INSTRUCTION
+    assert "few sources or only one side" in instruction
+    assert "contradicting coverage" in instruction
+    assert "Never a third time" in instruction

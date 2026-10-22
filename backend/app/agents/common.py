@@ -1,4 +1,5 @@
 """Small shared pieces for the worker agents: the model seam, the budget callback, prompt fencing, log helpers."""
+import datetime
 import logging
 from typing import Any, Dict, Optional
 
@@ -8,6 +9,7 @@ from google.adk.models.llm_response import LlmResponse
 
 from app.config import settings
 from app.services import budget
+from app.utils.errors import AgentTurnLimitExceeded
 from app.utils.validators import neutralize_for_prompt
 
 logger = logging.getLogger(__name__)
@@ -35,6 +37,11 @@ def get_model() -> Any:
     return settings.model_id
 
 
+def get_today_utc() -> str:
+    """Current UTC date in YYYY-MM-DD format. The date is supplied by the app (datetime), never inferred by the model."""
+    return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
+
+
 def charge_llm_budget(callback_context: CallbackContext, llm_request: LlmRequest) -> Optional[LlmResponse]:
     """before_model_callback: one daily-budget charge per model turn; an exhausted budget raises."""
     if not budget.get_llm_budget().try_charge():
@@ -53,6 +60,35 @@ def log_model_turn(callback_context: CallbackContext, llm_request: LlmRequest) -
     contents = getattr(llm_request, "contents", None) or []
     turn = 1 + sum(1 for c in contents if getattr(c, "role", None) == "model")
     logger.info("%s: model turn %d", getattr(callback_context, "agent_name", "?"), turn)
+    return None
+
+
+def get_agent_max_turns(agent_name: Optional[str]) -> Optional[int]:
+    """Returns configured max turns based on agent name substring, or None if unconstrained."""
+    if not agent_name:
+        return None
+    name = agent_name.lower()
+    if "factcheck" in name:
+        return settings.factcheck_max_turns
+    if "crossref" in name:
+        return settings.crossref_max_turns
+    return None
+
+
+def enforce_turn_cap(callback_context: CallbackContext, llm_request: LlmRequest) -> Optional[LlmResponse]:
+    """before_model_callback: raises AgentTurnLimitExceeded if model turn exceeds the per-agent cap."""
+    agent_name = getattr(callback_context, "agent_name", None) or "unknown"
+    max_turns = get_agent_max_turns(agent_name)
+    if max_turns is None:
+        return None
+    contents = getattr(llm_request, "contents", None) or []
+    turn = 1 + sum(1 for c in contents if getattr(c, "role", None) == "model")
+    if turn > max_turns:
+        logger.warning(
+            "%s: exceeded maximum turn cap (%d > %d); aborting turn with AgentTurnLimitExceeded",
+            agent_name, turn, max_turns
+        )
+        raise AgentTurnLimitExceeded(agent_name=agent_name, max_turns=max_turns)
     return None
 
 
@@ -77,6 +113,6 @@ def log_model_response(callback_context: CallbackContext, llm_response: LlmRespo
 def agent_kwargs() -> Dict[str, Any]:
     """Callbacks every worker LlmAgent is built with (the latency bench wraps this to time tools)."""
     return {
-        "before_model_callback": [log_model_turn, charge_llm_budget],
+        "before_model_callback": [log_model_turn, enforce_turn_cap, charge_llm_budget],
         "after_model_callback": log_model_response,
     }
