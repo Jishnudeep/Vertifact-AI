@@ -300,7 +300,7 @@ async def run_evaluation(
             expected_conf = item.get("expected_confidence", "high")
             excluded = [item["origin_domain"]] if item.get("origin_domain") else []
             if claim_delay_s:
-                await asyncio.sleep(claim_delay_s)  # stay under Groq's 8K TPM free-tier limit
+                await asyncio.sleep(claim_delay_s)  # stay under the Gemini free-tier 15 RPM limit
 
             logger.info(f"Evaluating [{cid}] ({c_type}): {text[:60]}...")
 
@@ -718,7 +718,7 @@ def _parse_args(argv=None):
                         help="pin request_deadline_s for this eval run")
     parser.add_argument("--output", type=Path, default=BASE_DIR / "eval" / "results" / "baseline_run.json")
     parser.add_argument("--claim-delay", type=float, default=0.0,
-                        help="seconds between claims (use ~2.0 when recording on Groq free tier)")
+                        help="seconds between claims (a cold claim costs about 8 Gemini requests; pace recording under the 15 RPM free-tier limit)")
     return parser.parse_args(argv)
 
 

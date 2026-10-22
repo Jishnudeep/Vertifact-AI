@@ -20,8 +20,9 @@ column (1 → 2 → 4 → 3 → 5). Each plan's Task 0 checks its prerequisites.
 | 5th | Plan 5 | [doc-sync](2026-09-23-doc-sync.md) | Medium drift, H5, H6: error codes, rating map, docs, skills | Plans 1–4 | completed 2026-09-28 (Antigravity) |
 | 6th | Plan 6 | [google-search-grounding](2026-10-14-google-search-grounding.md) | Google Search grounding replaces Tavily | Plans 1–5 | completed |
 | 7th | Plan 7 | [frontend-mvp](2026-10-15-frontend-mvp.md) | Frontend MVP, text input end to end (Midnight Transit Diagram), plus API additions: per-agent status, cap fields, `found_by`, stored-result parity, `Retry-After`, featured recent results | Plan 6 | completed |
-| 8th | Plan 9 | [evals](2026-10-16-evals.md) | Evals: valid baseline, DeepEval guardrail, ADK eval over traces, latency and cache metrics | Plan 7 | Tasks 0–6 done; Task 7 blocked on quota |
-| 9th | Plan 10 | [agent-ops](2026-10-20-agent-ops.md) | Governance, tracing, audit record, shared Gemini budget, read API, Docker demo-on-demand deployment (spec: `../specs/2026-10-20-plan10-design.md`) | Plan 7 (Plan 9's live runs may stay on hold; Task A merged or rebased) | designed 2026-10-20; awaiting plan approval |
+| 7th+ | Task A | [spec](../specs/2026-10-20-latency-thinking-budgets.md) (no plan file) | Per-agent thinking levels, model-turn caps, UTC date awareness, sub-stage timing | Plan 6 | merged 2026-10-22 (PR #9); **no valid latency measurement yet**, the A.4 bench ran with grounded search broken |
+| 8th | Plan 9 | [evals](2026-10-16-evals.md) | Evals: valid baseline, DeepEval guardrail, ADK eval over traces, latency and cache metrics | Plan 7 | Tasks 0–6 built and tested; Task 7 (record run) blocked on quota; Plan 9 gate not claimed |
+| 9th | Plan 10 | [agent-ops](2026-10-20-agent-ops.md) | Governance, tracing, audit record, shared Gemini budget, read API, Docker demo-on-demand deployment (spec: `../specs/2026-10-20-plan10-design.md`) | Plan 7 (Plan 9's live runs may stay on hold; Task A merged or rebased) | designed 2026-10-20 (spec and plan merged as PR #8); not started |
 | 10th (last) | Plan 8 | [url-and-screenshot-input](2026-10-15-url-and-screenshot-input.md) | URL scraper, Surya OCR, `/api/verify/image`, frontend input | Plans 7, 9, 10 | not started; runs last by decision (2026-10-15) |
 
 **Realignment (2026-10-15):** Plans 7–10 follow `../specs/2026-10-15-realigned-roadmap-design.md`. Plan 7's spec is `../specs/2026-10-15-frontend-mvp-design.md`. Plans 9 and 10 are written only after their own design sessions. Plan 8 keeps its number but runs last.
@@ -77,8 +78,8 @@ Plans 3 and 5 were amended to match. In particular, from the repo root use `uv r
 
 1. **Commit or stash the current working tree.** Every plan's Task 0 stops on a dirty tree.
 2. **Supabase migrations run by hand**, in the SQL editor, in order: `03_stance_aware_consensus.sql` (Plan 1), `04_cache_topk_and_ttl.sql` (Plan 2), `05_retention.sql` (Plan 4), `06_warnings_and_lockdown.sql` (review follow-ups). 03–06 were applied. Never re-run 01–03 after 04: they recreate an old `match_claims` overload. `07_featured_results.sql` (Plan 7, Task 4) must be applied by hand after Plan 7 merges. Then feature rows by setting `results.featured = true` in Supabase.
-3. **Quota spend needs your OK.** The first eval `--replay record` run (Plan 3) spends Tavily and Groq quota. The LIAR/FEVER raw files are downloaded by you (Plan 3, Task 5).
-4. **The dev model decision** (Plan 5, Task 0) is yours: `gpt-oss-120b` in config vs `gpt-oss-20b` in docs.
+3. **Quota spend needs your OK.** Any `--replay record` or `--live` eval run spends free-tier Gemini quota (about 8 requests per cold claim; 500/day cap). The LIAR/FEVER raw files are downloaded by you (Plan 3, Task 5).
+4. ~~The dev model decision (Plan 5, Task 0)~~ is obsolete: workers run on Gemini (`MODEL_ID`, default `gemini-3.1-flash-lite`).
 
 ## Review gate mapping (CLAUDE.md §5 / AGENTS.md §5)
 
