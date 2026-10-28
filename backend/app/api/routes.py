@@ -3,13 +3,19 @@ import logging
 import uuid
 from typing import List
 from fastapi import APIRouter, Request, HTTPException, status
+from starlette.formparsers import MultiPartParser
 from pydantic import ValidationError
 from slowapi import Limiter
 from app.api.client_ip import client_ip
 
-from app.api.schemas import VerifyRequest, VerifyResponse, ErrorResponse, RecentResultModel
+from app.api.schemas import (
+    VerifyRequest, VerifyResponse, UrlVerifyResponse, ImageVerifyResponse, ErrorResponse, RecentResultModel,
+)
 from app.api.result_format import format_stored_result
-from app.agents.orchestrator import verify_claim
+from app.agents.ocr_agent import MAX_IMAGE_BYTES, OCRError, extract_text
+from app.agents.orchestrator import InvalidInputError, verify_claim
+from app.agents.scraper_agent import scrape_url
+from app.utils.validators import sanitize_text
 from app.db.connection import get_supabase
 
 logger = logging.getLogger(__name__)
@@ -30,9 +36,9 @@ def _is_undefined_column(exc: Exception) -> bool:
 
 @router.post(
     "/verify",
-    response_model=VerifyResponse,
+    response_model=UrlVerifyResponse,
     responses={
-        400: {"model": ErrorResponse, "description": "Invalid input claim"},
+        400: {"model": ErrorResponse, "description": "Invalid input claim, or a URL that cannot be read"},
         422: {"model": ErrorResponse, "description": "Non-verifiable claim (opinion/question)"},
         429: {"description": "Rate limit exceeded (10 requests/minute)"},
         500: {"model": ErrorResponse, "description": "All agents failed"},
@@ -42,11 +48,88 @@ def _is_undefined_column(exc: Exception) -> bool:
 async def verify_endpoint(request: Request, body: VerifyRequest):
     """
     Main verification endpoint.
-    Accepts text claim and returns composite trust score, confidence level,
-    linguistic profile, and citations.
+    Accepts a text claim or an article URL and returns composite trust score, confidence level,
+    linguistic profile, and citations. For a URL the claim is the article headline (TDD §4.6).
     """
-    result = await verify_claim(body.input, body.input_type)
-    return result
+    if body.input_type == "url":
+        # sanitize_text strips tracking parameters from the link before it is fetched.
+        scraped = await scrape_url(sanitize_text(body.input))
+        if scraped.error:
+            raise InvalidInputError(scraped.error)
+        result = await verify_claim(scraped.headline, "url")
+        return {**result, "source_url": scraped.final_url, "scrape_degraded": scraped.degraded}
+    if body.input_type == "image":
+        raise InvalidInputError("Upload screenshots to /api/verify/image.")
+    return await verify_claim(body.input, body.input_type)
+
+
+_IMAGE_CONTENT_TYPES = frozenset({"image/png", "image/jpeg"})
+# One file part plus multipart framing; anything larger is refused without being buffered.
+_MAX_UPLOAD_BODY_BYTES = MAX_IMAGE_BYTES + 64 * 1024
+
+
+class _InMemoryMultiPartParser(MultiPartParser):
+    # Starlette spools file parts bigger than 1 MB to a temp file on disk; the body is already
+    # capped, so keep it all in memory (TDD §11: no disk writes for uploads).
+    spool_max_size = _MAX_UPLOAD_BODY_BYTES
+
+
+async def _read_image_upload(request: Request) -> bytes:
+    """Read the single `image` part with the body capped while streaming (before any parsing/spooling)."""
+    declared = request.headers.get("content-length")
+    if declared and declared.isdigit() and int(declared) > _MAX_UPLOAD_BODY_BYTES:
+        raise InvalidInputError("The image is larger than 5 MB.")
+    if "multipart/form-data" not in request.headers.get("content-type", "").lower():
+        raise InvalidInputError("Send the screenshot as multipart/form-data in the 'image' field.")
+    body = bytearray()
+    async for chunk in request.stream():
+        body += chunk
+        if len(body) > _MAX_UPLOAD_BODY_BYTES:
+            raise InvalidInputError("The image is larger than 5 MB.")
+
+    async def replay():
+        yield bytes(body)
+        yield b""
+
+    form = await _InMemoryMultiPartParser(request.headers, replay()).parse()
+    try:
+        upload = form.get("image")
+        if upload is None or not hasattr(upload, "read"):
+            raise InvalidInputError("Attach the screenshot in the 'image' field.")
+        if (upload.content_type or "").lower() not in _IMAGE_CONTENT_TYPES:
+            raise InvalidInputError("Only PNG and JPEG images are supported.")
+        return await upload.read()
+    finally:
+        await form.close()
+
+
+@router.post(
+    "/verify/image",
+    response_model=ImageVerifyResponse,
+    openapi_extra={"requestBody": {"required": True, "content": {"multipart/form-data": {"schema": {
+        "type": "object", "required": ["image"],
+        "properties": {"image": {"type": "string", "format": "binary"}}}}}}},
+    responses={
+        400: {"model": ErrorResponse, "description": "Unsupported, oversized or unreadable image; no text found"},
+        422: {"model": ErrorResponse, "description": "Non-verifiable text (opinion/question)"},
+        429: {"description": "Rate limit exceeded (10 requests/minute)"},
+        500: {"model": ErrorResponse, "description": "All agents failed"},
+    }
+)
+@limiter.limit("10/minute")
+async def verify_image_endpoint(request: Request):
+    """
+    Screenshot verification: OCR the image (in memory, never stored), then run the standard pipeline.
+    The body is read by hand (not as an UploadFile) so an oversized upload is refused while streaming.
+    """
+    data = await _read_image_upload(request)
+    try:
+        ocr = await extract_text(data)
+    except OCRError as exc:
+        raise InvalidInputError(str(exc)) from exc
+    result = await verify_claim(ocr.extracted_text, "image")
+    return {**result, "ocr_extracted_text": result["claim"], "ocr_confidence": ocr.confidence}
+
 
 @router.get(
     "/results/recent",

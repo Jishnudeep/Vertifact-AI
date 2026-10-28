@@ -97,7 +97,7 @@ verifact-ai/
 │   │   │   ├── factcheck_agent.py   # Fact-Check Lookup Agent
 │   │   │   ├── crossref_agent.py    # Cross-Reference & Source Agent
 │   │   │   ├── linguistic_agent.py  # Linguistic Analysis Agent
-│   │   │   ├── ocr_agent.py         # Surya OCR Agent
+│   │   │   ├── ocr_agent.py         # docTR OCR Agent
 │   │   │   └── scraper_agent.py     # URL content extraction Agent
 │   │   ├── scoring/
 │   │   │   ├── engine.py            # C_total computation
@@ -293,7 +293,7 @@ Every response carries `X-Process-Time-Ms`. Each agent node carries a fixed `tim
 **Response:** Same schema as `/api/verify`, with additional field:
 ```json
 {
-  "ocr_extracted_text": "The raw text Surya pulled from the image",
+  "ocr_extracted_text": "The text docTR read from the image",
   "ocr_confidence": 0.92,
   ...
 }
@@ -582,7 +582,7 @@ class OCRResult:
 
 **Logic:**
 1. Load image, resize if > 2048px on longest edge (memory optimization for 8GB RAM)
-2. Run Surya OCR pipeline (detection → recognition → reading order)
+2. Run the docTR OCR pipeline (`db_mobilenet_v3_large` detection → `crnn_mobilenet_v3_small` recognition → reading order). docTR replaces Surya: Surya ≥ 0.22 is a vision-language model that spawns its own llama.cpp/vLLM server, too heavy for the 8 GB target (and its weights are OpenRAIL-M); docTR is Apache-2.0, PyTorch, CPU. Models load lazily (or at startup with `OCR_PRELOAD=true`; the cold load downloads weights, ~80 s), inference is serialized and bounded by `OCR_TIMEOUT_S`
 3. Concatenate text blocks in reading order
 4. If extracted text < 10 characters: return error "insufficient text detected"
 5. Return cleaned text for downstream processing
@@ -1095,7 +1095,7 @@ services:
 ### Production / Demo
 
 **Hosting constraints (verified 2026-09):** the backend holds torch + sentence-transformers
-(MiniLM + the NLI cross-encoder) + spaCy, so it needs about 2 GB of RAM (more with Surya OCR).
+(MiniLM + the NLI cross-encoder) + spaCy, so it needs about 2 GB of RAM (more with docTR OCR).
 - Render's free tier (512 MB, sleeps when idle) cannot hold it.
 - Railway has no permanent free tier.
 - Hugging Face stopped allowing Docker/Gradio Spaces on free CPU Basic for new Spaces in June 2026 (PRO required).

@@ -449,3 +449,10 @@ async def test_cancellation_propagates(monkeypatch):
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("status", [401, 402, 403, 451])
+async def test_fetch_page_text_still_rejects_blocked_statuses(status):
+    rec = Recorder({"reuters.com/article": httpx.Response(status, headers={"content-type": "text/html"}, text=ARTICLE)})
+    assert await fetch("https://reuters.com/article", rec=rec) is None

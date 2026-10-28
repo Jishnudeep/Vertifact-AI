@@ -64,6 +64,13 @@ class Settings(BaseSettings):
 
     # Plan 6 / TDD §11: overall wall-clock budget for fetching one cited page (all hops).
     page_fetch_timeout_s: float = 2.0
+    # TDD §4.6: overall wall-clock budget for scraping a user-supplied URL (all hops).
+    scrape_timeout_s: float = 5.0
+    # TDD §4.5: OCR wall-clock budget (CPU inference) and whether to load the models at startup.
+    # Both TBD from benchmarking; preload is off so a deployment that never sees screenshots
+    # does not pay the memory.
+    ocr_timeout_s: float = 20.0
+    ocr_preload: bool = False
 
     # H3: number of reverse proxies in front of the API that append to X-Forwarded-For.
     # 0 = trust nothing (local dev); 1 = one platform proxy (Render/Railway/Fly).

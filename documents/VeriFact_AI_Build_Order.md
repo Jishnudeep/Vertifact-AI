@@ -190,15 +190,15 @@ Run a quick sanity check before moving on:
 
 ## Phase 2: Multi-Modal Input + Frontend (Weeks 3-5)
 
-### Step 2.1 — OCR Agent (Surya)
+### Step 2.1 — OCR Agent (docTR; replaces Surya, see TDD §4.5)
 **File:** `backend/app/agents/ocr_agent.py`
 **Depends on:** Phase 1 complete
 
-1. Install `surya-ocr`
+1. Install `python-doctr`
 2. Implement image preprocessing (resize, format validation)
 3. Implement OCR pipeline (detection → recognition → reading order)
 4. Test with screenshots of tweets, news headlines, social media posts
-5. **Memory management:** On 8GB RAM, load Surya model only when needed, unload after. Or run OCR in a subprocess.
+5. **Memory management:** On 8GB RAM, docTR's small CPU models load lazily and stay resident (`OCR_PRELOAD` loads them at startup); inference is serialized to one image at a time.
 
 **Gate:** OCR correctly extracts text from 10 test screenshots with >85% character accuracy.
 

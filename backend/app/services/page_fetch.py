@@ -98,6 +98,41 @@ async def fetch_page_text(
     return None
 
 
+@dataclass(frozen=True)
+class FetchedHtml:
+    final_url: str
+    final_host: str
+    body: bytes
+    encoding: Optional[str]
+    status: int
+
+
+# Statuses whose HTML body is still read when the caller opts in (login/paywall/bot walls often
+# still carry og:title and og:description).
+BLOCKED_STATUSES = frozenset({401, 402, 403, 451})
+
+
+async def fetch_html(
+    url: str,
+    *,
+    timeout_s: float,
+    accept_blocked: bool = False,
+    transport: Optional[httpx.AsyncBaseTransport] = None,
+    resolver: Optional[Callable] = None,
+) -> FetchedHtml:
+    """
+    SSRF-guarded fetch of one HTML page (same hop validation, IP pinning and caps as
+    fetch_page_text). Raises UnsafeURLError, TimeoutError/httpx.TimeoutException or an internal
+    rejection on any failure; callers that must not raise wrap it. With `accept_blocked`, an
+    HTML body served with a status in BLOCKED_STATUSES is returned (its `status` says so).
+    """
+    progress = _Progress(url)
+    return await asyncio.wait_for(
+        _fetch_body(progress, None, transport, resolver or socket.getaddrinfo, timeout_s, accept_blocked),
+        timeout=timeout_s,
+    )
+
+
 async def _fetch(
     progress: _Progress,
     expected_domain: Optional[str],
@@ -105,6 +140,23 @@ async def _fetch(
     resolver: Callable,
     timeout_s: float,
 ) -> PageText:
+    page = await _fetch_body(progress, expected_domain, transport, resolver, timeout_s, False)
+    title, text = await asyncio.to_thread(_extract, page.body, page.encoding)
+    if len(text) < MIN_TEXT_CHARS:
+        raise _FetchRejected(f"only {len(text)} chars of body text")
+    return PageText(
+        final_url=page.final_url, domain=_domain_of(page.final_host), title=title, text=text[:MAX_TEXT_CHARS],
+    )
+
+
+async def _fetch_body(
+    progress: _Progress,
+    expected_domain: Optional[str],
+    transport: Optional[httpx.AsyncBaseTransport],
+    resolver: Callable,
+    timeout_s: float,
+    accept_blocked: bool,
+) -> FetchedHtml:
     # trust_env=False: an env proxy would bypass the IP pinning below.
     # No keep-alive: connections are pooled by IP, so a later hop to another hostname on the
     # same IP would reuse a TLS session verified for the previous hostname.
@@ -127,8 +179,9 @@ async def _fetch(
                         raise _FetchRejected("too many redirects")
                     progress.url = urlunsplit(urlsplit(urljoin(current, location))._replace(fragment=""))
                     continue
-                if not 200 <= response.status_code < 300:
-                    raise _FetchRejected(f"status {response.status_code}")
+                status_code = response.status_code
+                if not 200 <= status_code < 300 and not (accept_blocked and status_code in BLOCKED_STATUSES):
+                    raise _FetchRejected(f"status {status_code}")
                 content_type = response.headers.get("content-type", "").split(";", 1)[0].strip().lower()
                 if content_type != "text/html":
                     raise _FetchRejected(f"content-type '{content_type}'")
@@ -139,10 +192,7 @@ async def _fetch(
                 await response.aclose()
             break
 
-    title, text = await asyncio.to_thread(_extract, body, encoding)
-    if len(text) < MIN_TEXT_CHARS:
-        raise _FetchRejected(f"only {len(text)} chars of body text")
-    return PageText(final_url=current, domain=_domain_of(final_host), title=title, text=text[:MAX_TEXT_CHARS])
+    return FetchedHtml(final_url=current, final_host=final_host, body=body, encoding=encoding, status=status_code)
 
 
 def _domain_of(host: str) -> str:
