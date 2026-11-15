@@ -162,6 +162,25 @@ async def test_evidence_api_outage_surfaces_partial_analysis_warning():
         assert degraded == {"factcheck", "crossref"}
 
 @pytest.mark.anyio
+async def test_turn_cap_degrades_the_agent_through_the_supervisor():
+    """F2 end-to-end: a model that never answers hits the per-run turn cap; the supervisor turns it
+    into a degraded neutral result (PARSE_ERROR) and the response carries 'Partial analysis'."""
+    loop_fc = [call("search_fact_check_database", query=f"q{i}") for i in range(10)]
+    loop_cr = [call("search_news_coverage", query=f"q{i}") for i in range(10)]
+    with patch("app.agents.orchestrator.generate_embedding", return_value=[0.1] * 384),          patch("app.agents.orchestrator.lookup_cache", return_value=None),          patch("app.agents.factcheck_agent.search_factchecks", AsyncMock(return_value=[])),          patch("app.agents.crossref_agent.grounded_search", side_effect=EvidenceAPIError("down")),          patch("app.agents.orchestrator.insert_cache", return_value=None),          pytest.MonkeyPatch.context() as mp:
+        mp.setattr("app.config.settings.max_model_turns_per_agent", 3)
+        install_script(mp, routes={"fact-check lookup agent": loop_fc, "cross-reference agent": loop_cr})
+
+        result = await verify_claim("NASA launched a rocket to Mars yesterday", bypass_cache=True)
+
+    degraded = {a["name"]: a for a in result["agents"] if a["status"] == "degraded"}
+    assert set(degraded) == {"factcheck", "crossref"}
+    assert "PARSE_ERROR" in str(degraded["factcheck"])
+    assert any("Partial analysis" in w for w in result["confidence"]["warnings"])
+    assert result["trust_score"]["c_total"] <= 0.50 and result["confidence"]["verdict_found"] is False
+
+
+@pytest.mark.anyio
 async def test_verify_claim_rejects_empty_input():
     with pytest.raises(InvalidInputError):
         await verify_claim("   ")

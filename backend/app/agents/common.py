@@ -1,6 +1,6 @@
 """Small shared pieces for the worker agents: the model seam, the budget callback, prompt fencing, log helpers."""
 import logging
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Optional
 
 from google.adk.agents.callback_context import CallbackContext
 from google.adk.models.llm_request import LlmRequest
@@ -42,6 +42,25 @@ def charge_llm_budget(callback_context: CallbackContext, llm_request: LlmRequest
     return None
 
 
+def cap_model_turns(limit: int) -> Callable[[CallbackContext, LlmRequest], Optional[LlmResponse]]:
+    """
+    before_model_callback with its own counter: raises ModelTurnLimitExceeded on turn `limit + 1`.
+    Build one per agent run (agent_kwargs() is called once per LlmAgent build), so the count never
+    leaks between runs or between the parallel agents. It runs before charge_llm_budget, so a
+    refused turn is not charged.
+    """
+    turns = 0
+
+    def callback(callback_context: CallbackContext, llm_request: LlmRequest) -> Optional[LlmResponse]:
+        nonlocal turns
+        turns += 1
+        if turns > limit:
+            raise budget.ModelTurnLimitExceeded(f"Model did not finish within {limit} turns")
+        return None
+
+    return callback
+
+
 def clip(text: Optional[str], limit: int = 80) -> str:
     """Untrusted text (a claim, a query) for a log line: one line, at most `limit` chars."""
     text = " ".join((text or "").split())
@@ -75,8 +94,11 @@ def log_model_response(callback_context: CallbackContext, llm_response: LlmRespo
 
 
 def agent_kwargs() -> Dict[str, Any]:
-    """Callbacks every worker LlmAgent is built with (the latency bench wraps this to time tools)."""
+    """
+    Callbacks every worker LlmAgent is built with (the latency bench wraps this to time tools).
+    Call it once per agent build: the turn cap it returns carries that run's counter.
+    """
     return {
-        "before_model_callback": [log_model_turn, charge_llm_budget],
+        "before_model_callback": [log_model_turn, cap_model_turns(settings.max_model_turns_per_agent), charge_llm_budget],
         "after_model_callback": log_model_response,
     }
