@@ -1,3 +1,4 @@
+import asyncio
 import io
 import time
 from types import SimpleNamespace
@@ -7,6 +8,12 @@ from PIL import Image
 
 from app.agents import ocr_agent
 from app.agents.ocr_agent import OCRError, extract_text
+
+
+@pytest.fixture(autouse=True)
+def fresh_queue(monkeypatch):
+    """A semaphore binds to the first event loop that contends for it; give each test its own."""
+    monkeypatch.setattr(ocr_agent, "_QUEUE", asyncio.Semaphore(1))
 
 
 def png(size=(200, 100), fmt="PNG") -> bytes:
@@ -103,9 +110,50 @@ async def test_engine_failure_is_masked(monkeypatch):
 @pytest.mark.anyio
 async def test_timeout(monkeypatch):
     monkeypatch.setattr(ocr_agent.settings, "ocr_timeout_s", 0.05)
-    monkeypatch.setattr(ocr_agent, "get_predictor", lambda: (lambda pages: time.sleep(0.5)))
+    monkeypatch.setattr(ocr_agent, "get_predictor", lambda: (lambda pages: time.sleep(0.3)))
     with pytest.raises(OCRError, match="too long"):
         await extract_text(png())
+    # F4: the thread is still running, so the slot stays taken until it finishes, then frees itself.
+    assert ocr_agent._QUEUE.locked()
+    for _ in range(100):
+        if not ocr_agent._QUEUE.locked():
+            break
+        await asyncio.sleep(0.02)
+    assert not ocr_agent._QUEUE.locked()
+
+
+@pytest.mark.anyio
+async def test_a_caller_after_a_timeout_waits_for_the_slot_without_a_thread(monkeypatch):
+    """F4: the next upload queues on the semaphore until the timed-out inference ends."""
+    monkeypatch.setattr(ocr_agent.settings, "ocr_timeout_s", 0.05)
+    monkeypatch.setattr(ocr_agent, "MAX_QUEUE_WAIT_S", 0.05)
+    monkeypatch.setattr(ocr_agent, "get_predictor", lambda: (lambda pages: time.sleep(0.3)))
+    with pytest.raises(OCRError, match="too long"):
+        await extract_text(png())
+    with pytest.raises(OCRError, match="Too many"):
+        await extract_text(png())
+    for _ in range(100):
+        if not ocr_agent._QUEUE.locked():
+            break
+        await asyncio.sleep(0.02)
+    assert not ocr_agent._QUEUE.locked()
+
+
+@pytest.mark.anyio
+async def test_cancelled_request_keeps_the_slot_until_inference_ends(monkeypatch):
+    """F4: a client disconnect mid-inference must not free the slot while the thread still runs."""
+    monkeypatch.setattr(ocr_agent, "get_predictor", lambda: (lambda pages: time.sleep(0.3)))
+    task = asyncio.ensure_future(extract_text(png()))
+    await asyncio.sleep(0.1)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert ocr_agent._QUEUE.locked()
+    for _ in range(100):
+        if not ocr_agent._QUEUE.locked():
+            break
+        await asyncio.sleep(0.02)
+    assert not ocr_agent._QUEUE.locked()
 
 
 @pytest.mark.anyio

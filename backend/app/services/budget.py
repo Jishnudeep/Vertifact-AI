@@ -10,6 +10,10 @@ class LLMBudgetExceeded(RuntimeError):
     """The daily LLM call budget is spent. Agents degrade; they never guess."""
 
 
+class ModelTurnLimitExceeded(RuntimeError):
+    """One agent run asked the model for more turns than settings.max_model_turns_per_agent. The agent degrades."""
+
+
 class DailyBudget:
     """
     A per-UTC-day counter. try_charge() is atomic and charges nothing when it refuses.

@@ -16,7 +16,7 @@ try:
 except ImportError:
     genai_errors = None
 
-from app.services.budget import LLMBudgetExceeded
+from app.services.budget import LLMBudgetExceeded, ModelTurnLimitExceeded
 from app.services.errors import EvidenceBudgetExceeded
 
 class AgentTurnLimitExceeded(RuntimeError):
@@ -153,6 +153,14 @@ def classify_provider_error(exc: Exception, provider: str = "unknown") -> AgentE
             code=ProviderErrorCode.QUOTA_EXHAUSTED,
             provider=prov,
             message=str(exc) or "Daily call budget exhausted"
+        )
+
+    # Our own per-run turn cap: the model kept asking instead of answering.
+    if isinstance(exc, ModelTurnLimitExceeded):
+        return AgentErrorDetails(
+            code=ProviderErrorCode.PARSE_ERROR,
+            provider=prov,
+            message=str(exc) or "Model did not finish within its turn limit"
         )
 
     # Check for unconfigured service errors

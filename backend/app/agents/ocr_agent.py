@@ -13,6 +13,7 @@ Every failure is an `OCRError` carrying a fixed, user-safe message (never raw ex
 the route maps it to a 400.
 """
 import asyncio
+import functools
 import io
 import logging
 import threading
@@ -132,6 +133,13 @@ def _recognize(img: Image.Image) -> OCRResult:
     return OCRResult(extracted_text=text, confidence=(weighted / chars) if chars else 0.0, bounding_boxes=boxes)
 
 
+def _release_after_inference(queue: asyncio.Semaphore, task: "asyncio.Future[OCRResult]") -> None:
+    """Done-callback for an inference that outlived its request: free the slot, consume the outcome."""
+    queue.release()
+    if not task.cancelled() and task.exception() is not None:
+        logger.warning("OCR inference failed after its request timed out (%s)", type(task.exception()).__name__)
+
+
 async def extract_text(image_bytes: bytes) -> OCRResult:
     """
     Screenshot bytes -> OCRResult. Raises OCRError (user-safe message) for an invalid image, a
@@ -139,22 +147,36 @@ async def extract_text(image_bytes: bytes) -> OCRResult:
     """
     start = time.perf_counter()
     img = await asyncio.to_thread(_decode, image_bytes)
+    queue = _QUEUE  # the slot released below is the one acquired here
     try:
-        await asyncio.wait_for(_QUEUE.acquire(), timeout=MAX_QUEUE_WAIT_S)
+        await asyncio.wait_for(queue.acquire(), timeout=MAX_QUEUE_WAIT_S)
     except (TimeoutError, asyncio.TimeoutError) as exc:
         raise OCRError("Too many screenshots are being read right now. Try again shortly.") from exc
+    # A worker thread cannot be cancelled: after a timeout the inference keeps running. The slot is
+    # then released when that thread finishes, not when we stop waiting, so the next caller queues
+    # here (no thread held) and its own timeout does not absorb the previous inference.
+    release_on_finish = False
     try:
         # Load outside the timeout: the first call may download and build the models (see
         # settings.ocr_preload); the timeout budgets inference only.
         await asyncio.to_thread(get_predictor)
-        result = await asyncio.wait_for(asyncio.to_thread(_recognize, img), timeout=settings.ocr_timeout_s)
+        inference = asyncio.ensure_future(asyncio.to_thread(_recognize, img))
+        try:
+            result = await asyncio.wait_for(asyncio.shield(inference), timeout=settings.ocr_timeout_s)
+        except BaseException:
+            # Timeout or cancellation (client gone): the thread is still running.
+            if not inference.done():
+                release_on_finish = True
+                inference.add_done_callback(functools.partial(_release_after_inference, queue))
+            raise
     except (TimeoutError, asyncio.TimeoutError) as exc:
         raise OCRError("Reading the image took too long. Try typing the claim instead.") from exc
     except Exception as exc:  # noqa: BLE001 — never leak engine internals to the client
         logger.warning("OCR engine failed (%s)", type(exc).__name__)
         raise OCRError("Could not extract text. Try typing the claim instead.") from exc
     finally:
-        _QUEUE.release()
+        if not release_on_finish:
+            queue.release()
     if len(result.extracted_text.strip()) < MIN_TEXT_CHARS:
         raise OCRError("Could not extract text. Try typing the claim instead.")
     return OCRResult(
