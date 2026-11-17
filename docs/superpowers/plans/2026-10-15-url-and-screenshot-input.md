@@ -259,6 +259,15 @@
 
 ### Task 6: Frontend input and provenance
 
+> **As built (2026-11-17), deviations from this task:**
+> - The backend returns `invalid_input` with a user-safe `detail`, not `url_unreadable` / `insufficient_text` / `ocr_low_confidence`. So the UI shows that detail, and for a URL it appends "Paste the headline or the claim instead."
+> - There is no `ocr_low_confidence` prefill, because the backend has no such code.
+> - Copy stays in `lib/copy.js`; there is no new copy file.
+> - Provenance shows only on a fresh response. A stored result keeps neither `source_url` nor the OCR fields.
+> - "Edit and re-check" passes the text in router state, never in the URL.
+> - "Try again" replays the last request, including a screenshot.
+> - Still open: the `url_result.json` / `image_result.json` fixtures and the 375 / 1440 px captures in `.impeccable/review/`.
+
 **Files:**
 - Modify: `frontend/src/components/ClaimInput.jsx`, `frontend/src/hooks/useVerify.js`, `frontend/src/lib/api.js`, `frontend/src/lib/copy.js`
 - Create: `frontend/src/components/{ImagePicker,InputProvenance}.jsx`, `frontend/src/lib/inputType.js`

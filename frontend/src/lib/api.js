@@ -20,8 +20,9 @@ async function request(path, options = {}) {
   try {
     response = await fetch(url, {
       ...options,
+      // Multipart bodies set their own Content-Type (with the boundary).
       headers: {
-        'Content-Type': 'application/json',
+        ...(options.body instanceof FormData ? {} : { 'Content-Type': 'application/json' }),
         ...(options.headers || {}),
       },
     });
@@ -76,6 +77,17 @@ export async function verifyClaim(input, inputType = 'text') {
     method: 'POST',
     body: JSON.stringify({ input, input_type: inputType }),
   });
+}
+
+/**
+ * Verify a screenshot: the server reads its text (OCR, in memory) and checks that text.
+ * @param {File} file - PNG or JPEG, at most 5 MB
+ * @returns {Promise<object>} ImageVerifyResponse
+ */
+export async function verifyImage(file) {
+  const body = new FormData();
+  body.append('image', file);
+  return request('/api/verify/image', { method: 'POST', body });
 }
 
 /**
