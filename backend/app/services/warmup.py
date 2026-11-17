@@ -2,6 +2,8 @@ import logging
 import threading
 
 from app.agents.linguistic_agent import get_spacy_nlp
+from app.agents.ocr_agent import get_predictor as get_ocr_predictor
+from app.config import settings
 from app.services.bias_lookup import load_bias_ratings
 from app.services.embedding import generate_embedding
 from app.services.nli import get_nli_model
@@ -38,6 +40,14 @@ def warm_models() -> None:
         get_nli_model()
     except Exception as exc:
         logger.warning(f"NLI model preload warning: {exc}")
+
+    # 5. OCR models (opt-in: screenshots are optional and the models cost memory)
+    if settings.ocr_preload:
+        logger.info("Preloading OCR models...")
+        try:
+            get_ocr_predictor()
+        except Exception as exc:
+            logger.warning(f"OCR model preload warning: {exc}")
 
 
 def ensure_models_warm() -> None:

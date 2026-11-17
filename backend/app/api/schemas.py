@@ -56,6 +56,18 @@ class VerifyResponse(BaseModel):
     agents: List[AgentStatusModel] = Field(default_factory=list)
     created_at: Optional[str] = None
 
+class UrlVerifyResponse(VerifyResponse):
+    """POST /api/verify with input_type "url": `claim` is the scraped headline."""
+    source_url: Optional[str] = None
+    scrape_degraded: bool = False
+
+
+class ImageVerifyResponse(VerifyResponse):
+    """POST /api/verify/image: `claim` is the cleaned OCR text."""
+    ocr_extracted_text: str
+    ocr_confidence: float = Field(..., ge=0.0, le=1.0)
+
+
 class ErrorResponse(BaseModel):
     error: str
     code: Literal["invalid_input", "non_verifiable_claim", "request_validation", "rate_limited", "all_agents_failed"]

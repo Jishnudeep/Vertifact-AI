@@ -95,7 +95,7 @@ VeriFact AI solves a specific problem: **a user encounters a suspicious claim on
 
 | ID | Feature | Priority |
 |----|---------|----------|
-| P2-01 | Surya OCR integration for screenshot uploads | P0 |
+| P2-01 | docTR OCR integration for screenshot uploads | P0 |
 | P2-02 | URL scraping agent (BeautifulSoup/Playwright for article text extraction) | P1 |
 | P2-03 | React frontend with Vite + Tailwind CSS | P0 |
 | P2-04 | Trust Gauge component (SVG semicircular gauge, 0-100) | P0 |
@@ -132,7 +132,7 @@ VeriFact AI solves a specific problem: **a user encounters a suspicious claim on
 | Agent Framework | Google ADK + LiteLLM | ADK LlmAgent + LiteLLM for leaf prompts; ADK `Workflow` graph (dynamic supervisor fan-out) for orchestration |
 | LLM (Dev) | `groq/openai/gpt-oss-120b` via Groq (free tier) | Fast inference, zero cost during development. Verified 2026-09-10: Groq serves no Llama chat model on our key; 120b chosen over 20b for strict-JSON adherence |
 | LLM (Prod) | Qwen3-30B-A3B or Llama 3.1 70B via vLLM | Higher quality for demo/production |
-| OCR | Surya | PyTorch-native, transformer-based, reading-order aware |
+| OCR | docTR | PyTorch-native, CPU-friendly detection + recognition, reading-order aware; Apache-2.0 (Surya ≥ 0.22 needs a VLM inference server) |
 | Embeddings | `all-MiniLM-L6-v2` (384-d, dev) / `BAAI/bge-m3` (1024-d, prod); dimension is config | Hybrid retrieval (dense + sparse), multilingual |
 | Database | Supabase (PostgreSQL) | Free tier, auth, JSONB storage, real-time |
 | Vector Search | pgvector (via Supabase) | Co-located with relational data, HNSW indexing |
@@ -268,7 +268,7 @@ bias_ratings {
 | Google Search Grounding (Gemini) | 5,000 free search queries/month, then $14/1,000 (Gemini 3+) | $0 |
 | Supabase (DB + auth) | 500MB DB, 50K rows | $0 |
 | BGE-M3 embeddings | Local CPU inference | $0 |
-| Surya OCR | Local CPU inference | $0 |
+| docTR OCR | Local CPU inference | $0 |
 | **Total** | | **$0/month** |
 
 Daily budgets (TDD §11) keep the service inside these limits. Eval runs use recorded evidence (`--replay`) so they do not consume quota.
@@ -280,7 +280,7 @@ Cloud GPU for eval runs (RunPod A10G): ~$0.50/hr × ~10 hrs/month = **$5/month w
 | Component | License | Obligation |
 |-----------|---------|-----------|
 | AllSides Media Bias Ratings | CC BY-NC 4.0 | Visible attribution ("Media bias ratings: AllSides.com") in the UI source list and the README; **non-commercial only**, a commercial license is needed otherwise |
-| Surya OCR model weights | Modified OpenRAIL-M | Free for research, personal use and small companies under the revenue cap in `MODEL_LICENSE`; re-check before any commercial use |
+| docTR + its pretrained OCR weights | Apache-2.0 | Keep the notice; re-check the weights' model cards before any commercial use |
 | cross-encoder/nli-deberta-v3-small | Apache-2.0 | Keep the notice |
 | all-MiniLM-L6-v2 / BGE-M3 | Apache-2.0 / MIT | Keep the notice |
 | LIAR / FEVER samples | Research datasets | Eval only; commit derived samples, not raw dumps |
