@@ -1,5 +1,5 @@
-import React, { useState, useRef } from 'react';
-import { useNavigate } from 'react-router-dom';
+import React, { useState, useRef, useEffect } from 'react';
+import { useNavigate, useLocation } from 'react-router-dom';
 import AppHeader from '../components/AppHeader';
 import ClaimInput from '../components/ClaimInput';
 import ExampleClaims from '../components/ExampleClaims';
@@ -29,12 +29,26 @@ const DEV_FIXTURES = {
   long_claim: longClaimFix,
 };
 
+// Lead line while checking; plain text needs none (there is no per-agent progress yet).
+const CHECKING_LEAD = { url: 'Reading the article…', image: 'Reading your screenshot…' };
+
 export default function HomePage() {
-  const [claimText, setClaimText] = useState('');
+  const location = useLocation();
+  const [claimText, setClaimText] = useState(() =>
+    typeof location.state?.prefill === 'string' ? location.state.prefill.slice(0, 2000) : ''
+  );
   const inputRef = useRef(null);
   const navigate = useNavigate();
 
-  const { status, result, error, elapsedS, blockedUntil, submit, reset } = useVerify();
+  const { status, result, error, elapsedS, blockedUntil, inputKind, submit, submitImage, retry, reset } =
+    useVerify();
+
+  // Consume a prefill once: a reload or back/forward must not bring it back.
+  useEffect(() => {
+    if (location.state?.prefill != null) {
+      navigate({ pathname: location.pathname, search: location.search }, { replace: true, state: null });
+    }
+  }, [location.state, location.pathname, location.search, navigate]);
   const { recent } = useRecent(10);
 
   const fixtureParam = import.meta.env.DEV
@@ -42,16 +56,15 @@ export default function HomePage() {
     : null;
   const activeFixture = fixtureParam ? DEV_FIXTURES[fixtureParam] : null;
 
-  const handleSubmit = async (text) => {
-    try {
-      const data = await submit(text);
-      if (data?.id) {
-        navigate(`/r/${data.id}`, { state: { result: data, fresh: true } });
-      }
-    } catch {
-      // Error state is captured in useVerify
+  const openResult = (data) => {
+    if (data?.id) {
+      navigate(`/r/${data.id}`, { state: { result: data, fresh: true } });
     }
   };
+
+  // useVerify never rethrows: errors land in its state.
+  const handleSubmitImage = async (file) => openResult(await submitImage(file));
+  const handleSubmit = async (text) => openResult(await submit(text));
 
   const handleSelectExample = (text) => {
     setClaimText(text);
@@ -80,7 +93,7 @@ export default function HomePage() {
         {activeFixture ? (
           <ResultView result={activeFixture} fresh={fixtureParam === 'cached'} />
         ) : showInPlaceResult ? (
-          <ResultView result={result} fresh={true} />
+          <ResultView result={result} fresh={true} onEditClaim={(text) => { reset(); setClaimText(text.slice(0, 2000)); }} />
         ) : (
           <div className="grid grid-cols-1 lg:grid-cols-5 gap-10 items-start">
             {/* Left Column (3/5 on lg) */}
@@ -101,12 +114,22 @@ export default function HomePage() {
                 onSubmit={handleSubmit}
                 status={status}
                 error={error}
-                onRetry={() => handleSubmit(claimText)}
+                // A screenshot is replayed as sent; text retries what is in the box now.
+                onRetry={async () =>
+                  openResult(await (inputKind === 'image' ? retry() : submit(claimText)))
+                }
                 blockedUntil={blockedUntil}
+                onSubmitImage={handleSubmitImage}
+                inputKind={inputKind}
               />
 
               {isChecking ? (
                 <div className="p-4 rounded-2xl bg-surface/40 border border-slate-800 flex flex-col items-center">
+                  {CHECKING_LEAD[inputKind] && (
+                    <p className="text-sm text-slate-300 mb-2" role="status">
+                      {CHECKING_LEAD[inputKind]}
+                    </p>
+                  )}
                   <TransitDiagram
                     mode="checking"
                     agents={[]}

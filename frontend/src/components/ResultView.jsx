@@ -5,11 +5,12 @@ import ScoreBreakdown from './ScoreBreakdown';
 import SourceList from './SourceList';
 import SearchSuggestions from './SearchSuggestions';
 import ResultFooter from './ResultFooter';
+import InputProvenance from './InputProvenance';
 import { verdictView } from '../lib/verdict';
 
 const LanguageRadar = React.lazy(() => import('./LanguageRadar'));
 
-export default function ResultView({ result, fresh = false }) {
+export default function ResultView({ result, fresh = false, onEditClaim = null }) {
   const [isClaimExpanded, setIsClaimExpanded] = useState(false);
 
   if (!result) return null;
@@ -40,6 +41,7 @@ export default function ResultView({ result, fresh = false }) {
             {isClaimExpanded ? 'Show less' : 'Show full claim'}
           </button>
         )}
+        <InputProvenance result={result} onEditClaim={onEditClaim} />
       </div>
 
       {/* Transit Diagram signature */}

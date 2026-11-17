@@ -1,5 +1,5 @@
 import React from 'react';
-import { useParams, Link } from 'react-router-dom';
+import { useParams, Link, useNavigate } from 'react-router-dom';
 import { useResult } from '../hooks/useResult';
 import AppHeader from '../components/AppHeader';
 import ResultView from '../components/ResultView';
@@ -15,6 +15,9 @@ function ResultScreen({ id }) {
   // `fresh` is true only for the render that follows a submit; reloads and
   // revisits get false, so the footer reads "Checked on", not "Cached result".
   const { status, result, error, fresh } = useResult(id);
+  const navigate = useNavigate();
+  // "Edit and re-check" on screenshot text: back home with the text prefilled (router state, never the URL).
+  const editClaim = (text) => navigate('/', { state: { prefill: text } });
 
   return (
     <div className="min-h-screen bg-midnight text-porcelain flex flex-col">
@@ -52,7 +55,7 @@ function ResultScreen({ id }) {
         )}
 
         {status === 'done' && result && (
-          <ResultView result={result} fresh={fresh} />
+          <ResultView result={result} fresh={fresh} onEditClaim={editClaim} />
         )}
       </main>
     </div>

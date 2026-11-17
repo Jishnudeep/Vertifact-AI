@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { verifyClaim } from '../lib/api';
+import { verifyClaim, verifyImage } from '../lib/api';
+import { detectInputType } from '../lib/inputType';
 
 // The 429 lockout outlives the component: HomePage unmounts when the user opens
 // a result, and the lockout must still hold when they come back. Stored in
@@ -41,11 +42,15 @@ export function useVerify() {
   const [error, setError] = useState(null);
   const [elapsedS, setElapsedS] = useState(0);
   const [blockedUntil, setBlockedUntil] = useState(readStoredBlock);
+  // What is being checked: 'text' | 'url' | 'image' (drives the checking lead line and error copy).
+  const [inputKind, setInputKind] = useState('text');
 
   const timerRef = useRef(null);
   const blockTimerRef = useRef(null);
   const startTimeRef = useRef(0);
   const mountedRef = useRef(false);
+  // The last request (kind + call), so "Try again" replays the same input, including a screenshot.
+  const lastRef = useRef(null);
 
   const clearTimer = useCallback(() => {
     if (timerRef.current) {
@@ -86,11 +91,12 @@ export function useVerify() {
     };
   }, [clearTimer, clearBlockTimer, scheduleUnblock]);
 
-  const submit = useCallback(
-    async (text) => {
-      if (!text || !text.trim()) return;
-
+  // Shared request lifecycle for every input kind: timer, result, 429 lockout, error.
+  const run = useCallback(
+    async (kind, call) => {
+      lastRef.current = { kind, call };
       clearTimer();
+      setInputKind(kind);
       setStatus('checking');
       setError(null);
       setResult(null);
@@ -103,7 +109,7 @@ export function useVerify() {
       }, 100);
 
       try {
-        const data = await verifyClaim(text.trim());
+        const data = await call();
         clearTimer();
         // Unmounted mid-check (the user left the page): no state update and no
         // result handed back, so the caller cannot navigate them away.
@@ -131,6 +137,29 @@ export function useVerify() {
     [clearTimer, scheduleUnblock]
   );
 
+  const submit = useCallback(
+    async (text) => {
+      if (!text || !text.trim()) return undefined;
+      const kind = detectInputType(text);
+      return run(kind, () => verifyClaim(text.trim(), kind));
+    },
+    [run]
+  );
+
+  const submitImage = useCallback(
+    async (file) => {
+      if (!file) return undefined;
+      return run('image', () => verifyImage(file));
+    },
+    [run]
+  );
+
+  const retry = useCallback(async () => {
+    const last = lastRef.current;
+    if (!last) return undefined;
+    return run(last.kind, last.call);
+  }, [run]);
+
   const reset = useCallback(() => {
     clearTimer();
     setStatus('idle');
@@ -145,7 +174,10 @@ export function useVerify() {
     error,
     elapsedS,
     blockedUntil,
+    inputKind,
     submit,
+    submitImage,
+    retry,
     reset,
   };
 }

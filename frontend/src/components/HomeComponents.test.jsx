@@ -336,7 +336,7 @@ describe('Home Components', () => {
       );
 
       expect(
-        screen.getByPlaceholderText(/Paste or type a factual claim to verify/i)
+        screen.getByPlaceholderText(/Paste a claim or an article link/i)
       ).toBeInTheDocument();
       expect(screen.getByText(/Try an example claim/i)).toBeInTheDocument();
     });

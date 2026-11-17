@@ -1,5 +1,6 @@
 export const ERROR_COPY = {
   invalid_input: "Please enter a valid statement to check.",
+  url_fallback: "Paste the headline or the claim instead.",
   non_verifiable_claim: "VeriFact checks factual claims. This reads as an opinion or a question. Try a statement that can be true or false.",
   request_validation: "Something about this input couldn't be read.",
   rate_limited: "Too many checks in a minute. Try again shortly.",
