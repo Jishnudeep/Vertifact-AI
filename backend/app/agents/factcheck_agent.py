@@ -18,6 +18,7 @@ from typing import Any, Dict, List, Literal, Optional
 from google.adk.agents import LlmAgent
 from google.adk.agents.context import Context
 from google.adk.workflow import node
+from google.genai import types
 from pydantic import BaseModel, Field
 
 from app.agents import common
@@ -29,6 +30,7 @@ from app.services.factcheck_api import search_factchecks
 from app.services.grounded_search import grounded_search
 from app.services.page_fetch import PageText, fetch_page_text
 from app.services.source_domains import CLAIMREVIEW_DOMAINS, FACTCHECK_DOMAINS
+from app.utils.adk_helpers import thinking_content_config
 from app.utils.errors import AgentErrorDetails
 
 logger = logging.getLogger(__name__)
@@ -142,7 +144,7 @@ class FactCheckDecision(BaseModel):
     explanation: str = Field(description="One or two sentences explaining the choice.")
 
 
-INSTRUCTION = """\
+BASE_INSTRUCTION = """\
 You are the fact-check lookup agent of a claim-verification pipeline. You decide whether a published
 fact-check already answers the claim inside <claim> tags, using your two tools.
 
@@ -164,6 +166,13 @@ Procedure:
 If nothing relevant was found: evidence 'none', rating 'unproven', relevant false. Never guess a verdict
 from your own knowledge.
 """
+
+
+def get_instruction(today: Optional[str] = None) -> str:
+    """Build the instruction with today's UTC date injected (Task A.2)."""
+    today_str = today or common.get_today_utc()
+    return f"Today's date is {today_str} (UTC). Published fact-checks before this date are past events.\n\n{BASE_INSTRUCTION}"
+
 
 
 # --- tools (closures over this run's evidence) --------------------------------------------------
@@ -407,15 +416,21 @@ def finalize(claim: str, decision: FactCheckDecision, ev: Evidence) -> FactCheck
     return no_evidence()
 
 
+def build_generate_content_config() -> Optional[types.GenerateContentConfig]:
+    """Thinking config for the worker model; None when the model does not accept `thinking_level`."""
+    return thinking_content_config(settings.model_id, settings.factcheck_thinking_level)
+
+
 async def analyze(ctx: Context, claim: str) -> FactCheckResult:
     ev = Evidence()
     agent = LlmAgent(
         name="factcheck_judge",
         description="Looks up published fact-checks and selects the one that answers the claim.",
         model=common.get_model(),
-        instruction=INSTRUCTION,
+        instruction=get_instruction(),
         tools=build_tools(claim, ev),
         output_schema=FactCheckDecision,
+        generate_content_config=build_generate_content_config(),
         **common.agent_kwargs(),
     )
     decision = await ctx.run_node(agent, f"<claim>{fenced(claim[:500])}</claim>")

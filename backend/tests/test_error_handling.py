@@ -125,3 +125,22 @@ async def test_orchestrator_enriches_warnings_with_provider_error():
         assert any("Partial analysis" in w for w in warnings)
         # Must have specific provider degradation warning
         assert any("Cross-reference check quota exhausted" in w for w in warnings)
+
+
+def test_classify_agent_turn_limit_exceeded():
+    from app.utils.errors import AgentTurnLimitExceeded
+    exc = AgentTurnLimitExceeded(agent_name="factcheck_judge", max_turns=5)
+    details = classify_provider_error(exc, provider="factcheck_agent")
+    assert details.code == ProviderErrorCode.TURN_LIMIT
+    assert details.provider == "factcheck_agent"
+    assert "hit its model-turn limit" in details.message
+
+
+def test_config_thinking_and_turn_caps():
+    from app.config import get_settings
+    s = get_settings()
+    assert s.factcheck_thinking_level == "LOW"
+    assert s.crossref_thinking_level == "LOW"
+    assert s.grounded_search_thinking_level == "MINIMAL"
+    assert s.factcheck_max_turns == 5
+    assert s.crossref_max_turns == 4

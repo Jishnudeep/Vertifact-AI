@@ -1,15 +1,16 @@
 import os
 from functools import lru_cache
 from pathlib import Path
-from typing import List
+from typing import List, Literal
 from pydantic import Field, AliasChoices
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+ThinkingLevelName = Literal["MINIMAL", "LOW", "MEDIUM", "HIGH"]  # a typo in .env fails at boot
 
 class Settings(BaseSettings):
     supabase_url: str = Field(default="", validation_alias=AliasChoices("SUPABASE_URL"))
     supabase_publish_key: str = Field(default="", validation_alias=AliasChoices("SUPABASE_PUBLISH_KEY"))
     supabase_secret_key: str = Field(default="", validation_alias=AliasChoices("SUPABASE_SECRET_KEY"))
-    groq_api_key: str = Field(default="", validation_alias=AliasChoices("GROQ_API_KEY"))
     google_fact_check_api_key: str = Field(default="", validation_alias=AliasChoices("GOOGLE_FACTCHECK_API_KEY", "GOOGLE_FACT_CHECK_API_KEY"))
     # Plan 6 D1: Gemini API (AI Studio) key for the grounded-search agents. Not Vertex AI.
     gemini_api_key: str = Field(default="", validation_alias=AliasChoices("GEMINI_API_KEY", "GOOGLE_API_KEY"))
@@ -18,8 +19,7 @@ class Settings(BaseSettings):
     cors_origins: List[str] = ["http://localhost:5173", "http://localhost:3000"]
     
     # Model of every worker LlmAgent and of the grounded-search sub-agent (ADK's native Gemini,
-    # AI Studio key; never hardcoded in agent logic). Groq/gpt-oss is tabled for now.
-    # Override with MODEL_ID / SEARCH_MODEL_ID.
+    # AI Studio key; never hardcoded in agent logic). Override with MODEL_ID / SEARCH_MODEL_ID.
     model_id: str = "gemini-3.1-flash-lite"
     # Gemini model for the `google_search` grounded-search sub-agent (it can't be a tool of a
     # model that also has function tools, so the search tools call it as a service).
@@ -53,6 +53,17 @@ class Settings(BaseSettings):
     # Backstop for one worker agent (all of its LLM turns and tool calls), bound to each agent node
     # when its module is imported. TBD from benchmarking.
     agent_timeout_s: float = 30.0
+
+    # Thinking levels, sent only to Gemini 3 models (others reject thinking_level and run at the provider default).
+    # Spec: docs/superpowers/specs/2026-10-20-latency-thinking-budgets.md
+    factcheck_thinking_level: ThinkingLevelName = "LOW"
+    crossref_thinking_level: ThinkingLevelName = "LOW"
+    grounded_search_thinking_level: ThinkingLevelName = "MINIMAL"
+
+    # Per-agent model turn caps derived from worst legitimate paths + 1-turn headroom.
+    # Exceeding the cap raises AgentTurnLimitExceeded and degrades the agent gracefully.
+    factcheck_max_turns: int = 5
+    crossref_max_turns: int = 4
 
     # Daily cap on worker LLM turns (a tool loop is several turns per agent).
     llm_daily_call_budget: int = 900
@@ -141,7 +152,6 @@ def __getattr__(name: str):
     mapping = {
         "SUPABASE_URL": s.supabase_url,
         "SUPABASE_KEY": s.supabase_secret_key,
-        "GROQ_API_KEY": s.groq_api_key,
         "GEMINI_API_KEY": s.gemini_api_key,
         "GOOGLE_FACT_CHECK_API_KEY": s.google_fact_check_api_key,
     }

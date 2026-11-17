@@ -38,6 +38,28 @@ class GroundedSearchBlocked(RuntimeError):
         self.code = re.sub(r"[^A-Za-z0-9_]", "", raw)[:64] or "UNKNOWN"
         super().__init__(f"Grounded search returned error event {self.code}")
 
+# `thinking_level` exists only on Gemini 3 models; Gemini 2.5 rejects it with HTTP 400
+# ("Thinking level is not supported for this model"), which broke grounded search in the 2026-10-21 bench.
+_THINKING_LEVEL_MODEL = re.compile(r"(^|/)gemini-3")
+_warned_thinking_dropped: set = set()
+
+
+def thinking_content_config(
+    model_id: Optional[str], level: str
+) -> Optional[types.GenerateContentConfig]:
+    """ThinkingConfig for `model_id`, or None when the model does not accept `thinking_level`."""
+    model = (model_id or "").strip().lower()
+    if not _THINKING_LEVEL_MODEL.search(model):
+        if model and model not in _warned_thinking_dropped:
+            _warned_thinking_dropped.add(model)
+            logger.warning(
+                "thinking_level=%s not sent: model %r is not a Gemini 3 model (it would be rejected with HTTP 400)",
+                level, model_id,
+            )
+        return None
+    return types.GenerateContentConfig(thinking_config=types.ThinkingConfig(thinking_level=level))
+
+
 def get_grounded_runner(kind: SearchKind, instruction: str) -> InMemoryRunner:
     """
     Retrieve the cached InMemoryRunner for a grounded-search agent (Plan 6 D2).
@@ -48,16 +70,22 @@ def get_grounded_runner(kind: SearchKind, instruction: str) -> InMemoryRunner:
     `app.config` (Plan 6 D1).
     """
     model_id = settings.search_model_id
-    cache_key = f"{kind}:{model_id}:{instruction}"
+    thinking_level = settings.grounded_search_thinking_level
+    content_config = thinking_content_config(model_id, thinking_level)
+    cache_key = f"{kind}:{model_id}:{thinking_level if content_config else 'unset'}:{instruction}"
     runner = _grounded_runner_cache.get(cache_key)
     if runner is None:
-        logger.info(f"Creating grounded-search ADK runner for kind '{kind}' (model: {model_id})")
+        logger.info(
+            f"Creating grounded-search ADK runner for kind '{kind}' "
+            f"(model: {model_id}, thinking: {thinking_level if content_config else 'not supported by model'})"
+        )
         agent = LlmAgent(
             name=f"{kind}_search",
             model=model_id,
             description=f"Grounded Google Search agent ({kind})",
             instruction=instruction,
             tools=[google_search],
+            generate_content_config=content_config,
         )
         runner = InMemoryRunner(agent=agent, app_name=f"verifact_{kind}_search")
         _grounded_runner_cache[cache_key] = runner

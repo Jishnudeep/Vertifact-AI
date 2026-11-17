@@ -62,12 +62,13 @@ def test_agent_kwargs_builds_a_fresh_turn_cap_ahead_of_the_budget_charge(monkeyp
     monkeypatch.setattr(budget_mod, "get_llm_budget", lambda: b)
     monkeypatch.setattr(common.settings, "max_model_turns_per_agent", 1)
     callbacks = common.agent_kwargs()["before_model_callback"]
-    assert callbacks.index(common.charge_llm_budget) > 1  # log, cap, then charge
-    cap = callbacks[1]
+    charge_at = callbacks.index(common.charge_llm_budget)
+    assert charge_at == len(callbacks) - 1  # every cap runs before the budget charge
+    cap = callbacks[charge_at - 1]
     assert cap(None, None) is None
     with pytest.raises(ModelTurnLimitExceeded):
         cap(None, None)
-    assert common.agent_kwargs()["before_model_callback"][1] is not cap
+    assert common.agent_kwargs()["before_model_callback"][charge_at - 1] is not cap
 
 
 def test_turn_limit_is_classified_as_a_model_failure_not_quota():

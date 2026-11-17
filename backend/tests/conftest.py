@@ -6,7 +6,6 @@ import pytest
 os.environ.setdefault("SUPABASE_URL", "https://example.supabase.co")
 os.environ.setdefault("SUPABASE_PUBLISH_KEY", "dummy_publish_key")
 os.environ.setdefault("SUPABASE_SECRET_KEY", "dummy_secret_key")
-os.environ.setdefault("GROQ_API_KEY", "dummy_groq_key")
 os.environ.setdefault("GOOGLE_FACT_CHECK_API_KEY", "dummy_factcheck_key")
 os.environ.setdefault("GOOGLE_FACTCHECK_API_KEY", "dummy_factcheck_key")
 # Plan 6: a dummy Gemini key wins over the real one in app/.env (env beats dotenv), so the real

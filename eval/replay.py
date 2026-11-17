@@ -289,15 +289,27 @@ def _generation_settings(config: Any) -> Dict[str, Any]:
     return {k: v for k, v in out.items() if v is not None}
 
 
+_DATE_SENTENCE = re.compile(r"Today's date is \d{4}-\d{2}-\d{2} \(UTC\)\.\s*")
+
+
 def request_key(llm_request: LlmRequest) -> str:
     """Hash of what the model is actually shown: system instruction, contents, tool declarations, generation settings."""
     config = llm_request.config
     system = getattr(config, "system_instruction", None)
+    if isinstance(system, str):
+        # Normalize dynamic date injection (Task A.2) so replay cache keys remain stable across days
+        system = _DATE_SENTENCE.sub("", system)
+    elif system is not None and hasattr(system, "model_dump"):
+        dumped = system.model_dump(mode="json", exclude_none=True)
+        if isinstance(dumped, dict) and "parts" in dumped:
+            for part in dumped.get("parts", []):
+                if isinstance(part, dict) and "text" in part and isinstance(part["text"], str):
+                    part["text"] = _DATE_SENTENCE.sub("", part["text"])
+        system = dumped
     canonical = {
         "generation": _generation_settings(config),
         "model": llm_request.model,
-        "system_instruction": system if isinstance(system, str) or system is None
-        else system.model_dump(mode="json", exclude_none=True),
+        "system_instruction": system,
         "contents": [_without_ids(c.model_dump(mode="json", exclude_none=True)) for c in llm_request.contents],
         "tools": [t.model_dump(mode="json", exclude_none=True) for t in (getattr(config, "tools", None) or [])],
     }
