@@ -56,6 +56,10 @@ class Settings(BaseSettings):
 
     # Daily cap on worker LLM turns (a tool loop is several turns per agent).
     llm_daily_call_budget: int = 900
+    # Per-run cap on model turns for one worker LlmAgent. The tool call limits refuse extra tool calls
+    # but do not stop the model asking again, so without this a run could loop (and spend the daily
+    # budget) until agent_timeout_s. Fact-Check needs at most 3 tool turns + 1 final answer.
+    max_model_turns_per_agent: int = 6
     # Plan 6: Gemini grounded-search calls per UTC day. One uncached request spends up to 3: one
     # Fact-Check web search plus up to two Cross-Ref coverage searches. 150 therefore allows about
     # 50 uncached requests a day at worst. TBD from benchmarking (eval/latency_bench.py records the
